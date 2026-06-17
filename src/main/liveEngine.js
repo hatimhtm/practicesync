@@ -102,12 +102,14 @@ async function openPage(context, url) {
   // Close any other restored tabs so there's a single, obvious window to look at.
   for (const p of pages.slice(1)) { try { await p.close(); } catch {} }
   try { await page.bringToFront(); } catch {}
-  await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 60000 });
-  // If the navigation didn't take (left on about:blank), try once more.
-  try {
-    const u = page.url();
-    if (!u || u === 'about:blank') await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 60000 });
-  } catch {}
+  // BEST EFFORT navigation. 'commit' resolves the instant the load starts (so we
+  // never hang on a slow SPA), and we never throw — if it doesn't land, the user
+  // can just type the address into Chrome themselves and the teach overlay will
+  // follow them there.
+  if (url) {
+    try { await page.goto(url, { waitUntil: 'commit', timeout: 30000 }); }
+    catch { try { await page.evaluate((u) => { try { location.href = u; } catch {} }, url); } catch {} }
+  }
   try { await page.bringToFront(); } catch {}
   return page;
 }
@@ -229,114 +231,110 @@ async function teach({ userDataDir, profileDir, url, steps }) {
       // Fields inside a repeating row are captured RELATIVE to that row so they
       // generalize across every row.
       const ancestor = step.relativeTo ? selectors[step.relativeTo] : null;
-      const sel = await captureClick(page, step.label, ancestor, { index: i + 1, total: steps.length });
+      const sel = await captureClick(page, step.label, ancestor, { index: i + 1, total: steps.length }, !!step.allowDefault);
       if (sel) selectors[step.key] = sel;
     }
     return { ok: true, selectors };
   });
 }
 
-/**
- * Inject a big red banner + a live highlight that follows the cursor (a red box
- * with an "⬆ click here" tag around whatever element is under the mouse), so the
- * user can SEE exactly what they're about to click. Returns a stable selector
- * for the element they click.
- */
-async function captureClick(page, label, ancestorSelector = null, stepInfo = null) {
-  const stepText = stepInfo ? `Step ${stepInfo.index} of ${stepInfo.total} — ` : '';
-  const handle = await page.evaluateHandle(({ lbl, ancestorSelector, stepText }) => new Promise((resolve) => {
-    const root = document.documentElement;
+/* The in-page picker: a big red banner + a highlight box ("⬆ click here") that
+ * follows the cursor, so the user SEES what they're about to click. It is
+ * re-installed on every page load, so the user can freely navigate Chrome to the
+ * right page themselves and the overlay just follows them. On click it calls a
+ * Node binding with a stable selector for the element. */
+function pickerSource() {
+  return (cfg) => {
+    try {
+      // Already showing for this exact step? Don't double-install.
+      if (window.__psBinding === cfg.binding && document.getElementById('__ps_teach_banner')) return;
+      window.__psBinding = cfg.binding;
+      ['__ps_teach_banner', '__ps_teach_box', '__ps_teach_tag'].forEach((id) => { const e = document.getElementById(id); if (e) e.remove(); });
+      const root = document.documentElement;
 
-    // --- Big red instruction banner (can't be missed) ---
-    const banner = document.createElement('div');
-    banner.id = '__ps_teach_banner';
-    banner.innerHTML = '<span style="font-size:20px;vertical-align:-2px">👉</span>  ' + stepText + 'Click: <b>' + lbl + '</b>';
-    Object.assign(banner.style, {
-      position: 'fixed', top: '0', left: '0', right: '0', zIndex: '2147483647',
-      background: '#d6231f', color: '#fff', font: '700 16px/1.45 -apple-system, system-ui, sans-serif',
-      padding: '14px 18px', textAlign: 'center', boxShadow: '0 3px 14px rgba(0,0,0,.45)', pointerEvents: 'none',
-    });
-    root.appendChild(banner);
+      const banner = document.createElement('div'); banner.id = '__ps_teach_banner';
+      banner.innerHTML = '<span style="font-size:20px;vertical-align:-2px">👉</span>  ' + cfg.stepText + 'Click: <b>' + cfg.label + '</b>';
+      Object.assign(banner.style, { position: 'fixed', top: '0', left: '0', right: '0', zIndex: '2147483647', background: '#d6231f', color: '#fff', font: '700 16px/1.45 -apple-system, system-ui, sans-serif', padding: '14px 18px', textAlign: 'center', boxShadow: '0 3px 14px rgba(0,0,0,.45)', pointerEvents: 'none' });
+      root.appendChild(banner);
 
-    // --- Red highlight box that tracks the hovered element ---
-    const box = document.createElement('div');
-    Object.assign(box.style, {
-      position: 'fixed', zIndex: '2147483646', border: '3px solid #d6231f', borderRadius: '6px',
-      background: 'rgba(214,35,31,0.12)', boxShadow: '0 0 0 2px rgba(255,255,255,.7)',
-      pointerEvents: 'none', display: 'none', transition: 'all .04s ease',
-    });
-    root.appendChild(box);
+      const box = document.createElement('div'); box.id = '__ps_teach_box';
+      Object.assign(box.style, { position: 'fixed', zIndex: '2147483646', border: '3px solid #d6231f', borderRadius: '6px', background: 'rgba(214,35,31,0.12)', boxShadow: '0 0 0 2px rgba(255,255,255,.7)', pointerEvents: 'none', display: 'none' });
+      root.appendChild(box);
 
-    const tag = document.createElement('div');
-    tag.textContent = '⬆ click here';
-    Object.assign(tag.style, {
-      position: 'fixed', zIndex: '2147483647', background: '#d6231f', color: '#fff',
-      font: '700 12px -apple-system, sans-serif', padding: '3px 8px', borderRadius: '5px',
-      pointerEvents: 'none', display: 'none', whiteSpace: 'nowrap',
-    });
-    root.appendChild(tag);
+      const tag = document.createElement('div'); tag.id = '__ps_teach_tag'; tag.textContent = '⬆ click here';
+      Object.assign(tag.style, { position: 'fixed', zIndex: '2147483647', background: '#d6231f', color: '#fff', font: '700 12px -apple-system, sans-serif', padding: '3px 8px', borderRadius: '5px', pointerEvents: 'none', display: 'none', whiteSpace: 'nowrap' });
+      root.appendChild(tag);
 
-    const ours = (el) => el === banner || el === box || el === tag;
-    function onMove(e) {
-      const el = e.target;
-      if (!el || ours(el)) { box.style.display = tag.style.display = 'none'; return; }
-      const r = el.getBoundingClientRect();
-      if (!r.width && !r.height) { box.style.display = tag.style.display = 'none'; return; }
-      box.style.display = 'block';
-      box.style.left = r.left + 'px'; box.style.top = r.top + 'px';
-      box.style.width = r.width + 'px'; box.style.height = r.height + 'px';
-      tag.style.display = 'block';
-      tag.style.left = r.left + 'px'; tag.style.top = Math.max(0, r.top - 24) + 'px';
-    }
-    document.addEventListener('mousemove', onMove, true);
-
-    // --- selector building ---
-    function nth(n) {
-      const sibs = [...(n.parentElement ? n.parentElement.children : [])].filter((c) => c.tagName === n.tagName);
-      return sibs.length > 1 ? ':nth-of-type(' + (sibs.indexOf(n) + 1) + ')' : '';
-    }
-    function uniq(s, scope) { try { return (scope || document).querySelectorAll(s).length === 1; } catch { return false; } }
-    function av(v) { return String(v).replace(/(["\\])/g, '\\$1'); }
-    function sel(el, stop, scope) {
-      const parts = [];
-      let n = el;
-      while (n && n.nodeType === 1 && n !== stop) {
-        const id = n.id;
-        if (id && !scope) {
-          const s = /^-?[A-Za-z_][\w-]*$/.test(id) ? '#' + id : '[id="' + av(id) + '"]';
-          if (uniq(s)) { parts.unshift(s); return parts.join(' > '); }
-        }
-        const t = n.getAttribute && (n.getAttribute('data-testid') || n.getAttribute('data-test'));
-        if (t) {
-          const s = '[data-testid="' + av(t) + '"]';
-          if (uniq(s, scope)) { parts.unshift(s); return parts.join(' > '); }
-        }
-        let s = n.tagName.toLowerCase();
-        const cls = (n.getAttribute('class') || '').split(/\s+/).find((c) => /^[a-zA-Z][\w-]{0,28}$/.test(c));
-        if (cls) s += '.' + (window.CSS && CSS.escape ? CSS.escape(cls) : cls);
-        s += nth(n);
-        parts.unshift(s);
-        n = n.parentElement;
+      const ours = (el) => el === banner || el === box || el === tag;
+      function onMove(e) {
+        const el = e.target;
+        if (!el || ours(el)) { box.style.display = tag.style.display = 'none'; return; }
+        const r = el.getBoundingClientRect();
+        if (!r.width && !r.height) { box.style.display = tag.style.display = 'none'; return; }
+        box.style.display = 'block'; box.style.left = r.left + 'px'; box.style.top = r.top + 'px'; box.style.width = r.width + 'px'; box.style.height = r.height + 'px';
+        tag.style.display = 'block'; tag.style.left = r.left + 'px'; tag.style.top = Math.max(0, r.top - 24) + 'px';
       }
-      return parts.join(' > ');
-    }
-    function cleanup() {
-      document.removeEventListener('click', onClick, true);
-      document.removeEventListener('mousemove', onMove, true);
-      [banner, box, tag].forEach((x) => { try { x.remove(); } catch {} });
-    }
-    function onClick(e) {
-      if (ours(e.target)) return; // ignore our own overlay
-      e.preventDefault(); e.stopPropagation();
-      const stop = ancestorSelector ? e.target.closest(ancestorSelector) : null;
-      const result = sel(e.target, stop, stop);
-      cleanup();
-      resolve(result);
-    }
-    document.addEventListener('click', onClick, true);
-  }), { lbl: label, ancestorSelector, stepText });
-  const selector = await handle.jsonValue().catch(() => null);
-  return selector;
+      function nth(n) { const sibs = [...(n.parentElement ? n.parentElement.children : [])].filter((c) => c.tagName === n.tagName); return sibs.length > 1 ? ':nth-of-type(' + (sibs.indexOf(n) + 1) + ')' : ''; }
+      function uniq(s, scope) { try { return (scope || document).querySelectorAll(s).length === 1; } catch { return false; } }
+      function av(v) { return String(v).replace(/(["\\])/g, '\\$1'); }
+      function sel(el, stop, scope) {
+        const parts = []; let n = el;
+        while (n && n.nodeType === 1 && n !== stop) {
+          const id = n.id;
+          if (id && !scope) { const s = /^-?[A-Za-z_][\w-]*$/.test(id) ? '#' + id : '[id="' + av(id) + '"]'; if (uniq(s)) { parts.unshift(s); return parts.join(' > '); } }
+          const t = n.getAttribute && (n.getAttribute('data-testid') || n.getAttribute('data-test'));
+          if (t) { const s = '[data-testid="' + av(t) + '"]'; if (uniq(s, scope)) { parts.unshift(s); return parts.join(' > '); } }
+          let s = n.tagName.toLowerCase();
+          const cls = (n.getAttribute('class') || '').split(/\s+/).find((c) => /^[a-zA-Z][\w-]{0,28}$/.test(c));
+          if (cls) s += '.' + (window.CSS && CSS.escape ? CSS.escape(cls) : cls);
+          s += nth(n); parts.unshift(s); n = n.parentElement;
+        }
+        return parts.join(' > ');
+      }
+      function onClick(e) {
+        if (window.__psBinding !== cfg.binding) return; // a newer step owns the page now
+        if (ours(e.target)) return;
+        if (!cfg.allowDefault) { e.preventDefault(); e.stopPropagation(); }
+        const stop = cfg.ancestorSelector ? e.target.closest(cfg.ancestorSelector) : null;
+        const result = sel(e.target, stop, stop);
+        document.removeEventListener('click', onClick, true);
+        document.removeEventListener('mousemove', onMove, true);
+        [banner, box, tag].forEach((x) => { try { x.remove(); } catch {} });
+        try { if (window[cfg.binding]) window[cfg.binding](result); } catch {}
+      }
+      document.addEventListener('mousemove', onMove, true);
+      document.addEventListener('click', onClick, true);
+    } catch {}
+  };
+}
+
+/**
+ * Capture ONE click. Survives page navigation: the overlay is re-installed on
+ * every load, so the user can navigate Chrome to the right page themselves.
+ * `allowDefault` lets the click do its normal thing (e.g. open a patient / the
+ * New-Appointment form) instead of being swallowed.
+ */
+async function captureClick(page, label, ancestorSelector = null, stepInfo = null, allowDefault = false) {
+  const stepText = stepInfo ? `Step ${stepInfo.index} of ${stepInfo.total} — ` : '';
+  const binding = '__psPick_' + (stepInfo ? stepInfo.index : 0) + '_' + Math.floor(Math.random() * 1e6);
+  let resolveSel; let settled = false;
+  const done = new Promise((r) => { resolveSel = r; });
+  try { await page.exposeFunction(binding, (s) => { if (!settled) { settled = true; resolveSel(s || null); } }); } catch {}
+
+  const cfg = { label, ancestorSelector, stepText, binding, allowDefault };
+  const inject = `(${pickerSource().toString()})(${JSON.stringify(cfg)})`;
+  const reinject = () => { page.evaluate(inject).catch(() => {}); };
+  reinject();
+  const onNav = (frame) => { if (frame === page.mainFrame()) setTimeout(reinject, 250); };
+  page.on('framenavigated', onNav);
+  page.on('load', reinject);
+  page.on('domcontentloaded', reinject);
+
+  const selector = await done;
+  page.off('framenavigated', onNav);
+  page.off('load', reinject);
+  page.off('domcontentloaded', reinject);
+  return selector || null;
 }
 
 module.exports = { pullVisits, createAppointmentLive, teach, defaultChromeUserDataDir };

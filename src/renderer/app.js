@@ -415,7 +415,7 @@ async function obTeach(target, urlSel, btn) {
   if (!url) { toast('Paste the page address first.'); return; }
   $('#obError').classList.add('hidden');
   $(btn).disabled = true; $(btn).textContent = '→ Switch to Chrome & click each field…';
-  toast('Switch to the Chrome window and click each field the blue banner asks for.');
+  toast('Switch to Chrome. If the page isn’t open, type the address there and press Enter — then follow the red bar.');
   const res = await window.api.teach(target, url);
   $(btn).disabled = false; $(btn).textContent = 'Open & show the fields';
   if (res && res.ok) {

@@ -232,14 +232,14 @@ function registerIpc() {
     const steps = target === 'pf'
       ? [
           { key: 'searchBox', label: 'the patient SEARCH box — then TYPE a patient name into it' },
-          { key: 'firstResult', label: 'the matching PATIENT in the results that appear' },
+          { key: 'firstResult', label: 'the matching PATIENT in the results that appear', allowDefault: true },
           { key: 'patientSelector', label: 'the PATIENT NAME at the top of the page' },
           { key: 'rowSelector', label: 'one visit ROW in the list' },
           { key: 'doctorSelector', label: 'the DOCTOR NAME in that row', relativeTo: 'rowSelector' },
           { key: 'dateSelector', label: 'the DATE in that row', relativeTo: 'rowSelector' },
         ]
       : [
-          { key: 'newApptButton', label: 'the "New appointment" button' },
+          { key: 'newApptButton', label: 'the "New appointment" button', allowDefault: true },
           { key: 'patientField', label: 'the PATIENT NAME field' },
           { key: 'mainDoctorField', label: 'the CLINICIAN (big doctor) field' },
           { key: 'dateField', label: 'the DATE field' },
