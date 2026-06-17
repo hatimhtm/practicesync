@@ -1,0 +1,297 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; style-src 'self' 'unsafe-inline'; script-src 'self';" />
+  <title>PracticeSync</title>
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <div class="titlebar"><span class="brand">PracticeSync</span></div>
+
+  <div class="app">
+    <aside class="sidebar">
+      <div class="logo">
+        <div class="logo-mark">P</div>
+        <div>
+          <div class="logo-name">PracticeSync</div>
+          <div class="logo-sub">Practice Fusion → SimplePractice</div>
+        </div>
+      </div>
+      <nav class="nav">
+        <button class="nav-item active" data-view="home"><span class="dot"></span> Overview</button>
+        <button class="nav-item" data-view="doctors"><span class="dot"></span> Doctors &amp; Codes</button>
+        <button class="nav-item" data-view="connect"><span class="dot"></span> Connection</button>
+        <button class="nav-item" data-view="ai"><span class="dot"></span> AI Engine</button>
+        <button class="nav-item" data-view="schedule"><span class="dot"></span> Schedule</button>
+      </nav>
+      <div class="sidebar-foot">
+        <div class="pill pill-safe">🔒 No patient data leaves this Mac</div>
+      </div>
+    </aside>
+
+    <main class="content">
+      <!-- OVERVIEW -->
+      <section class="view" data-view="home">
+        <header class="view-head">
+          <h1>Overview</h1>
+          <p class="muted">Reads each visit from Practice Fusion and books the matching coded appointment in SimplePractice.</p>
+        </header>
+
+        <div class="status-card">
+          <div class="status-main">
+            <div class="status-icon" id="statusIcon">—</div>
+            <div>
+              <div class="status-title" id="statusTitle">No sync yet</div>
+              <div class="status-sub muted" id="statusSub">Add your doctors, then run a test sync.</div>
+            </div>
+          </div>
+          <button class="btn btn-primary" id="syncNowBtn">Sync now</button>
+        </div>
+
+        <div class="grid">
+          <div class="card">
+            <div class="card-k">Doctors set up</div>
+            <div class="card-v" id="ovDoctors">0</div>
+            <button class="link" data-goto="doctors">Manage →</button>
+          </div>
+          <div class="card">
+            <div class="card-k">Connection</div>
+            <div class="card-v" id="ovMode">Not set up</div>
+            <button class="link" data-goto="connect">Set up →</button>
+          </div>
+          <div class="card">
+            <div class="card-k">Schedule</div>
+            <div class="card-v" id="ovSchedule">Off</div>
+            <button class="link" data-goto="schedule">Change →</button>
+          </div>
+        </div>
+
+        <div class="callout">
+          <strong>How it works:</strong> for each patient on the Practice Fusion dashboard, PracticeSync reads the
+          <em>name, date, and diagnosing doctor</em>, finds which main doctor they fall under, then creates the
+          appointment in SimplePractice on the same date with that doctor's codes — and saves it.
+        </div>
+        <div class="src-row" style="margin-top:14px;gap:12px">
+          <button class="btn" id="checkUpdateBtn">Check for updates</button>
+          <button class="btn btn-primary hidden" id="installUpdateBtn">Download the update</button>
+          <span class="muted" id="updateState" style="font-size:12.5px"></span>
+        </div>
+        <div style="margin-top:14px"><button class="link" id="replayTutorial">↻ Replay the tutorial</button></div>
+      </section>
+
+      <!-- DOCTORS & CODES -->
+      <section class="view hidden" data-view="doctors">
+        <header class="view-head">
+          <h1>Doctors &amp; Codes</h1>
+          <p class="muted">Your <strong>big (main) doctors</strong> each hold several <strong>small doctors</strong> nested under them. When a patient is seen by a small doctor, the visit is filed under that small doctor's <strong>big doctor</strong> — with the small doctor's codes.</p>
+        </header>
+
+        <div class="card">
+          <div class="card-k">Big (main) doctors</div>
+          <p class="muted" style="font-size:13px;margin:2px 0 12px">Each big doctor has a <strong>2-letter code</strong> that's added to every appointment (e.g. Caryn = GP, Heather = GO, Karine = GN).</p>
+          <div class="main-head hidden" id="mainGridHead"><div>Big doctor name</div><div>2-letter code</div><div></div></div>
+          <div id="mainList"></div>
+          <button class="btn" id="addMainBtn">+ Add a big doctor</button>
+        </div>
+
+        <div class="card">
+          <div class="card-k">The three columns</div>
+          <p class="muted" style="font-size:13px;margin:2px 0 12px">Fill one row per small doctor: their name, the big doctor they sit under, and their code(s). A small doctor can have several codes. (The visit date is read automatically from Practice Fusion — you don't enter it here.)</p>
+          <div class="roster-head hidden" id="rosterGridHead">
+            <div>Small doctor</div><div>Big (main) doctor</div><div>Codes</div><div></div>
+          </div>
+          <div id="providerList"></div>
+          <div class="row" style="margin-top:10px">
+            <button class="btn" id="addDoctorBtn">+ Add a doctor</button>
+            <button class="btn btn-primary hidden" id="saveRosterBtn">Save doctors</button>
+          </div>
+        </div>
+
+        <details class="advanced">
+          <summary>Paste a list instead (the AI fills the grid for you)</summary>
+          <div style="margin-top:12px">
+            <textarea id="rosterText" rows="5" placeholder="One small doctor per line, for example:&#10;Dr. Alan Patel, Dr. Reed, 97110, 97530&#10;Sara Nguyen under Reed: 97161&#10;&#10;…or group them:&#10;Under Dr. Okafor:&#10;Marcus Cohen 97165 97535&#10;Rita Okonkwo 92507"></textarea>
+            <div class="row" style="margin-top:8px">
+              <button class="btn btn-primary" id="interpretBtn">Interpret with AI</button>
+              <button class="btn" id="loadDemoBtn">Load demo doctors</button>
+            </div>
+            <div class="muted" id="parseEngine" style="font-size:11.5px;margin-top:8px"></div>
+          </div>
+        </details>
+      </section>
+
+      <!-- CONNECTION -->
+      <section class="view hidden" data-view="connect">
+        <header class="view-head">
+          <h1>Connection</h1>
+          <p class="muted">PracticeSync rides the Chrome you're already logged into — no new login, no passwords. (Quit Chrome before a run so the app can use your profile.)</p>
+        </header>
+
+        <div id="liveSetup">
+          <div class="card">
+            <div class="card-k">Step 1 · Teach the screens</div>
+            <p class="muted" style="font-size:13px;line-height:1.5">Open each page and click the fields once — the app remembers them and reuses them every time. Re-teach anytime in seconds.</p>
+            <label class="field">
+              <span>Practice Fusion home / search page address</span>
+              <input type="text" id="pfUrl" placeholder="https://static.practicefusion.com/..." />
+            </label>
+            <div class="row"><button class="btn btn-primary" id="teachPf">Teach the Practice Fusion screen</button><span class="pill" id="pfTaught">not taught</span></div>
+            <label class="field" style="margin-top:16px">
+              <span>SimplePractice appointment page address</span>
+              <input type="text" id="spUrl" placeholder="https://secure.simplepractice.com/..." />
+            </label>
+            <div class="row"><button class="btn btn-primary" id="teachSp">Teach the SimplePractice screen</button><span class="pill" id="spTaught">not taught</span></div>
+          </div>
+
+          <div class="card">
+            <div class="card-k">Step 2 · SimplePractice type</div>
+            <div class="seg" id="spModeSeg">
+              <button data-val="standard">Standard (automate the screen)</button>
+              <button data-val="enterprise">Enterprise (API)</button>
+            </div>
+            <p class="muted" style="font-size:12.5px">Use Standard for now. We switch to the API once Enterprise access is confirmed — the rest stays the same.</p>
+          </div>
+
+          <div class="card">
+            <div class="card-k">Step 3 · Try it on real data</div>
+            <p class="muted" style="font-size:13px;line-height:1.5">Type one or more patient names (one per line) — the app searches each in Practice Fusion and reads their visits. This only <em>reads</em>; it doesn't book anything.</p>
+            <label class="field">
+              <span>Patient name(s) — one per line</span>
+              <textarea id="pfPatients" rows="3" placeholder="Lochlann McNulty&#10;Jane Smith"></textarea>
+            </label>
+            <p class="muted" style="font-size:12px;margin:0 0 8px">Most recent visits to read per patient:</p>
+            <div class="seg" id="demoCountSeg">
+              <button data-val="1">1 visit</button>
+              <button data-val="2" class="active">2 visits</button>
+              <button data-val="10">10 visits</button>
+            </div>
+            <button class="btn btn-primary" id="demoPullBtn">Pull real visits (read only)</button>
+            <div id="demoResult" class="hidden"></div>
+          </div>
+        </div>
+      </section>
+
+      <!-- AI ENGINE -->
+      <section class="view hidden" data-view="ai">
+        <header class="view-head">
+          <h1>AI Engine</h1>
+          <p class="muted">Used to read your typed doctor list and match doctor names between the two systems.</p>
+        </header>
+        <div class="card">
+          <label class="field">
+            <span>AI provider</span>
+            <select id="aiProvider">
+              <option value="apple">Apple Intelligence — on-device, private, no key (recommended for testing)</option>
+              <option value="none">None — built-in matching (no AI, works offline)</option>
+              <option value="claude">Claude (Anthropic)</option>
+              <option value="gemini">Gemini (Google)</option>
+              <option value="openai">OpenAI</option>
+            </select>
+            <small class="muted" id="appleNote"></small>
+          </label>
+          <div id="aiKeyWrap" class="hidden">
+            <label class="field">
+              <span>API key</span>
+              <input type="password" id="aiKey" placeholder="Paste your API key" autocomplete="off" />
+              <small class="muted">Stored encrypted in the macOS Keychain. Only doctor names/codes you type are ever sent — never patient data.</small>
+            </label>
+          </div>
+          <div class="src-row">
+            <span class="pill" id="aiState">—</span>
+            <button class="btn btn-primary" id="saveAI">Save</button>
+          </div>
+        </div>
+      </section>
+
+      <!-- SCHEDULE -->
+      <section class="view hidden" data-view="schedule">
+        <header class="view-head">
+          <h1>Schedule</h1>
+          <p class="muted">How often PracticeSync runs on its own.</p>
+        </header>
+        <div class="card">
+          <div class="seg" id="scheduleSeg">
+            <button data-val="off">Off</button>
+            <button data-val="6h">Every 6 hours</button>
+            <button data-val="daily">Daily</button>
+          </div>
+          <p class="muted" style="font-size:12.5px">Each run only books visits it hasn't already booked.</p>
+        </div>
+      </section>
+    </main>
+  </div>
+
+  <!-- ONBOARDING — mandatory, gated, cannot be skipped or closed -->
+  <div class="onboard hidden" id="onboard">
+    <div class="onboard-card">
+      <div class="onboard-progress" id="obProgress"></div>
+
+      <div class="ob-step" data-step="0">
+        <div class="ob-hero">🔁</div>
+        <h2>Set up PracticeSync</h2>
+        <p>4 quick steps. It reads each visit from Practice Fusion and books it in SimplePractice for you.</p>
+        <p class="muted" style="margin-top:10px;font-size:13px">⚠️ First, <strong>quit Google Chrome</strong> so the app can use the browser you're already signed into.</p>
+      </div>
+
+      <div class="ob-step hidden" data-step="1">
+        <div class="ob-hero">👩‍⚕️</div>
+        <h2>Step 1 — Your doctors</h2>
+        <p>Load your doctor list, then review it and press <strong>Save</strong>.</p>
+        <div class="row">
+          <button class="btn btn-primary" id="obLoadDemo">Load our doctor list</button>
+          <button class="btn" id="obOpenDoctors">Review &amp; Save</button>
+        </div>
+        <div class="ob-selected hidden" id="obDoctorsOk"></div>
+      </div>
+
+      <div class="ob-step hidden" data-step="2">
+        <div class="ob-hero">🩺</div>
+        <h2>Step 2 — Practice Fusion</h2>
+        <p>Open the Practice Fusion <strong>home / search</strong> page in Chrome, paste its address, and press the button. A blue banner will ask you, in order, to: click the <strong>search box and type any patient's name</strong>, click that <strong>patient</strong> in the results, then click the <strong>patient name</strong> at the top, one <strong>visit row</strong>, the <strong>doctor</strong>, and the <strong>date</strong>. After this, you'll only need to type a name — no more addresses.</p>
+        <label class="field">
+          <span>Practice Fusion home / search page address</span>
+          <input type="text" id="obPfUrl" placeholder="https://static.practicefusion.com/..." />
+        </label>
+        <div class="row"><button class="btn btn-primary" id="obTeachPf">Open &amp; show the fields</button><span class="pill" id="obPfTaught">not taught</span></div>
+      </div>
+
+      <div class="ob-step hidden" data-step="3">
+        <div class="ob-hero">📆</div>
+        <h2>Step 3 — SimplePractice</h2>
+        <p>Open the SimplePractice <strong>New Appointment</strong> page, paste its address, and press the button. Click each field the banner asks for, then <strong>Save</strong>.</p>
+        <label class="field">
+          <span>SimplePractice appointment page address</span>
+          <input type="text" id="obSpUrl" placeholder="https://secure.simplepractice.com/..." />
+        </label>
+        <div class="row"><button class="btn btn-primary" id="obTeachSp">Open &amp; show the fields</button><span class="pill" id="obSpTaught">not taught</span></div>
+      </div>
+
+      <div class="ob-step hidden" data-step="4">
+        <div class="ob-hero">🔎</div>
+        <h2>Step 4 — Check it</h2>
+        <p>Type a <strong>patient's name</strong>, then pull their visits and make sure the doctor and date look right. Nothing is booked — this only reads. Then press <strong>Finish</strong>.</p>
+        <label class="field">
+          <span>Patient name</span>
+          <input type="text" id="obPatient" placeholder="e.g. Lochlann McNulty" />
+        </label>
+        <button class="btn btn-primary" id="obVerifyBtn">Pull this patient's visits</button>
+        <div class="ob-result hidden" id="obResult"></div>
+      </div>
+
+      <div class="ob-note hidden" id="obError" style="margin-top:6px"></div>
+
+      <div class="onboard-foot">
+        <span class="muted" id="obGateMsg" style="font-size:12px"></span>
+        <div class="ob-nav">
+          <button class="btn" id="obBack">Back</button>
+          <button class="btn btn-primary" id="obNext">Next</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="toast hidden" id="toast"></div>
+  <script src="app.js"></script>
+</body>
+</html>

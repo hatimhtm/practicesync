@@ -1,0 +1,40 @@
+name: Release
+
+# Cut a release by pushing a version tag, e.g.:
+#   npm version patch && git push --follow-tags
+# That builds the universal app and publishes it to GitHub Releases, which the
+# app then auto-updates from.
+on:
+  push:
+    tags:
+      - 'v*'
+
+jobs:
+  release:
+    runs-on: macos-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - run: npm ci
+
+      - name: Rebuild the icon
+        run: npm run icon
+
+      - name: Build & publish to GitHub Releases
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # --- To ship a SIGNED + NOTARIZED build that auto-updates on the
+          #     client's Mac, add these as repository secrets, then uncomment.
+          #     (Requires a paid Apple Developer account + Developer ID cert.) ---
+          # CSC_LINK: ${{ secrets.CSC_LINK }}                  # base64 of the Developer ID .p12
+          # CSC_KEY_PASSWORD: ${{ secrets.CSC_KEY_PASSWORD }}  # the .p12 password
+          # APPLE_ID: ${{ secrets.APPLE_ID }}
+          # APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
+          # APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: npx electron-builder --mac --universal --publish always

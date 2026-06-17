@@ -1,0 +1,8 @@
+node_modules/
+dist/
+build/icon.iconset/
+*.log
+.DS_Store
+# never commit local app state / secrets
+settings.json
+ai-key.bin
