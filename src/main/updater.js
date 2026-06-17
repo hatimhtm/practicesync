@@ -47,8 +47,10 @@ function cmpVer(a, b) {
 
 let downloadUrl = null; // the .dmg (or release page) for the newest version
 
-async function check({ onStatus } = {}) {
-  const say = (s) => { try { onStatus && onStatus(s); } catch {} };
+async function check({ onStatus, quiet } = {}) {
+  // On the launch check (quiet) we only speak up if there's actually an update —
+  // no "checking…" or "couldn't check" noise. The manual button reports all.
+  const say = (s) => { if (quiet && s.phase !== 'available') return; try { onStatus && onStatus(s); } catch {} };
   say({ phase: 'checking' });
   try {
     const rel = await getLatestRelease();
@@ -74,7 +76,7 @@ function openDownload() {
 
 /** Quiet check on launch — only surfaces if there's something newer. */
 function initAutoUpdates({ onStatus } = {}) {
-  check({ onStatus }).catch(() => {});
+  check({ onStatus, quiet: true }).catch(() => {});
 }
 
 module.exports = { check, openDownload, initAutoUpdates };

@@ -46,7 +46,8 @@
       {
         "provider": "github",
         "owner": "hatimhtm",
-        "repo": "practicesync"
+        "repo": "practicesync",
+        "releaseType": "release"
       }
     ],
     "dmg": {
