@@ -129,22 +129,69 @@ async function withBrowser(opts, fn) {
  * Navigate the VISIBLE window (the one the user sees) to the page and bring it
  * to the front — not a hidden background tab. Returns the page.
  */
+/** Accept what a non-technical user pastes: add https:// if they left off the scheme. */
+function normalizeUrl(u) {
+  const s = String(u || '').trim();
+  if (!s) return s;
+  if (/^https?:\/\//i.test(s)) return s;
+  if (/^[\w-]+(\.[\w-]+)+/.test(s)) return 'https://' + s; // looks like a domain
+  return s;
+}
+
+/** Is the page sitting on a blank / new-tab page (i.e. nothing really loaded)? */
+function isBlank(page) {
+  try { const u = page.url(); return !u || u === 'about:blank' || u.startsWith('chrome://new'); }
+  catch { return false; }
+}
+
+/**
+ * Open the URL in the VISIBLE controlled window and make sure it actually lands
+ * there (the whole "type a link → it opens in the browser" expectation). We
+ * retry, fall back to a direct location assignment, and verify we left
+ * about:blank — instead of silently sitting on a blank page.
+ */
 async function openPage(context, url) {
+  const target = normalizeUrl(url);
   const pages = context.pages();
   const page = pages[0] || (await context.newPage());
   // Close any other restored tabs so there's a single, obvious window to look at.
   for (const p of pages.slice(1)) { try { await p.close(); } catch {} }
   try { await page.bringToFront(); } catch {}
-  // Explicit navigation with 'domcontentloaded' (the reliable wait for app pages;
-  // 'networkidle' never settles on SPAs). Best-effort + never throws — if it
-  // doesn't land, the user can type the address into Chrome and the overlay
-  // follows them there.
-  if (url) {
-    try { await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 45000 }); }
-    catch { try { await page.evaluate((u) => { try { location.href = u; } catch {} }, url); } catch {} }
+  if (target) {
+    for (let attempt = 0; attempt < 3; attempt++) {
+      try { await page.goto(target, { waitUntil: 'domcontentloaded', timeout: 45000 }); }
+      catch {
+        try { await page.evaluate((u) => { window.location.href = u; }, target); } catch {}
+        try { await page.waitForLoadState('domcontentloaded', { timeout: 20000 }); } catch {}
+      }
+      if (!isBlank(page)) break; // we actually navigated somewhere real
+    }
   }
   try { await page.bringToFront(); } catch {}
   return page;
+}
+
+/**
+ * If the controlled browser is still on a blank page (auto-open didn't land —
+ * e.g. no URL given, or a redirect bounced us), show a big prompt INSIDE that
+ * browser telling the user to type the address and press Enter, and wait for
+ * them to navigate. Returns true once a real page is loaded.
+ */
+async function waitForRealPage(page, maxSeconds = 240) {
+  if (!isBlank(page)) return true;
+  try {
+    await page.evaluate(() => {
+      if (document.getElementById('__ps_navhint')) return;
+      const b = document.createElement('div');
+      b.id = '__ps_navhint';
+      b.innerHTML = '⌨️ Type your page address in the bar at the top and press <b>Enter</b> — then I’ll show you what to click.';
+      Object.assign(b.style, { position: 'fixed', top: '0', left: '0', right: '0', zIndex: '2147483647', background: '#d6231f', color: '#fff', font: '700 16px/1.45 -apple-system, system-ui, sans-serif', padding: '14px 18px', textAlign: 'center', boxShadow: '0 3px 14px rgba(0,0,0,.45)', pointerEvents: 'none' });
+      (document.body || document.documentElement).appendChild(b);
+    });
+  } catch {}
+  for (let i = 0; i < maxSeconds * 2 && isBlank(page); i++) { await sleep(500); }
+  try { await page.evaluate(() => { const e = document.getElementById('__ps_navhint'); if (e) e.remove(); }); } catch {}
+  return !isBlank(page);
 }
 
 /* ===================================================================== *
@@ -397,6 +444,9 @@ async function createAppointmentLive({ userDataDir, profileDir, url, selectors, 
 async function teach({ userDataDir, profileDir, url, steps }) {
   return withBrowser({ userDataDir, profileDir }, async (context) => {
     const page = await openPage(context, url);
+    // If the link didn't open on its own, prompt the user to type it and wait —
+    // never start highlighting fields on a blank page.
+    await waitForRealPage(page);
     const selectors = {};
     for (let i = 0; i < steps.length; i++) {
       const step = steps[i];
