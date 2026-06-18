@@ -75,19 +75,21 @@ async function check({ onStatus, quiet } = {}) {
 /** Download a URL to a file, following GitHub's redirect to S3, reporting %. */
 function download(url, dest, onProgress) {
   return new Promise((resolve, reject) => {
+    const fail = (e) => { try { fs.unlink(dest, () => {}); } catch {} reject(e); }; // never leave a truncated .dmg
     const get = (u, redirects) => {
       https.get(u, { headers: { 'User-Agent': 'PracticeSync' } }, (res) => {
         if ([301, 302, 303, 307, 308].includes(res.statusCode) && res.headers.location && redirects < 6) {
-          res.resume(); return get(res.headers.location, redirects + 1);
+          res.resume(); return get(new URL(res.headers.location, u).href, redirects + 1);
         }
         if (res.statusCode !== 200) { res.resume(); return reject(new Error('HTTP ' + res.statusCode)); }
         const total = parseInt(res.headers['content-length'] || '0', 10);
         let done = 0;
         const file = fs.createWriteStream(dest);
         res.on('data', (c) => { done += c.length; if (total && onProgress) onProgress(Math.round((done / total) * 100)); });
+        res.on('error', fail);
+        file.on('error', fail);
         res.pipe(file);
         file.on('finish', () => file.close(() => resolve(dest)));
-        file.on('error', reject);
       }).on('error', reject);
     };
     get(url, 0);

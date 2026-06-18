@@ -109,7 +109,7 @@ async function performSync(trigger = 'manual', overrides = {}) {
   } catch (err) {
     const result = { ok: false, error: 'Something went wrong during the sync. Please try again.', at: nowISO() };
     try { store.save({ lastRun: result.at, lastResult: result }); refreshTray(); } catch {}
-    if (mainWindow) mainWindow.webContents.send('run-finished', result);
+    sendToRenderer('run-finished', result); // null-safe (window may be gone)
     return result;
   }
 }
@@ -292,6 +292,9 @@ function maybeCatchUp() {
 
 /* ------------------------------- lifecycle ------------------------------- */
 app.on('window-all-closed', () => { /* stay alive in the menu bar */ });
+// Cmd-Q from the app menu should really quit (the window 'close' handler hides
+// instead of closing, so without this the app can feel unquittable).
+app.on('before-quit', () => { app.isQuitting = true; });
 
 // Single instance: a second launch just focuses the existing window.
 if (!app.requestSingleInstanceLock()) {

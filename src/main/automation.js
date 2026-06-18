@@ -50,12 +50,15 @@ function visitKey(v) {
 
 function planAppointments(visits, providers, mainDoctors = []) {
   return visits.map((v) => {
-    // A patient we searched for but couldn't open — surface it, never guess.
-    if (v.notFound) {
+    // A patient we searched for but couldn't open / had nothing to read — surface
+    // it clearly, never guess.
+    if (v.notFound || v.noVisits) {
       return {
         patientName: v.patientName, date: v.date || '', doctorName: v.doctorName || '',
         matched: false, mainDoctor: null, mainCode: '', codes: [], services: [],
-        confidence: 0, reason: 'patient not found in Practice Fusion', key: visitKey(v),
+        confidence: 0,
+        reason: v.noVisits ? 'found, but no visits could be read (check the Practice Fusion screen was taught right)' : 'patient not found in Practice Fusion',
+        key: visitKey(v),
       };
     }
     const { provider, confidence, reason } = matchProvider(v.doctorName, providers);
@@ -116,6 +119,7 @@ async function runSync({ providers = [], mainDoctors = [], count = 6, dryRun = t
     appt.createdOk = res.ok;
     if (res.ok) {
       appt.status = 'booked';
+      if (res.warning) { appt.warning = res.warning; say(`⚠ ${appt.patientName}: ${res.warning}`); }
       created += 1;
       if (dedup) { already.add(appt.key); newlyBooked.push(appt.key); }
     } else {

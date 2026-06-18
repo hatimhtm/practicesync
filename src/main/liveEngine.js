@@ -35,11 +35,19 @@ function defaultChromeUserDataDir() {
   return path.join(os.homedir(), 'Library', 'Application Support', 'Google', 'Chrome');
 }
 
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
 /** Is Google Chrome ACTUALLY running right now? (pgrep — not just a lock file,
  *  which can be stale after a crash and cause false "Chrome is open" errors.) */
 function chromeIsRunning() {
   try { execSync('pgrep -x "Google Chrome"', { stdio: 'ignore' }); return true; } // exit 0 = a process matched
-  catch { return false; } // non-zero exit = not running
+  catch (e) {
+    // pgrep exits 1 ONLY when nothing matched → truly not running. Any other
+    // failure (pgrep missing, permission) must NOT be read as "not running",
+    // or we'd delete a live Chrome's lock files and corrupt its session.
+    if (e && e.status === 1) return false;
+    return true;
+  }
 }
 
 /** Remove stale single-instance lock files left by a crashed Chrome. Safe to do
@@ -64,8 +72,12 @@ async function withBrowser(opts, fn) {
   const userDataDir = opts.userDataDir || defaultChromeUserDataDir();
   // If Chrome is genuinely running, a new launch just hands its URL to the open
   // window and exits → Playwright attaches to nothing → about:blank. So require
-  // Chrome to be quit. If it's NOT running, any leftover lock is stale; clear it.
-  if (chromeIsRunning()) {
+  // Chrome to be quit. Give a just-quit Chrome a few seconds to actually exit
+  // (Cmd-Q isn't instant), then — only once it's really gone — clear any stale
+  // lock files left by a previous crash.
+  let running = chromeIsRunning();
+  for (let i = 0; running && i < 8; i++) { await sleep(400); running = chromeIsRunning(); }
+  if (running) {
     return fail('Google Chrome is open — please QUIT Chrome completely (Cmd-Q), then click again. PracticeSync borrows your signed-in Chrome, so it can’t run while Chrome is open.');
   }
   clearStaleLocks(userDataDir);
@@ -289,7 +301,7 @@ async function pullVisits({ userDataDir, profileDir, url, selectors, limit = 10,
         await announce(page, onStep, `Reading ${name}'s visits…`);
         const doc = new JSDOM(await page.content()).window.document;
         const visits = extractVisits(doc, selectors, limit);
-        if (!visits.length) { all.push({ patientName: name, date: '', doctorName: '', notFound: true }); continue; }
+        if (!visits.length) { all.push({ patientName: name, date: '', doctorName: '', noVisits: true }); continue; }
         if (onStep) { try { onStep(`Found ${visits.length} visit${visits.length === 1 ? '' : 's'} for ${name}`); } catch {} }
         // Make sure each visit carries the patient we searched for.
         all.push(...visits.map((v) => ({ ...v, patientName: v.patientName || name })));
@@ -329,21 +341,35 @@ async function createAppointmentLive({ userDataDir, profileDir, url, selectors, 
     }
     // Plain-English label for each field as the cursor lands on it.
     const labelFor = { patient: `Entering patient: ${who}`, doctor: `Selecting clinician: ${appointment.mainDoctor || ''}`, date: `Setting the date: ${appointment.date}`, codes: 'Adding the code', units: 'Setting the units', modifier: 'Adding the modifier' };
-    // Every required field must actually fill; otherwise abort BEFORE saving so
-    // we never save a half-filled appointment.
+    // Every required field must actually fill — and we VERIFY each one took its
+    // value (read it back) so we never save on a field that silently rejected
+    // input. Abort before Save if anything required is missing.
     const required = ['doctor', 'date', 'codes', 'patient'];
     const filled = new Set();
+    let extraCodeLines = 0;
     for (const f of planFormValues(selectors, appointment)) {
+      const line = f.line || 0;
+      // There is ONE taught code/units/modifier field, so only the first service
+      // line can be entered. Never silently overwrite it with later codes —
+      // count the extras and surface a warning instead of mis-booking.
+      if (line > 0) { if (f.kind === 'codes') extraCodeLines += 1; continue; }
       try {
         const el = await page.$(f.selector);
         if (!el) continue;
         await announce(page, onStep, labelFor[f.kind] || 'Filling a field');
         await stage(page, 'moveTo', f.selector);
         const tag = await el.evaluate((n) => n.tagName.toLowerCase());
-        if (tag === 'select') await page.selectOption(f.selector, { label: f.value }).catch(() => page.selectOption(f.selector, f.value));
-        else { await el.fill(''); await el.type(String(f.value), { delay: 55 }); } // visibly typed
+        if (tag === 'select') {
+          await page.selectOption(f.selector, { label: f.value }).catch(() => page.selectOption(f.selector, f.value));
+          filled.add(f.kind); // a <select> doesn't expose a typed value to read back
+        } else {
+          await el.fill('');
+          await el.type(String(f.value), { delay: 55 }); // visibly typed
+          const got = String((await el.inputValue().catch(() => '')) || '').trim();
+          const want = String(f.value).trim();
+          if (got === want || (want && got.includes(want))) filled.add(f.kind); // verified it landed
+        }
         await stage(page, 'press');
-        filled.add(f.kind);
       } catch { /* field failed — handled by the required-check below */ }
     }
     const missing = required.filter((k) => !filled.has(k));
@@ -356,8 +382,10 @@ async function createAppointmentLive({ userDataDir, profileDir, url, selectors, 
     await page.click(selectors.saveButton, { timeout: 10000 });
     await stage(page, 'press');
     await page.waitForTimeout(900);
-    await stage(page, 'done', `Booked ${who} ✓`);
-    return { ok: true };
+    const result = { ok: true };
+    if (extraCodeLines > 0) result.warning = `Entered the first code only — ${extraCodeLines} more code line(s) must be added by hand in SimplePractice.`;
+    await stage(page, 'done', extraCodeLines ? `Booked ${who} — extra codes need manual entry` : `Booked ${who} ✓`);
+    return result;
   });
 }
 

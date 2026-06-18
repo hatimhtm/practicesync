@@ -190,8 +190,9 @@ $('#saveRosterBtn').addEventListener('click', async () => {
   await window.api.saveRoster({ mainDoctors: mains, providers: draftProviders, rosterText: $('#rosterText').value });
   await refresh();
   toast('Doctors saved.');
-  // If we're mid-setup, snap straight back into the mandatory tutorial.
-  if (inSetup) openOnboarding(1);
+  // If we're mid-setup, snap straight back to the DOCTORS step of the tutorial
+  // (role-indexed so it survives step reordering — not a hardcoded number).
+  if (inSetup) openOnboarding(OB.indexOf('doctors'));
 });
 
 /* -------------------------------- overview ------------------------------ */
@@ -229,7 +230,7 @@ function renderSyncResult(container, res) {
     if (a.status === 'duplicate') return '↩ already booked';
     if (a.status === 'failed') return `<span class="map-review" title="${escapeHtml(a.error || '')}">failed</span>`;
     if (a.status === 'would-book' || res.dryRun) return 'would book';
-    if (a.status === 'booked') return '✓ booked';
+    if (a.status === 'booked') return a.warning ? `<span class="map-review" title="${escapeHtml(a.warning)}">✓ booked ⚠</span>` : '✓ booked';
     return '—';
   };
   const svcText = (a) => (a.services && a.services.length)
@@ -509,6 +510,8 @@ window.api.onUpdateStatus((s) => {
       break;
     case 'error':
       el.textContent = 'Couldn’t check right now — try again later.';
+      // If a download was mid-flight, don't leave the banner stuck on a disabled %.
+      if (ubBtn) { ubBtn.disabled = false; ubBtn.textContent = 'Try update again'; }
       break;
     default:
       break;
