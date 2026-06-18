@@ -460,13 +460,21 @@ $('#obVerifyBtn').addEventListener('click', async () => {
 $('#replayTutorial').addEventListener('click', () => openOnboarding());
 
 /* ------------------------------- updates -------------------------------- */
-$('#checkUpdateBtn').addEventListener('click', async () => {
+let updateReady = false; // a newer version was found and is ready to install
+async function checkUpdates() {
   $('#updateState').textContent = 'Checking…';
+  const sb = $('#sidebarUpdateBtn'); if (sb && !updateReady) sb.textContent = 'Checking…';
   await window.api.checkForUpdates();
-});
+}
 function startUpdate() { window.api.installUpdate(); }
+$('#checkUpdateBtn').addEventListener('click', checkUpdates);
 $('#installUpdateBtn').addEventListener('click', startUpdate);
 $('#ubBtn').addEventListener('click', startUpdate);
+// Always-visible sidebar button: if an update is ready, install it; else check.
+$('#sidebarUpdateBtn').addEventListener('click', () => {
+  if (updateReady) { showView('home'); startUpdate(); }
+  else { showView('home'); checkUpdates(); }
+});
 
 window.api.onUpdateStatus((s) => {
   if (!s) return;
@@ -476,6 +484,7 @@ window.api.onUpdateStatus((s) => {
   const ubTitle = $('#ubTitle');
   const ubSub = $('#ubSub');
   const ubBtn = $('#ubBtn');
+  const sb = $('#sidebarUpdateBtn');
   switch (s.phase) {
     case 'checking':
       el.textContent = 'Checking for updates…';
@@ -484,6 +493,8 @@ window.api.onUpdateStatus((s) => {
       el.textContent = "You're on the latest version.";
       banner.classList.add('hidden');
       install.classList.add('hidden');
+      updateReady = false;
+      if (sb) sb.textContent = 'Up to date ✓';
       break;
     case 'available':
       el.textContent = `Version ${s.version || ''} is available.`;
@@ -492,6 +503,8 @@ window.api.onUpdateStatus((s) => {
       ubSub.textContent = 'Click Update now — it downloads the new version and opens the installer.';
       ubBtn.textContent = 'Update now'; ubBtn.disabled = false;
       banner.classList.remove('hidden');
+      updateReady = true;
+      if (sb) sb.textContent = `⬇︎ Update to ${s.version || 'new version'}`;
       showView('home');
       break;
     case 'downloading':
@@ -500,6 +513,7 @@ window.api.onUpdateStatus((s) => {
       ubSub.textContent = `${s.percent || 0}% — hang tight, this is the new app coming down.`;
       ubBtn.textContent = `${s.percent || 0}%`; ubBtn.disabled = true;
       banner.classList.remove('hidden');
+      if (sb) sb.textContent = `Downloading… ${s.percent || 0}%`;
       break;
     case 'opening':
       el.textContent = 'Installer opened — drag PracticeSync onto Applications.';
@@ -507,11 +521,14 @@ window.api.onUpdateStatus((s) => {
       ubSub.textContent = 'Quit PracticeSync, drag the new PracticeSync onto the Applications folder (replace the old one), then reopen it.';
       ubBtn.textContent = 'Open installer again'; ubBtn.disabled = false;
       banner.classList.remove('hidden');
+      if (sb) sb.textContent = 'Finish in Finder →';
       break;
     case 'error':
       el.textContent = 'Couldn’t check right now — try again later.';
       // If a download was mid-flight, don't leave the banner stuck on a disabled %.
       if (ubBtn) { ubBtn.disabled = false; ubBtn.textContent = 'Try update again'; }
+      updateReady = false;
+      if (sb) sb.textContent = 'Check for updates';
       break;
     default:
       break;
