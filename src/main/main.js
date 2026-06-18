@@ -238,7 +238,7 @@ function registerIpc() {
     await updater.check({ onStatus: (s) => sendToRenderer('update-status', s) });
     return { ok: true };
   });
-  ipcMain.handle('update:install', () => { updater.openDownload(); return { ok: true }; });
+  ipcMain.handle('update:install', async () => { await updater.downloadAndOpen({ onStatus: (s) => sendToRenderer('update-status', s) }); return { ok: true }; });
 
   // Teach Mode: open the given page and let the user click each field once.
   // Saves the captured selectors so the app reuses them on every run.

@@ -1,6 +1,9 @@
 'use strict';
 
 const https = require('https');
+const fs = require('fs');
+const os = require('os');
+const path = require('path');
 const { app, shell } = require('electron');
 
 /**
@@ -69,9 +72,49 @@ async function check({ onStatus, quiet } = {}) {
   }
 }
 
-/** Open the new installer in the browser so the user can install it. */
-function openDownload() {
-  if (downloadUrl) { try { shell.openExternal(downloadUrl); } catch {} }
+/** Download a URL to a file, following GitHub's redirect to S3, reporting %. */
+function download(url, dest, onProgress) {
+  return new Promise((resolve, reject) => {
+    const get = (u, redirects) => {
+      https.get(u, { headers: { 'User-Agent': 'PracticeSync' } }, (res) => {
+        if ([301, 302, 303, 307, 308].includes(res.statusCode) && res.headers.location && redirects < 6) {
+          res.resume(); return get(res.headers.location, redirects + 1);
+        }
+        if (res.statusCode !== 200) { res.resume(); return reject(new Error('HTTP ' + res.statusCode)); }
+        const total = parseInt(res.headers['content-length'] || '0', 10);
+        let done = 0;
+        const file = fs.createWriteStream(dest);
+        res.on('data', (c) => { done += c.length; if (total && onProgress) onProgress(Math.round((done / total) * 100)); });
+        res.pipe(file);
+        file.on('finish', () => file.close(() => resolve(dest)));
+        file.on('error', reject);
+      }).on('error', reject);
+    };
+    get(url, 0);
+  });
+}
+
+/**
+ * The "Update now" action: download the new .dmg in-app (with progress), then
+ * open it so the user just drags PracticeSync onto Applications. Falls back to a
+ * plain browser download if anything goes wrong. Unsigned apps can't silently
+ * self-replace on macOS, so this is the cleanest one-button update there is.
+ */
+async function downloadAndOpen({ onStatus } = {}) {
+  const say = (s) => { try { onStatus && onStatus(s); } catch {} };
+  if (!downloadUrl) { say({ phase: 'error', error: 'Nothing to download yet — check for updates first.' }); return; }
+  // Not a direct .dmg (e.g. a release page) → just open it in the browser.
+  if (!/\.dmg(\?|$)/i.test(downloadUrl)) { try { shell.openExternal(downloadUrl); } catch {} say({ phase: 'opening' }); return; }
+  const dest = path.join(os.tmpdir(), 'PracticeSync-Update.dmg');
+  try {
+    say({ phase: 'downloading', percent: 0 });
+    await download(downloadUrl, dest, (p) => say({ phase: 'downloading', percent: p }));
+    say({ phase: 'opening' });
+    try { await shell.openPath(dest); } catch { shell.openExternal(downloadUrl); }
+  } catch (e) {
+    try { shell.openExternal(downloadUrl); } catch {} // browser fallback
+    say({ phase: 'opening' });
+  }
 }
 
 /** Quiet check on launch — only surfaces if there's something newer. */
@@ -79,4 +122,4 @@ function initAutoUpdates({ onStatus } = {}) {
   check({ onStatus, quiet: true }).catch(() => {});
 }
 
-module.exports = { check, openDownload, initAutoUpdates };
+module.exports = { check, downloadAndOpen, initAutoUpdates };

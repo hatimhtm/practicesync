@@ -460,19 +460,56 @@ $('#checkUpdateBtn').addEventListener('click', async () => {
   $('#updateState').textContent = 'Checking…';
   await window.api.checkForUpdates();
 });
-$('#installUpdateBtn').addEventListener('click', () => window.api.installUpdate());
+function startUpdate() { window.api.installUpdate(); }
+$('#installUpdateBtn').addEventListener('click', startUpdate);
+$('#ubBtn').addEventListener('click', startUpdate);
+
 window.api.onUpdateStatus((s) => {
   if (!s) return;
   const el = $('#updateState');
   const install = $('#installUpdateBtn');
-  const map = {
-    checking: 'Checking for updates…',
-    none: "You're on the latest version.",
-    available: `Version ${s.version || ''} is available.`,
-    error: 'Couldn’t check right now — try again later.',
-  };
-  el.textContent = map[s.phase] || '';
-  install.classList.toggle('hidden', s.phase !== 'available');
+  const banner = $('#updateBanner');
+  const ubTitle = $('#ubTitle');
+  const ubSub = $('#ubSub');
+  const ubBtn = $('#ubBtn');
+  switch (s.phase) {
+    case 'checking':
+      el.textContent = 'Checking for updates…';
+      break;
+    case 'none':
+      el.textContent = "You're on the latest version.";
+      banner.classList.add('hidden');
+      install.classList.add('hidden');
+      break;
+    case 'available':
+      el.textContent = `Version ${s.version || ''} is available.`;
+      install.classList.remove('hidden');
+      ubTitle.textContent = `Update ${s.version || ''} is ready 🎉`;
+      ubSub.textContent = 'Click Update now — it downloads the new version and opens the installer.';
+      ubBtn.textContent = 'Update now'; ubBtn.disabled = false;
+      banner.classList.remove('hidden');
+      showView('home');
+      break;
+    case 'downloading':
+      el.textContent = `Downloading update… ${s.percent || 0}%`;
+      ubTitle.textContent = 'Downloading the update…';
+      ubSub.textContent = `${s.percent || 0}% — hang tight, this is the new app coming down.`;
+      ubBtn.textContent = `${s.percent || 0}%`; ubBtn.disabled = true;
+      banner.classList.remove('hidden');
+      break;
+    case 'opening':
+      el.textContent = 'Installer opened — drag PracticeSync onto Applications.';
+      ubTitle.textContent = 'Last step — finish in the window that opened';
+      ubSub.textContent = 'Quit PracticeSync, drag the new PracticeSync onto the Applications folder (replace the old one), then reopen it.';
+      ubBtn.textContent = 'Open installer again'; ubBtn.disabled = false;
+      banner.classList.remove('hidden');
+      break;
+    case 'error':
+      el.textContent = 'Couldn’t check right now — try again later.';
+      break;
+    default:
+      break;
+  }
 });
 
 /* -------------------------------- events -------------------------------- */
