@@ -559,4 +559,4 @@ async function captureClick(page, label, ancestorSelector = null, stepInfo = nul
   return selector || null;
 }
 
-module.exports = { pullVisits, createAppointmentLive, teach, defaultChromeUserDataDir, openPage, normalizeUrl, isBlank, waitForRealPage };
+module.exports = { pullVisits, createAppointmentLive, teach, defaultChromeUserDataDir, openPage, normalizeUrl, isBlank, waitForRealPage, ensureStage, stage, announce };
