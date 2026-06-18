@@ -82,6 +82,11 @@ async function withBrowser(opts, fn) {
       '--no-default-browser-check',
       '--disable-component-update',
       '--disable-background-networking',
+      // Suppress the "Chrome didn't shut down correctly / Restore pages?" bubble
+      // that pops up after an unclean exit — it steals focus and confuses the user.
+      '--hide-crash-restore-bubble',
+      '--disable-session-crashed-bubble',
+      '--restore-last-session=false',
     ],
   };
   let context;

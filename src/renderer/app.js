@@ -52,6 +52,9 @@ async function refresh() {
   settings = await window.api.getSettings();
   const providers = settings.providers || [];
 
+  // Version (so a screenshot always shows which build is running)
+  if ($('#appVersion')) $('#appVersion').textContent = 'v' + (settings.appVersion || '?');
+
   // Overview
   $('#ovDoctors').textContent = String(providers.length);
   $('#ovMode').textContent = (settings.pfSelectors && settings.spSelectors) ? 'Connected ✓' : 'Not set up';

@@ -182,7 +182,7 @@ function createTray() {
 function registerIpc() {
   ipcMain.handle('settings:get', () => {
     const s = store.load();
-    return { ...s, hasAIKey: store.hasAIKey(), appleAvailable: appleIntelligenceAvailable() };
+    return { ...s, hasAIKey: store.hasAIKey(), appleAvailable: appleIntelligenceAvailable(), appVersion: app.getVersion() };
   });
 
   ipcMain.handle('settings:save', (_e, patch) => {
