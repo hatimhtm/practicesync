@@ -14,6 +14,7 @@ contextBridge.exposeInMainWorld('api', {
   teach: (target, url) => ipcRenderer.invoke('teach:run', { target, url }),
   onRunStatus: (cb) => ipcRenderer.on('run-status', (_e, s) => cb(s)),
   onRunFinished: (cb) => ipcRenderer.on('run-finished', (_e, r) => cb(r)),
+  onLiveStep: (cb) => ipcRenderer.on('live-step', (_e, s) => cb(s)),
   checkForUpdates: () => ipcRenderer.invoke('update:check'),
   installUpdate: () => ipcRenderer.invoke('update:install'),
   onUpdateStatus: (cb) => ipcRenderer.on('update-status', (_e, s) => cb(s)),

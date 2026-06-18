@@ -49,6 +49,12 @@
           <button class="btn btn-primary" id="syncNowBtn">Sync now</button>
         </div>
 
+        <div class="card live-card hidden" id="liveCard">
+          <div class="card-k">🤖 Live — watch PracticeSync work</div>
+          <p class="muted" style="font-size:12.5px;margin:0 0 10px">The Chrome window shows the cursor moving and clicking. Here's the running log:</p>
+          <div class="live-log" id="liveLog"></div>
+        </div>
+
         <div class="grid">
           <div class="card">
             <div class="card-k">Doctors set up</div>
@@ -68,9 +74,10 @@
         </div>
 
         <div class="callout">
-          <strong>How it works:</strong> for each patient on the Practice Fusion dashboard, PracticeSync reads the
-          <em>name, date, and diagnosing doctor</em>, finds which main doctor they fall under, then creates the
-          appointment in SimplePractice on the same date with that doctor's codes — and saves it.
+          <strong>How it works:</strong> you give it patient names. For each one, PracticeSync looks the patient up in
+          Practice Fusion, reads every visit's <em>date and doctor</em>, finds which main doctor they fall under, then
+          books the appointment in SimplePractice with that doctor's codes — and saves it. <strong>You watch the whole
+          thing happen</strong> in Chrome: the cursor moves, types, and clicks, step by step.
         </div>
         <div class="src-row" style="margin-top:14px;gap:12px">
           <button class="btn" id="checkUpdateBtn">Check for updates</button>
@@ -228,13 +235,26 @@
       <div class="onboard-progress" id="obProgress"></div>
 
       <div class="ob-step" data-step="0">
-        <div class="ob-hero">🔁</div>
-        <h2>Set up PracticeSync</h2>
-        <p>4 quick steps. It reads each visit from Practice Fusion and books it in SimplePractice for you.</p>
-        <p class="muted" style="margin-top:10px;font-size:13px">⚠️ First, <strong>quit Google Chrome</strong> so the app can use the browser you're already signed into.</p>
+        <div class="ob-hero">🤖</div>
+        <h2>Meet PracticeSync</h2>
+        <p>It reads each visit from Practice Fusion and books it in SimplePractice for you — and you'll <strong>watch it work</strong>: the cursor moves, types, and clicks right on the screen.</p>
+        <p class="muted" style="margin-top:10px;font-size:13px">A few short steps. First, <strong>quit Google Chrome (Cmd-Q)</strong> so the app can use the browser you're already signed into.</p>
       </div>
 
       <div class="ob-step hidden" data-step="1">
+        <div class="ob-hero">🔐</div>
+        <h2>Permissions — kept simple</h2>
+        <p>Here's exactly what PracticeSync needs on your Mac. No surprises:</p>
+        <div class="ob-points">
+          <div class="ob-point"><span>✅</span><div><strong>No special permission required.</strong> Driving your own Chrome needs no Accessibility, Screen Recording, or anything scary.</div></div>
+          <div class="ob-point"><span>🟡</span><div>macOS may show a box about <strong>“App Management,”</strong> and you'll see its switch turn itself off. That's normal — <strong>click Don't Allow and carry on.</strong> The app works without it.</div></div>
+          <div class="ob-point"><span>🔔</span><div>The one thing it may ask for: permission to <strong>send a notification</strong> when a sync finishes. Allow it if you'd like a heads-up — totally optional.</div></div>
+          <div class="ob-point"><span>🔒</span><div><strong>Patient data never leaves this Mac</strong>, and your logins stay inside your own Chrome — the app never sees a password.</div></div>
+        </div>
+        <div class="ob-note" style="margin-top:14px">Want a clean slate first? Open <em>System Settings → Privacy &amp; Security → App Management</em> and remove PracticeSync if it's listed — you won't need to add it back.</div>
+      </div>
+
+      <div class="ob-step hidden" data-step="2">
         <div class="ob-hero">👩‍⚕️</div>
         <h2>Step 1 — Your doctors</h2>
         <p>Load your doctor list, then review it and press <strong>Save</strong>.</p>
@@ -245,7 +265,7 @@
         <div class="ob-selected hidden" id="obDoctorsOk"></div>
       </div>
 
-      <div class="ob-step hidden" data-step="2">
+      <div class="ob-step hidden" data-step="3">
         <div class="ob-hero">🩺</div>
         <h2>Step 2 — Practice Fusion</h2>
         <p>Press the button — Chrome opens. <strong>If it doesn't land on Practice Fusion, just type your Practice Fusion address into Chrome and press Enter</strong> (the red helper follows you). Then a red bar shows what to click, in order: the <strong>search box</strong> (type any patient's name), the <strong>patient</strong> in the results, then the <strong>patient name</strong> at the top, one <strong>visit row</strong>, the <strong>doctor</strong>, and the <strong>date</strong>. After this, you only type a name — no more addresses.</p>
@@ -257,7 +277,7 @@
         <div class="row"><button class="btn btn-primary" id="obTeachPf">Open &amp; show the fields</button><span class="pill" id="obPfTaught">not taught</span></div>
       </div>
 
-      <div class="ob-step hidden" data-step="3">
+      <div class="ob-step hidden" data-step="4">
         <div class="ob-hero">📆</div>
         <h2>Step 3 — SimplePractice</h2>
         <p>Press the button — Chrome opens. <strong>If it doesn't land on SimplePractice, type its address into Chrome and press Enter</strong> (the red helper follows you). Then click each field the red bar asks for. (Don't worry — clicking <em>Save</em> here only teaches the button; it won't book anything during setup.)</p>
@@ -269,10 +289,10 @@
         <div class="row"><button class="btn btn-primary" id="obTeachSp">Open &amp; show the fields</button><span class="pill" id="obSpTaught">not taught</span></div>
       </div>
 
-      <div class="ob-step hidden" data-step="4">
+      <div class="ob-step hidden" data-step="5">
         <div class="ob-hero">🔎</div>
-        <h2>Step 4 — Check it</h2>
-        <p>Type a <strong>patient's name</strong>, then pull their visits and make sure the doctor and date look right. Nothing is booked — this only reads. Then press <strong>Finish</strong>.</p>
+        <h2>Step 4 — Watch a test run</h2>
+        <p>Type a <strong>patient's name</strong>, then pull their visits. <strong>Watch the Chrome window</strong> — you'll see the cursor search and read. Nothing is booked; this only reads. When the doctor and date look right, press <strong>Finish</strong>.</p>
         <label class="field">
           <span>Patient name</span>
           <input type="text" id="obPatient" placeholder="e.g. Lochlann McNulty" />

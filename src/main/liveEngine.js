@@ -17,6 +17,7 @@ const { extractVisits, planFormValues } = require('./extract');
  */
 
 const fs = require('fs');
+const { execSync } = require('child_process');
 
 const CHROME_APP = '/Applications/Google Chrome.app';
 const CHROME_BIN = '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome';
@@ -34,9 +35,20 @@ function defaultChromeUserDataDir() {
   return path.join(os.homedir(), 'Library', 'Application Support', 'Google', 'Chrome');
 }
 
-/** Is Chrome's profile locked because Chrome is already running? */
-function chromeRunningLock(userDataDir) {
-  try { return fs.existsSync(path.join(userDataDir, 'SingletonLock')); } catch { return false; }
+/** Is Google Chrome ACTUALLY running right now? (pgrep — not just a lock file,
+ *  which can be stale after a crash and cause false "Chrome is open" errors.) */
+function chromeIsRunning() {
+  try { execSync('pgrep -x "Google Chrome"', { stdio: 'ignore' }); return true; } // exit 0 = a process matched
+  catch { return false; } // non-zero exit = not running
+}
+
+/** Remove stale single-instance lock files left by a crashed Chrome. Safe to do
+ *  only when Chrome is NOT running — these locks are the #1 cause of the new
+ *  Playwright Chrome handing off to a dead session and getting stuck on about:blank. */
+function clearStaleLocks(userDataDir) {
+  for (const f of ['SingletonLock', 'SingletonCookie', 'SingletonSocket']) {
+    try { fs.unlinkSync(path.join(userDataDir, f)); } catch {}
+  }
 }
 
 function fail(error, detail) {
@@ -50,9 +62,13 @@ async function withBrowser(opts, fn) {
     return fail('Google Chrome isn’t installed. Please install Google Chrome, sign into Practice Fusion & SimplePractice in it, then try again.');
   }
   const userDataDir = opts.userDataDir || defaultChromeUserDataDir();
-  if (chromeRunningLock(userDataDir)) {
-    return fail('Google Chrome is open — please QUIT Chrome completely (Cmd-Q), then click again. The app needs to borrow your Chrome profile.');
+  // If Chrome is genuinely running, a new launch just hands its URL to the open
+  // window and exits → Playwright attaches to nothing → about:blank. So require
+  // Chrome to be quit. If it's NOT running, any leftover lock is stale; clear it.
+  if (chromeIsRunning()) {
+    return fail('Google Chrome is open — please QUIT Chrome completely (Cmd-Q), then click again. PracticeSync borrows your signed-in Chrome, so it can’t run while Chrome is open.');
   }
+  clearStaleLocks(userDataDir);
 
   // The update/background-networking flags keep Chrome from launching its own
   // updater (Keystone) — that updater modifies /Applications/Google Chrome.app,
@@ -102,16 +118,110 @@ async function openPage(context, url) {
   // Close any other restored tabs so there's a single, obvious window to look at.
   for (const p of pages.slice(1)) { try { await p.close(); } catch {} }
   try { await page.bringToFront(); } catch {}
-  // BEST EFFORT navigation. 'commit' resolves the instant the load starts (so we
-  // never hang on a slow SPA), and we never throw — if it doesn't land, the user
-  // can just type the address into Chrome themselves and the teach overlay will
-  // follow them there.
+  // Explicit navigation with 'domcontentloaded' (the reliable wait for app pages;
+  // 'networkidle' never settles on SPAs). Best-effort + never throws — if it
+  // doesn't land, the user can type the address into Chrome and the overlay
+  // follows them there.
   if (url) {
-    try { await page.goto(url, { waitUntil: 'commit', timeout: 30000 }); }
+    try { await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 45000 }); }
     catch { try { await page.evaluate((u) => { try { location.href = u; } catch {} }, url); } catch {} }
   }
   try { await page.bringToFront(); } catch {}
   return page;
+}
+
+/* ===================================================================== *
+ *  THE STAGE — "watch the robot work"
+ *  A visible cursor + status HUD + highlight + click ripples injected INTO
+ *  the page, so the client (and his bosses) literally see the automation move,
+ *  point, type and click. CDP mouse events don't render a visible pointer, so
+ *  we draw our own and animate it to each element right before Playwright does
+ *  the real action. Everything is best-effort and wrapped in try/catch — if the
+ *  visuals ever fail, the real automation underneath still runs.
+ * ===================================================================== */
+const STAGE_V = 4; // bump to force the on-page stage to rebuild after an update
+
+/** Self-contained in-page script (serialized + injected). Defines window.__psStage. */
+function stageSource() {
+  return (cfg) => {
+    try {
+      if (window.__psStage && window.__psStage._v === cfg.v) return true;
+      const wait = (ms) => new Promise((r) => setTimeout(r, ms));
+      const root = document.documentElement;
+      ['__ps_hud', '__ps_cursor', '__ps_hl', '__ps_style'].forEach((id) => { const e = document.getElementById(id); if (e) e.remove(); });
+
+      const st = document.createElement('style'); st.id = '__ps_style';
+      st.textContent = '@keyframes __psPulse{0%{box-shadow:0 0 0 0 rgba(61,123,255,.6)}70%{box-shadow:0 0 0 10px rgba(61,123,255,0)}100%{box-shadow:0 0 0 0 rgba(61,123,255,0)}}@keyframes __psRip{from{opacity:.5;transform:translate(-50%,-50%) scale(.2)}to{opacity:0;transform:translate(-50%,-50%) scale(1)}}';
+      root.appendChild(st);
+
+      const hud = document.createElement('div'); hud.id = '__ps_hud';
+      hud.innerHTML = '<span id="__ps_dot"></span><span style="font-size:15px">🤖</span><span id="__ps_txt">Starting…</span>';
+      Object.assign(hud.style, { position: 'fixed', top: '14px', left: '50%', transform: 'translateX(-50%)', zIndex: '2147483647', display: 'flex', alignItems: 'center', gap: '9px', background: 'rgba(17,24,40,.96)', color: '#eaf0fb', font: '600 14px/1.3 -apple-system,system-ui,sans-serif', padding: '11px 18px', borderRadius: '999px', boxShadow: '0 10px 30px rgba(0,0,0,.5)', border: '1px solid rgba(122,160,255,.45)', pointerEvents: 'none', maxWidth: '86vw' });
+      root.appendChild(hud);
+      const dot = hud.querySelector('#__ps_dot');
+      Object.assign(dot.style, { width: '9px', height: '9px', borderRadius: '50%', background: '#3d7bff', flex: '0 0 auto', animation: '__psPulse 1.2s infinite' });
+
+      const cur = document.createElement('div'); cur.id = '__ps_cursor';
+      cur.innerHTML = '<svg width="28" height="28" viewBox="0 0 24 24" style="filter:drop-shadow(0 2px 5px rgba(0,0,0,.55))"><path d="M5 2.5l15.5 8.8-6.6 1.4 3.9 6.7-2.9 1.7-3.9-6.7L5 20.6z" fill="#fff" stroke="#3d7bff" stroke-width="1.5"/></svg><span id="__ps_lbl">PracticeSync</span>';
+      Object.assign(cur.style, { position: 'fixed', left: '50%', top: '42%', zIndex: '2147483646', pointerEvents: 'none', transition: 'left .6s cubic-bezier(.22,.61,.36,1), top .6s cubic-bezier(.22,.61,.36,1)', transformOrigin: 'top left' });
+      const lbl = cur.querySelector('#__ps_lbl');
+      Object.assign(lbl.style, { position: 'absolute', left: '24px', top: '22px', background: '#3d7bff', color: '#fff', font: '700 10px -apple-system,sans-serif', padding: '2px 7px', borderRadius: '6px', whiteSpace: 'nowrap', boxShadow: '0 2px 8px rgba(0,0,0,.35)' });
+      root.appendChild(cur);
+
+      const hl = document.createElement('div'); hl.id = '__ps_hl';
+      Object.assign(hl.style, { position: 'fixed', zIndex: '2147483645', border: '3px solid #3d7bff', borderRadius: '8px', background: 'rgba(61,123,255,.12)', boxShadow: '0 0 0 2px rgba(255,255,255,.55)', pointerEvents: 'none', display: 'none', transition: 'all .25s ease' });
+      root.appendChild(hl);
+
+      let cx = innerWidth / 2; let cy = innerHeight * 0.42;
+      window.__psStage = {
+        _v: cfg.v,
+        status(t) { try { document.getElementById('__ps_txt').textContent = t; } catch {} },
+        async moveTo(sel) {
+          const el = typeof sel === 'string' ? document.querySelector(sel) : sel;
+          if (!el) return false;
+          try { el.scrollIntoView({ block: 'center', inline: 'center', behavior: 'smooth' }); } catch {}
+          await wait(350);
+          const r = el.getBoundingClientRect();
+          if (!r.width && !r.height) return false;
+          cx = r.left + Math.min(r.width / 2, 26); cy = r.top + r.height / 2;
+          cur.style.left = cx + 'px'; cur.style.top = cy + 'px';
+          hl.style.display = 'block'; hl.style.left = r.left + 'px'; hl.style.top = r.top + 'px'; hl.style.width = r.width + 'px'; hl.style.height = r.height + 'px';
+          await wait(640);
+          return true;
+        },
+        async press() {
+          const rp = document.createElement('div');
+          Object.assign(rp.style, { position: 'fixed', left: cx + 'px', top: cy + 'px', width: '46px', height: '46px', borderRadius: '50%', background: 'rgba(61,123,255,.5)', zIndex: '2147483645', pointerEvents: 'none', animation: '__psRip .5s ease-out forwards' });
+          root.appendChild(rp);
+          cur.style.transition = 'transform .1s'; cur.style.transform = 'scale(.82)';
+          await wait(120);
+          cur.style.transform = 'scale(1)'; cur.style.transition = 'left .6s cubic-bezier(.22,.61,.36,1), top .6s cubic-bezier(.22,.61,.36,1)';
+          setTimeout(() => { try { rp.remove(); } catch {} }, 520);
+          await wait(140);
+        },
+        done(msg) { this.status(msg || 'Done ✓'); try { const d = document.getElementById('__ps_dot'); d.style.animation = 'none'; d.style.background = '#34d399'; } catch {} hl.style.display = 'none'; },
+        hide() { ['__ps_hud', '__ps_cursor', '__ps_hl', '__ps_style'].forEach((id) => { const e = document.getElementById(id); if (e) e.remove(); }); window.__psStage = null; },
+      };
+      return true;
+    } catch { return false; }
+  };
+}
+
+/** Inject (or refresh) the stage. Cheap + idempotent, so call it freely — it
+ *  rebuilds automatically after a page navigation wipes it. */
+async function ensureStage(page) {
+  try { await page.evaluate(`(${stageSource().toString()})(${JSON.stringify({ v: STAGE_V })})`); } catch {}
+}
+/** Call a stage method in-page (awaits its animation). Always safe. */
+async function stage(page, method, arg) {
+  try { return await page.evaluate(({ m, a }) => { const s = window.__psStage; return s && s[m] ? s[m](a) : false; }, { m: method, a: arg }); }
+  catch { return false; }
+}
+/** Update the on-screen status AND notify the app window, in one call. */
+async function announce(page, onStep, text) {
+  try { if (typeof onStep === 'function') onStep(text); } catch {}
+  await ensureStage(page);
+  await stage(page, 'status', text);
 }
 
 /**
@@ -119,18 +229,24 @@ async function openPage(context, url) {
  * first result — so the user never has to paste a per-patient URL. Returns true
  * if it landed on a patient timeline. Requires `selectors.searchBox` (taught).
  */
-async function searchPatient(page, selectors, name, baseUrl) {
+async function searchPatient(page, selectors, name, baseUrl, onStep) {
   try {
     // Start each search from a clean search page.
     if (baseUrl) { try { await page.goto(baseUrl, { waitUntil: 'domcontentloaded', timeout: 60000 }); } catch {} }
     await page.waitForSelector(selectors.searchBox, { timeout: 15000 });
+    await announce(page, onStep, `Searching for ${name}…`);
+    await stage(page, 'moveTo', selectors.searchBox);
     await page.click(selectors.searchBox);
+    await stage(page, 'press');
     try { await page.fill(selectors.searchBox, ''); } catch {}
-    await page.type(selectors.searchBox, String(name), { delay: 30 });
+    await page.type(selectors.searchBox, String(name), { delay: 90 }); // visibly typed, character by character
     await page.waitForTimeout(1200); // let the results / dropdown populate
     if (selectors.firstResult) {
       try { await page.waitForSelector(selectors.firstResult, { timeout: 8000 }); } catch {}
+      await announce(page, onStep, `Opening ${name}…`);
+      await stage(page, 'moveTo', selectors.firstResult);
       await page.click(selectors.firstResult, { timeout: 8000 });
+      await stage(page, 'press');
     } else {
       await page.keyboard.press('Enter'); // no result taught → submit the search
     }
@@ -148,34 +264,42 @@ async function searchPatient(page, selectors, name, baseUrl) {
  * patient by name (no URL needed) and reads their visits. Otherwise it just
  * reads whatever patient page is already open at `url` (the old behavior).
  */
-async function pullVisits({ userDataDir, profileDir, url, selectors, limit = 10, patientNames = [] }) {
+async function pullVisits({ userDataDir, profileDir, url, selectors, limit = 10, patientNames = [], onStep }) {
   if (!url || !selectors || !selectors.rowSelector) {
     return { ok: false, error: 'Practice Fusion isn\'t set up yet — use Teach Mode to show the app the patient page first.' };
   }
   const names = (patientNames || []).map((n) => String(n || '').trim()).filter(Boolean);
   return withBrowser({ userDataDir, profileDir }, async (context) => {
     const page = await openPage(context, url);
+    await announce(page, onStep, 'Opening Practice Fusion…');
     const { JSDOM } = require('jsdom');
 
     // Name-based path: search each patient and collect their visits.
     if (names.length && selectors.searchBox) {
       const all = [];
-      for (const name of names) {
-        const found = await searchPatient(page, selectors, name, url);
-        if (!found) { all.push({ patientName: name, date: '', doctorName: '', notFound: true }); continue; }
+      for (let i = 0; i < names.length; i++) {
+        const name = names[i];
+        const found = await searchPatient(page, selectors, name, url, onStep);
+        if (!found) { await announce(page, onStep, `Couldn't find ${name} in Practice Fusion`); all.push({ patientName: name, date: '', doctorName: '', notFound: true }); continue; }
+        await announce(page, onStep, `Reading ${name}'s visits…`);
         const doc = new JSDOM(await page.content()).window.document;
         const visits = extractVisits(doc, selectors, limit);
         if (!visits.length) { all.push({ patientName: name, date: '', doctorName: '', notFound: true }); continue; }
+        if (onStep) { try { onStep(`Found ${visits.length} visit${visits.length === 1 ? '' : 's'} for ${name}`); } catch {} }
         // Make sure each visit carries the patient we searched for.
         all.push(...visits.map((v) => ({ ...v, patientName: v.patientName || name })));
       }
+      await stage(page, 'done', `Read ${all.filter((v) => !v.notFound).length} visit(s)`);
       return { ok: true, visits: all };
     }
 
     // Fallback: read the single patient page that's already open at `url`.
+    await announce(page, onStep, 'Reading the visits…');
     try { await page.waitForSelector(selectors.rowSelector, { timeout: 15000 }); } catch {}
     const doc = new JSDOM(await page.content()).window.document;
-    return { ok: true, visits: extractVisits(doc, selectors, limit) };
+    const visits = extractVisits(doc, selectors, limit);
+    await stage(page, 'done', `Read ${visits.length} visit(s)`);
+    return { ok: true, visits };
   });
 }
 
@@ -183,16 +307,23 @@ async function pullVisits({ userDataDir, profileDir, url, selectors, limit = 10,
  * Create one appointment in SimplePractice via the taught form fields, then save.
  * (Used only when spMode === 'standard'; the 'enterprise' path uses the API.)
  */
-async function createAppointmentLive({ userDataDir, profileDir, url, selectors, appointment }) {
+async function createAppointmentLive({ userDataDir, profileDir, url, selectors, appointment, onStep }) {
   if (!url || !selectors || !selectors.saveButton) {
     return { ok: false, error: 'SimplePractice isn\'t set up yet — use Teach Mode to show the app the appointment form.' };
   }
+  const who = appointment.patientName || 'the patient';
   return withBrowser({ userDataDir, profileDir }, async (context) => {
     const page = await openPage(context, url);
+    await announce(page, onStep, `Booking ${who} on ${appointment.date}…`);
     if (selectors.newApptButton) {
+      await stage(page, 'moveTo', selectors.newApptButton);
       try { await page.click(selectors.newApptButton, { timeout: 10000 }); }
       catch { return { ok: false, error: 'Could not open the new-appointment form. Re-teach the SimplePractice screen.' }; }
+      await stage(page, 'press');
+      await page.waitForTimeout(500);
     }
+    // Plain-English label for each field as the cursor lands on it.
+    const labelFor = { patient: `Entering patient: ${who}`, doctor: `Selecting clinician: ${appointment.mainDoctor || ''}`, date: `Setting the date: ${appointment.date}`, codes: 'Adding the code', units: 'Setting the units', modifier: 'Adding the modifier' };
     // Every required field must actually fill; otherwise abort BEFORE saving so
     // we never save a half-filled appointment.
     const required = ['doctor', 'date', 'codes', 'patient'];
@@ -201,18 +332,26 @@ async function createAppointmentLive({ userDataDir, profileDir, url, selectors, 
       try {
         const el = await page.$(f.selector);
         if (!el) continue;
+        await announce(page, onStep, labelFor[f.kind] || 'Filling a field');
+        await stage(page, 'moveTo', f.selector);
         const tag = await el.evaluate((n) => n.tagName.toLowerCase());
         if (tag === 'select') await page.selectOption(f.selector, { label: f.value }).catch(() => page.selectOption(f.selector, f.value));
-        else { await el.fill(''); await el.type(String(f.value)); }
+        else { await el.fill(''); await el.type(String(f.value), { delay: 55 }); } // visibly typed
+        await stage(page, 'press');
         filled.add(f.kind);
       } catch { /* field failed — handled by the required-check below */ }
     }
     const missing = required.filter((k) => !filled.has(k));
     if (missing.length) {
+      await stage(page, 'done', `Stopped — couldn't fill ${missing.join(', ')}`);
       return { ok: false, error: `Didn't save — couldn't fill: ${missing.join(', ')}. Re-teach the SimplePractice screen.` };
     }
+    await announce(page, onStep, 'Saving the appointment…');
+    await stage(page, 'moveTo', selectors.saveButton);
     await page.click(selectors.saveButton, { timeout: 10000 });
-    await page.waitForTimeout(800);
+    await stage(page, 'press');
+    await page.waitForTimeout(900);
+    await stage(page, 'done', `Booked ${who} ✓`);
     return { ok: true };
   });
 }

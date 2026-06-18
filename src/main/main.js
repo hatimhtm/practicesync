@@ -1,7 +1,7 @@
 'use strict';
 
 const path = require('path');
-const { app, BrowserWindow, Tray, Menu, nativeImage, ipcMain } = require('electron');
+const { app, BrowserWindow, Tray, Menu, nativeImage, ipcMain, Notification } = require('electron');
 
 const store = require('./store');
 const { runSync } = require('./automation');
@@ -17,6 +17,12 @@ const scheduler = new Scheduler();
 const APP_NAME = 'PracticeSync';
 
 function nowISO() { return new Date().toISOString(); }
+
+/** Friendly desktop notification when a run finishes (the one macOS permission
+ *  the app actually asks for — and only the first time). Always best-effort. */
+function notify(body) {
+  try { if (Notification.isSupported()) new Notification({ title: 'PracticeSync', body }).show(); } catch {}
+}
 
 /** Safely send to the renderer (no-op if the window is gone/destroyed). */
 function sendToRenderer(channel, payload) {
@@ -57,12 +63,18 @@ async function performSync(trigger = 'manual', overrides = {}) {
       if (!settings.spSelectors) return { ok: false, error: 'Teach the SimplePractice screen first.', at: nowISO() };
     }
 
+    // Mirror every live step into the app window so the bosses can watch
+    // progress there too (in addition to the visible cursor in Chrome).
+    sendToRenderer('live-step', { text: dryRun ? 'Starting a read-only check…' : 'Starting the sync…', at: nowISO(), reset: true });
+    const onStep = (text) => sendToRenderer('live-step', { text, at: nowISO() });
+
     const result = await runSync({
       providers: settings.providers,
       mainDoctors: settings.mainDoctors,
       count: overrides.count || 6,
       dryRun,
       patientNames,
+      onStep,
       bookedKeys: settings.bookedKeys || [],
       live: {
         userDataDir: settings.chromeUserDataDir,
@@ -89,6 +101,10 @@ async function performSync(trigger = 'manual', overrides = {}) {
     store.save(patch);
     refreshTray();
     sendToRenderer('run-finished', result);
+    if (!dryRun) {
+      if (result.ok) notify(result.created ? `Booked ${result.created} appointment${result.created === 1 ? '' : 's'}${result.unmatched ? ` · ${result.unmatched} not recognized` : ''} ✓` : 'No new appointments to book.');
+      else notify('Sync needs attention — open PracticeSync to see why.');
+    }
     return result;
   } catch (err) {
     const result = { ok: false, error: 'Something went wrong during the sync. Please try again.', at: nowISO() };

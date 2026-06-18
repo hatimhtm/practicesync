@@ -9,6 +9,14 @@ no patient data ever leaves the Mac.
 You teach it each screen once (a red highlight follows your cursor so you can see
 exactly what to click), then it works by **patient name** — no URLs to paste.
 
+**Watch it work.** During a run, PracticeSync injects a visible cursor + status HUD
+into Chrome (`src/main/liveEngine.js` → the "stage"): the pointer glides to each
+field, types character by character, and clicks with a ripple, so the user and
+their bosses can see exactly what's happening. The app window mirrors every step
+as a live log. It needs **no macOS permissions** to do this (launching + CDP-driving
+Chrome touches nothing TCC-protected); the cursor is cosmetic and the real,
+trusted click/type is always issued by Playwright underneath.
+
 ## Develop
 
 ```bash

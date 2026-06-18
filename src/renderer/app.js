@@ -339,8 +339,10 @@ $$('#scheduleSeg button').forEach((b) => b.addEventListener('click', async () =>
 }));
 
 /* -------------------- onboarding (mandatory, gated) --------------------- */
-const SETUP_VERSION = 3; // bump forces everyone through setup again after an update
-const OB_STEPS = 5;
+const SETUP_VERSION = 4; // bump forces everyone through setup again after an update
+// Steps by ROLE so inserting/reordering never breaks the gates.
+const OB = ['welcome', 'permissions', 'doctors', 'pf', 'sp', 'verify'];
+const OB_STEPS = OB.length;
 let obStep = 0;
 let obVerified = false; // a real read-only pull succeeded in the last step
 let inSetup = false;    // true while the mandatory setup is active (can't escape it)
@@ -352,14 +354,15 @@ function obDots() {
 
 // Each step's gate: can the user advance from `step`? Returns '' if allowed, else why-not.
 function obGate(step) {
-  if (step === 1) {
+  const role = OB[step];
+  if (role === 'doctors') {
     if (!(settings.providers || []).length) return 'Load your doctor list and press Save.';
     if (!(settings.mainDoctors || []).some((m) => (m.code || '').trim())) return 'Give each big doctor a 2-letter code (GP/GO/GN).';
     return '';
   }
-  if (step === 2) return settings.pfSelectors ? '' : 'Show the Practice Fusion fields to continue.';
-  if (step === 3) return settings.spSelectors ? '' : 'Show the SimplePractice fields to continue.';
-  if (step === 4) return obVerified ? '' : 'Pull your real visits and confirm they look right.';
+  if (role === 'pf') return settings.pfSelectors ? '' : 'Show the Practice Fusion fields to continue.';
+  if (role === 'sp') return settings.spSelectors ? '' : 'Show the SimplePractice fields to continue.';
+  if (role === 'verify') return obVerified ? '' : 'Pull your real visits and confirm they look right.';
   return '';
 }
 
@@ -375,8 +378,9 @@ function obShow(n) {
   $('#obNext').disabled = !!why;
   $('#obGateMsg').textContent = why;
   // reflect taught state on the step pills
-  if (obStep === 2) setPill($('#obPfTaught'), settings.pfSelectors);
-  if (obStep === 3) setPill($('#obSpTaught'), settings.spSelectors);
+  const role = OB[obStep];
+  if (role === 'pf') setPill($('#obPfTaught'), settings.pfSelectors);
+  if (role === 'sp') setPill($('#obSpTaught'), settings.spSelectors);
 }
 
 function openOnboarding(step = 0) {
@@ -387,7 +391,8 @@ function openOnboarding(step = 0) {
   $('#onboard').classList.remove('hidden');
 }
 async function finishOnboarding() {
-  if (obGate(4)) { obShow(4); return; } // safety: can't finish unverified
+  const verifyIdx = OB.indexOf('verify');
+  if (obGate(verifyIdx)) { obShow(verifyIdx); return; } // safety: can't finish unverified
   await window.api.saveSettings({ setupComplete: true, setupVersion: SETUP_VERSION });
   inSetup = false;
   $('#onboard').classList.add('hidden');
@@ -471,7 +476,23 @@ window.api.onUpdateStatus((s) => {
 });
 
 /* -------------------------------- events -------------------------------- */
-window.api.onRunFinished(() => refresh());
+function fmtClock(iso) {
+  try { return new Date(iso).toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit', second: '2-digit' }); }
+  catch { return ''; }
+}
+window.api.onLiveStep((s) => {
+  if (!s) return;
+  const log = $('#liveLog'); const card = $('#liveCard');
+  if (!log || !card) return;
+  if (s.reset) { log.innerHTML = ''; card.classList.remove('hidden'); showView('home'); }
+  const prev = log.querySelector('.live-line.cur'); if (prev) prev.classList.remove('cur');
+  const line = document.createElement('div');
+  line.className = 'live-line cur';
+  line.innerHTML = `<span class="t">${fmtClock(s.at)}</span><span>${escapeHtml(s.text || '')}</span>`;
+  log.appendChild(line);
+  log.scrollTop = log.scrollHeight;
+});
+window.api.onRunFinished(() => { const c = $('#liveLog .live-line.cur'); if (c) c.classList.remove('cur'); refresh(); });
 window.api.onRunStatus((s) => { if (s && s.phase === 'running') $('#statusIcon').textContent = '⏳'; });
 
 /* --------------------------------- init --------------------------------- */
