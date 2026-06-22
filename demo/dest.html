@@ -1,0 +1,137 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>BookWell — Scheduling & Billing</title>
+<style>
+  :root { --green:#0a8f5b; --ink:#1b2430; --muted:#667; --line:#e4e8ef; --bg:#f4f8f6; }
+  * { box-sizing:border-box; }
+  body { margin:0; font:15px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI",system-ui,sans-serif; color:var(--ink); background:var(--bg); }
+  header { background:var(--green); color:#fff; padding:14px 28px; display:flex; align-items:center; gap:12px; box-shadow:0 2px 10px rgba(0,0,0,.12); }
+  header .logo { width:30px; height:30px; border-radius:8px; background:#fff; display:grid; place-items:center; color:var(--green); font-weight:800; }
+  header h1 { font-size:18px; margin:0; font-weight:700; }
+  header .tag { margin-left:auto; opacity:.85; font-size:13px; }
+  main { max-width:920px; margin:28px auto; padding:0 24px; display:grid; grid-template-columns:1fr; gap:22px; }
+  .panel { background:#fff; border:1px solid var(--line); border-radius:14px; padding:22px 24px; box-shadow:0 1px 3px rgba(20,30,50,.05); }
+  .btn { font:inherit; font-weight:600; border:0; border-radius:10px; padding:11px 18px; cursor:pointer; }
+  .btn-primary { background:var(--green); color:#fff; }
+  .btn-ghost { background:#eef6f1; color:var(--green); }
+  #apptForm { display:none; margin-top:18px; }
+  #apptForm.show { display:block; }
+  .grid { display:grid; grid-template-columns:1fr 1fr; gap:14px; }
+  label.lbl { display:block; font-size:12px; text-transform:uppercase; letter-spacing:.6px; color:var(--muted); margin-bottom:6px; font-weight:600; }
+  input { width:100%; font-size:15px; padding:11px 13px; border:2px solid var(--line); border-radius:9px; outline:none; }
+  input:focus { border-color:var(--green); }
+  .svc { border:1px dashed var(--line); border-radius:11px; padding:14px; margin-top:6px; }
+  .svc .grid3 { display:grid; grid-template-columns:2fr 1fr 1fr; gap:12px; }
+  .staged { margin-top:12px; display:flex; flex-wrap:wrap; gap:8px; }
+  .chip { background:#eef6f1; color:var(--green); border-radius:99px; padding:6px 12px; font-size:13px; font-weight:600; }
+  .actions { margin-top:18px; display:flex; gap:10px; }
+  h2 { font-size:18px; margin:0 0 4px; }
+  .sub { color:var(--muted); font-size:13px; margin-bottom:8px; }
+  #booked { display:flex; flex-direction:column; gap:12px; }
+  .booked-card { border:1px solid var(--line); border-left:4px solid var(--green); border-radius:11px; padding:14px 16px; animation:pop .25s ease; }
+  @keyframes pop { from { opacity:0; transform:translateY(6px); } to { opacity:1; transform:none; } }
+  .booked-card .top { display:flex; justify-content:space-between; font-weight:700; }
+  .booked-card .svc-line { font-size:13px; color:var(--muted); margin-top:4px; }
+  .count { color:var(--muted); font-size:13px; }
+  .empty { color:var(--muted); padding:18px 0; }
+</style>
+</head>
+<body>
+<header>
+  <div class="logo">B</div>
+  <h1>BookWell</h1>
+  <span class="tag">Scheduling &amp; Billing</span>
+</header>
+<main>
+  <div class="panel">
+    <h2>New appointment</h2>
+    <div class="sub">Create a coded appointment under the supervising clinician.</div>
+    <button id="newAppt" class="btn btn-primary">+ New appointment</button>
+
+    <div id="apptForm">
+      <div class="grid">
+        <div><label class="lbl">Patient</label><input id="patientField" placeholder="Patient name" /></div>
+        <div><label class="lbl">Supervising clinician</label><input id="clinicianField" placeholder="Clinician" /></div>
+        <div><label class="lbl">Date of service</label><input id="dateField" placeholder="YYYY-MM-DD" /></div>
+        <div></div>
+      </div>
+      <div class="svc">
+        <label class="lbl">Service line</label>
+        <div class="grid3">
+          <input id="codeField" placeholder="CPT code" />
+          <input id="unitsField" placeholder="Units" />
+          <input id="modifierField" placeholder="Modifiers" />
+        </div>
+        <div class="staged" id="staged"></div>
+      </div>
+      <div class="actions">
+        <button id="addService" class="btn btn-ghost">+ Add another service</button>
+        <button id="saveAppt" class="btn btn-primary">Save appointment</button>
+      </div>
+    </div>
+  </div>
+
+  <div class="panel">
+    <h2>Booked appointments <span class="count" id="bookedCount"></span></h2>
+    <div id="booked"><div class="empty">Nothing booked yet.</div></div>
+  </div>
+</main>
+
+<script>
+  const $ = (id) => document.getElementById(id);
+  const form = $('apptForm');
+  let staged = []; // service lines added before save
+
+  $('newAppt').addEventListener('click', () => {
+    form.classList.add('show');
+    staged = []; renderStaged();
+    ['patientField','clinicianField','dateField','codeField','unitsField','modifierField'].forEach((id) => { $(id).value = ''; });
+    $('patientField').focus();
+  });
+
+  function currentService() {
+    const code = $('codeField').value.trim();
+    if (!code) return null;
+    return { code, units: $('unitsField').value.trim() || '1', modifiers: $('modifierField').value.trim() };
+  }
+  function renderStaged() {
+    $('staged').innerHTML = staged.map((s) => '<span class="chip">' + svcText(s) + '</span>').join('');
+  }
+  function svcText(s) {
+    return s.code + (s.units && s.units !== '1' ? ' ×' + s.units : '') + (s.modifiers ? ' [' + s.modifiers + ']' : '');
+  }
+
+  // "Add another service" stages the current line and clears the inputs for the
+  // next one — so the same fields are reused for every code (matches how the
+  // app fills: type → add → type → save).
+  $('addService').addEventListener('click', () => {
+    const s = currentService();
+    if (s) { staged.push(s); renderStaged(); }
+    ['codeField','unitsField','modifierField'].forEach((id) => { $(id).value = ''; });
+    $('codeField').focus();
+  });
+
+  $('saveAppt').addEventListener('click', () => {
+    const all = staged.slice();
+    const cur = currentService();
+    if (cur) all.push(cur);
+    if (!$('patientField').value.trim() || !all.length) return; // nothing to book
+    const card = document.createElement('div');
+    card.className = 'booked-card';
+    card.innerHTML = '<div class="top"><span>' + esc($('patientField').value) + '</span><span>' + esc($('dateField').value) + '</span></div>'
+      + '<div class="svc-line">' + esc($('clinicianField').value) + ' · ' + all.map((s) => svcText(s)).join(', ') + '</div>';
+    const booked = $('booked');
+    if (booked.querySelector('.empty')) booked.innerHTML = '';
+    booked.appendChild(card);
+    $('bookedCount').textContent = '(' + booked.querySelectorAll('.booked-card').length + ')';
+    form.classList.remove('show');
+    staged = [];
+  });
+
+  function esc(s) { return String(s).replace(/[&<>]/g, (c) => ({'&':'&amp;','<':'&lt;','>':'&gt;'}[c])); }
+</script>
+</body>
+</html>

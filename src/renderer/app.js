@@ -5,7 +5,7 @@ const $$ = (sel, root = document) => [...root.querySelectorAll(sel)];
 
 let settings = {};
 let draftProviders = []; // providers parsed/edited but not yet saved (codes held as text)
-let draftMains = [];     // big doctors [{name, code}]
+let draftMains = [];     // main doctors [{name, code}]
 
 // Local mirror of model.formatCodes (renderer can't require main-process modules).
 function formatCodes(codes) {
@@ -93,15 +93,41 @@ async function refresh() {
   $$('#spModeSeg button').forEach((b) => b.classList.toggle('active', b.dataset.val === (settings.spMode || 'standard')));
 
   // AI
-  $('#aiProvider').value = settings.aiProvider || 'apple';
-  toggleAIKey('#aiProvider', '#aiKeyWrap');
-  $('#appleNote').textContent = settings.appleAvailable
-    ? 'This Mac supports on-device Apple Intelligence.'
-    : 'Apple Intelligence may not be available on this Mac — the built-in matcher is used automatically.';
+  $('#aiProvider').value = settings.aiProvider || 'auto';
   renderAIState();
+  detectAndShowEngines();
 
   // Schedule
-  $$('#scheduleSeg button').forEach((b) => b.classList.toggle('active', b.dataset.val === (settings.schedule || 'off')));
+  const sched = settings.schedule || 'off';
+  $$('#scheduleSeg button').forEach((b) => b.classList.toggle('active', b.dataset.val === sched));
+  renderSchedule(sched, r);
+}
+
+/* schedule status cards */
+const SCHED_NOTE = {
+  off: 'Off — PracticeSync runs only when you press <strong>Sync now</strong>.',
+  '6h': 'Runs automatically every 6 hours, plus whenever you press Sync now.',
+  daily: 'Runs automatically once a day, plus whenever you press Sync now.',
+};
+function renderSchedule(sched, lastResult) {
+  if ($('#scheduleNote')) $('#scheduleNote').innerHTML = SCHED_NOTE[sched] || SCHED_NOTE.off;
+  const last = $('#schedLast'); const lastSub = $('#schedLastSub'); const next = $('#schedNext');
+  if (last) {
+    if (lastResult && lastResult.at) {
+      last.textContent = fmtTime(lastResult.at);
+      lastSub.textContent = lastResult.ok
+        ? `${lastResult.created || 0} booked${lastResult.unmatched ? ` · ${lastResult.unmatched} unrecognized` : ''}`
+        : 'needs attention';
+    } else { last.textContent = 'No runs yet'; lastSub.textContent = ''; }
+  }
+  if (next) {
+    if (sched === 'off') next.textContent = 'Only when you press Sync now';
+    else {
+      const ms = sched === '6h' ? 6 * 3600e3 : 24 * 3600e3;
+      const base = settings.lastRun ? Date.parse(settings.lastRun) : Date.now();
+      next.textContent = fmtTime(new Date(base + ms).toISOString());
+    }
+  }
 }
 
 /* ----------------------------- doctors & codes -------------------------- */
@@ -274,8 +300,8 @@ function parsePatientNames(raw) {
   return String(raw || '').split(/[\n,]+/).map((s) => s.trim()).filter(Boolean);
 }
 function setPill(el, taught) {
-  el.textContent = taught ? 'taught ✓' : 'not taught';
-  el.className = 'pill ' + (taught ? 'pill-good' : 'pill-pending');
+  el.textContent = taught ? 'set up ✓' : 'needs setup';
+  el.className = 'pill ' + (taught ? 'pill-good' : 'pill-todo');
 }
 $$('#spModeSeg button').forEach((b) => b.addEventListener('click', async () => {
   await window.api.saveSettings({ spMode: b.dataset.val });
@@ -292,7 +318,7 @@ async function teachScreen(target, urlSel) {
   await window.api.saveSettings(target === 'pf' ? { pfUrl: url } : { spUrl: url });
   toast('Opening the page — click each field as prompted…');
   const res = await window.api.teach(target, url);
-  if (res && res.ok) toast('Screen taught ✓');
+  if (res && res.ok) toast('Screen set up ✓');
   else toast(res && res.error ? res.error : 'Teach Mode could not run here.');
   refresh();
 }
@@ -313,24 +339,40 @@ $('#demoPullBtn').addEventListener('click', async () => {
 });
 
 /* ------------------------------- AI engine ------------------------------ */
-const PROVIDER_LABEL = { none: 'Built-in matching', apple: 'Apple Intelligence', claude: 'Claude', gemini: 'Gemini', openai: 'OpenAI' };
-function toggleAIKey(sel, wrap) {
-  const v = $(sel).value;
-  $(wrap).classList.toggle('hidden', v === 'none' || v === 'apple');
-}
+const PROVIDER_LABEL = { auto: 'Smart (auto)', apple: 'Apple Intelligence', ollama: 'Local Gemma', none: 'Built-in' };
 function renderAIState() {
-  const p = settings.aiProvider || 'apple';
+  const p = settings.aiProvider || 'auto';
   const el = $('#aiState');
-  if (p === 'none' || p === 'apple') { el.textContent = PROVIDER_LABEL[p]; el.className = 'pill pill-safe'; }
-  else if (settings.hasAIKey) { el.textContent = `${PROVIDER_LABEL[p]} · key saved`; el.className = 'pill pill-good'; }
-  else { el.textContent = `${PROVIDER_LABEL[p]} · needs key`; el.className = 'pill pill-pending'; }
+  el.textContent = PROVIDER_LABEL[p] || 'Smart (auto)';
+  el.className = 'pill pill-safe';
 }
-$('#aiProvider').addEventListener('change', () => toggleAIKey('#aiProvider', '#aiKeyWrap'));
+// Ask the main process what's installed/running and show it, plus a one-line
+// summary of what Smart mode will actually use.
+function engineRow(name, ok, detail, active) {
+  return `<div class="engine-row"><span class="seg-dot ${ok ? 'on' : ''}"></span><b>${escapeHtml(name)}</b>`
+    + (active ? ' <span class="pill pill-good" style="padding:1px 8px;font-size:10px">active</span>' : '')
+    + ` <span class="muted">— ${escapeHtml(detail)}</span></div>`;
+}
+async function detectAndShowEngines() {
+  const box = $('#engineStatus');
+  if (box) box.textContent = 'Checking what’s available on this Mac…';
+  const e = await window.api.detectEngines();
+  // Mirror ai.js 'auto' order (local model → Apple Intelligence → built-in).
+  const active = e.ollama.available ? 'ollama' : (e.apple ? 'apple' : 'builtin');
+  const rows = [
+    engineRow('Apple Intelligence', e.apple, e.apple ? 'on-device' : 'needs an M-series Mac on macOS 26', active === 'apple'),
+    engineRow('Local Gemma 4', e.ollama.available, e.ollama.available ? 'on-device' : 'not detected (install Ollama to enable)', active === 'ollama'),
+    engineRow('Built-in matcher', true, 'always available, fully offline', active === 'builtin'),
+  ];
+  if (box) box.innerHTML = rows.join('');
+  const picked = active === 'ollama' ? 'Local Gemma 4 (on-device)'
+    : (active === 'apple' ? 'Apple Intelligence (on-device)' : 'the built-in matcher');
+  $('#appleNote').textContent = `Smart mode uses the best engine on this Mac — currently ${picked}. Most people never need to change this.`;
+}
+$('#aiProvider').addEventListener('change', () => { settings.aiProvider = $('#aiProvider').value; renderAIState(); });
 $('#saveAI').addEventListener('click', async () => {
   const provider = $('#aiProvider').value;
-  const apiKey = $('#aiKey').value;
-  const res = await window.api.setAI({ provider, apiKey: apiKey || undefined });
-  $('#aiKey').value = '';
+  const res = await window.api.setAI({ provider });
   toast(res && res.ok === false ? res.error : 'AI engine saved.');
   await refresh();
 });
@@ -361,7 +403,7 @@ function obGate(step) {
   const role = OB[step];
   if (role === 'doctors') {
     if (!(settings.providers || []).length) return 'Load your doctor list and press Save.';
-    if (!(settings.mainDoctors || []).some((m) => (m.code || '').trim())) return 'Give each big doctor a 2-letter code (GP/GO/GN).';
+    if (!(settings.mainDoctors || []).some((m) => (m.code || '').trim())) return 'Give each main doctor a 2-letter code (GP/GO/GN).';
     return '';
   }
   if (role === 'pf') return settings.pfSelectors ? '' : 'Show the Practice Fusion fields to continue.';
@@ -460,15 +502,14 @@ $('#obVerifyBtn').addEventListener('click', async () => {
 $('#replayTutorial').addEventListener('click', () => openOnboarding());
 
 /* ------------------------------- updates -------------------------------- */
+// Updates live entirely in the sidebar button + the auto banner (no duplicate
+// controls in the Overview body).
 let updateReady = false; // a newer version was found and is ready to install
 async function checkUpdates() {
-  $('#updateState').textContent = 'Checking…';
   const sb = $('#sidebarUpdateBtn'); if (sb && !updateReady) sb.textContent = 'Checking…';
   await window.api.checkForUpdates();
 }
 function startUpdate() { window.api.installUpdate(); }
-$('#checkUpdateBtn').addEventListener('click', checkUpdates);
-$('#installUpdateBtn').addEventListener('click', startUpdate);
 $('#ubBtn').addEventListener('click', startUpdate);
 // Always-visible sidebar button: if an update is ready, install it; else check.
 $('#sidebarUpdateBtn').addEventListener('click', () => {
@@ -478,8 +519,6 @@ $('#sidebarUpdateBtn').addEventListener('click', () => {
 
 window.api.onUpdateStatus((s) => {
   if (!s) return;
-  const el = $('#updateState');
-  const install = $('#installUpdateBtn');
   const banner = $('#updateBanner');
   const ubTitle = $('#ubTitle');
   const ubSub = $('#ubSub');
@@ -487,28 +526,23 @@ window.api.onUpdateStatus((s) => {
   const sb = $('#sidebarUpdateBtn');
   switch (s.phase) {
     case 'checking':
-      el.textContent = 'Checking for updates…';
+      if (sb) sb.textContent = 'Checking…';
       break;
     case 'none':
-      el.textContent = "You're on the latest version.";
       banner.classList.add('hidden');
-      install.classList.add('hidden');
       updateReady = false;
       if (sb) sb.textContent = 'Up to date ✓';
       break;
     case 'available':
-      el.textContent = `Version ${s.version || ''} is available.`;
-      install.classList.remove('hidden');
-      ubTitle.textContent = `Update ${s.version || ''} is ready 🎉`;
+      ubTitle.textContent = `Update ${s.version || ''} is ready`;
       ubSub.textContent = 'Click Update now — it downloads the new version and opens the installer.';
       ubBtn.textContent = 'Update now'; ubBtn.disabled = false;
       banner.classList.remove('hidden');
       updateReady = true;
-      if (sb) sb.textContent = `⬇︎ Update to ${s.version || 'new version'}`;
+      if (sb) sb.textContent = `Update to ${s.version || 'the new version'} →`;
       showView('home');
       break;
     case 'downloading':
-      el.textContent = `Downloading update… ${s.percent || 0}%`;
       ubTitle.textContent = 'Downloading the update…';
       ubSub.textContent = `${s.percent || 0}% — hang tight, this is the new app coming down.`;
       ubBtn.textContent = `${s.percent || 0}%`; ubBtn.disabled = true;
@@ -516,16 +550,13 @@ window.api.onUpdateStatus((s) => {
       if (sb) sb.textContent = `Downloading… ${s.percent || 0}%`;
       break;
     case 'opening':
-      el.textContent = 'Installer opened — drag PracticeSync onto Applications.';
       ubTitle.textContent = 'Last step — finish in the window that opened';
-      ubSub.textContent = 'Quit PracticeSync, drag the new PracticeSync onto the Applications folder (replace the old one), then reopen it.';
+      ubSub.textContent = 'Quit PracticeSync, drag the new version onto Applications (replace the old one), then reopen it.';
       ubBtn.textContent = 'Open installer again'; ubBtn.disabled = false;
       banner.classList.remove('hidden');
       if (sb) sb.textContent = 'Finish in Finder →';
       break;
     case 'error':
-      el.textContent = 'Couldn’t check right now — try again later.';
-      // If a download was mid-flight, don't leave the banner stuck on a disabled %.
       if (ubBtn) { ubBtn.disabled = false; ubBtn.textContent = 'Try update again'; }
       updateReady = false;
       if (sb) sb.textContent = 'Check for updates';

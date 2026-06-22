@@ -1,0 +1,134 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>ChartFlow EHR — Patient Records</title>
+<style>
+  :root { --blue:#1565c0; --ink:#1b2430; --muted:#667; --line:#e4e8ef; --bg:#f5f7fb; }
+  * { box-sizing:border-box; }
+  body { margin:0; font:15px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI",system-ui,sans-serif; color:var(--ink); background:var(--bg); }
+  header { background:var(--blue); color:#fff; padding:14px 28px; display:flex; align-items:center; gap:12px; box-shadow:0 2px 10px rgba(0,0,0,.12); }
+  header .logo { width:30px; height:30px; border-radius:8px; background:#fff; display:grid; place-items:center; color:var(--blue); font-weight:800; }
+  header h1 { font-size:18px; margin:0; font-weight:700; letter-spacing:.2px; }
+  header .tag { margin-left:auto; opacity:.85; font-size:13px; }
+  main { max-width:920px; margin:28px auto; padding:0 24px; }
+  .panel { background:#fff; border:1px solid var(--line); border-radius:14px; padding:22px 24px; box-shadow:0 1px 3px rgba(20,30,50,.05); }
+  .search-wrap { position:relative; }
+  label.lbl { display:block; font-size:12px; text-transform:uppercase; letter-spacing:.6px; color:var(--muted); margin-bottom:7px; font-weight:600; }
+  #patientSearch { width:100%; font-size:17px; padding:13px 15px; border:2px solid var(--line); border-radius:10px; outline:none; }
+  #patientSearch:focus { border-color:var(--blue); }
+  #results { margin-top:8px; border:1px solid var(--line); border-radius:10px; overflow:hidden; display:none; }
+  #results.show { display:block; }
+  .result { padding:12px 15px; cursor:pointer; border-bottom:1px solid var(--line); display:flex; align-items:center; gap:10px; }
+  .result:last-child { border-bottom:0; }
+  .result:hover { background:#eef4ff; }
+  .result .av { width:30px; height:30px; border-radius:50%; background:#dce8ff; color:var(--blue); display:grid; place-items:center; font-weight:700; }
+  .result .meta { font-size:12px; color:var(--muted); }
+  #record { margin-top:22px; display:none; }
+  #record.show { display:block; }
+  .phead { display:flex; align-items:center; gap:14px; margin-bottom:6px; }
+  .phead .av { width:46px; height:46px; border-radius:50%; background:var(--blue); color:#fff; display:grid; place-items:center; font-weight:700; font-size:18px; }
+  #patientName { font-size:22px; font-weight:700; margin:0; }
+  .sub { color:var(--muted); font-size:13px; }
+  table { width:100%; border-collapse:collapse; margin-top:14px; }
+  th { text-align:left; font-size:12px; text-transform:uppercase; letter-spacing:.5px; color:var(--muted); padding:9px 12px; border-bottom:2px solid var(--line); }
+  td { padding:13px 12px; border-bottom:1px solid var(--line); }
+  .visit-row:hover { background:#fafcff; }
+  .pill { display:inline-block; padding:3px 10px; border-radius:99px; background:#eef4ff; color:var(--blue); font-size:13px; font-weight:600; }
+  .empty { color:var(--muted); padding:30px; text-align:center; }
+</style>
+</head>
+<body>
+<header>
+  <div class="logo">C</div>
+  <h1>ChartFlow EHR</h1>
+  <span class="tag">Outpatient Therapy · Records</span>
+</header>
+<main>
+  <div class="panel">
+    <div class="search-wrap">
+      <label class="lbl" for="patientSearch">Find a patient</label>
+      <input id="patientSearch" type="text" placeholder="Start typing a patient name…" autocomplete="off" />
+      <div id="results"></div>
+    </div>
+
+    <div id="record">
+      <div class="phead">
+        <div class="av" id="pAvatar">EJ</div>
+        <div>
+          <h2 id="patientName">—</h2>
+          <div class="sub" id="patientSub"></div>
+        </div>
+      </div>
+      <table>
+        <thead><tr><th>Visit date</th><th>Diagnosing clinician</th><th>Discipline</th></tr></thead>
+        <tbody id="visits"></tbody>
+      </table>
+    </div>
+  </div>
+</main>
+
+<script>
+  // Fake patient records. Diagnosing clinicians match the demo roster so the
+  // app maps each to a main doctor + the right billing codes.
+  const PATIENTS = {
+    'emma johnson': { dob: 'DOB 03/14/2017 · MRN 40192', visits: [
+      { date: '2026-06-15', doctor: 'Jess',       disc: 'OT' },
+      { date: '2026-06-16', doctor: 'Gianna',     disc: 'PT' },
+      { date: '2026-06-17', doctor: 'Sam Comrie', disc: 'Speech' },
+    ]},
+    'liam carter':  { dob: 'DOB 11/02/2018 · MRN 40231', visits: [
+      { date: '2026-06-15', doctor: 'Eleni',  disc: 'OT' },
+      { date: '2026-06-18', doctor: 'Sally',  disc: 'Speech' },
+    ]},
+    'olivia banks': { dob: 'DOB 07/21/2016 · MRN 40288', visits: [
+      { date: '2026-06-16', doctor: 'Shanina', disc: 'OT' },
+    ]},
+  };
+
+  const search = document.getElementById('patientSearch');
+  const results = document.getElementById('results');
+  const record = document.getElementById('record');
+  const initials = (n) => n.split(/\s+/).map((p) => p[0]).join('').slice(0,2).toUpperCase();
+
+  function renderResults() {
+    const q = search.value.trim().toLowerCase();
+    results.innerHTML = '';
+    if (!q) { results.classList.remove('show'); return; }
+    const matches = Object.keys(PATIENTS).filter((k) => k.includes(q));
+    if (!matches.length) { results.classList.remove('show'); return; }
+    for (const key of matches) {
+      const name = key.replace(/\b\w/g, (c) => c.toUpperCase());
+      const el = document.createElement('div');
+      el.className = 'result';
+      el.dataset.key = key;
+      el.innerHTML = '<span class="av">' + initials(name) + '</span><span><b>' + name + '</b><div class="meta">' + PATIENTS[key].dob + '</div></span>';
+      el.addEventListener('click', () => openPatient(key));
+      results.appendChild(el);
+    }
+    results.classList.add('show');
+  }
+
+  function openPatient(key) {
+    const p = PATIENTS[key];
+    const name = key.replace(/\b\w/g, (c) => c.toUpperCase());
+    results.classList.remove('show');
+    document.getElementById('patientName').textContent = name;
+    document.getElementById('patientSub').textContent = p.dob;
+    document.getElementById('pAvatar').textContent = initials(name);
+    const body = document.getElementById('visits');
+    body.innerHTML = '';
+    for (const v of p.visits) {
+      const tr = document.createElement('tr');
+      tr.className = 'visit-row';
+      tr.innerHTML = '<td class="visit-date">' + v.date + '</td><td class="visit-doctor">' + v.doctor + '</td><td><span class="pill">' + v.disc + '</span></td>';
+      body.appendChild(tr);
+    }
+    record.classList.add('show');
+  }
+
+  search.addEventListener('input', renderResults);
+</script>
+</body>
+</html>

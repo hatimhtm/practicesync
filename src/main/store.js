@@ -16,7 +16,7 @@ const DEFAULTS = {
   mainDoctors: [],          // the 3 main doctors (display names)
   providers: [],            // roster: [{ name, mainDoctor, codes:[] }]
   rosterText: '',           // raw text the user typed (kept so they can re-edit)
-  aiProvider: 'apple',      // 'none' | 'apple' | 'claude' | 'gemini' | 'openai'
+  aiProvider: 'auto',       // 'auto' (smartest available) | 'apple' | 'ollama' | 'none'
   setupVersion: 0,          // bumped to force re-setup after an update
   // Live connection (the only mode — validated on the client's Mac):
   pfUrl: '',                // Practice Fusion dashboard URL
@@ -25,7 +25,7 @@ const DEFAULTS = {
   spSelectors: null,        // taught: { newApptButton, mainDoctorField, dateField, codeField, saveButton }
   spMode: 'standard',       // 'standard' (screen automation) | 'enterprise' (API)
   chromeProfileDir: 'Default',
-  chromeUserDataDir: '',    // blank → liveEngine uses the default Chrome profile dir
+  chromeUserDataDir: '',    // blank → liveEngine uses its own dedicated automation profile (runs alongside the user's Chrome; no force-quit)
   patientNames: [],         // patients to sync, looked up by NAME (no URLs needed)
   bookedKeys: [],           // visit keys already booked, so live runs never double-book
   schedule: 'off',          // 'off' | '6h' | 'daily'

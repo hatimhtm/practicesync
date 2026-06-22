@@ -17,7 +17,6 @@ const { extractVisits, planFormValues } = require('./extract');
  */
 
 const fs = require('fs');
-const { execSync } = require('child_process');
 
 const CHROME_APP = '/Applications/Google Chrome.app';
 const CHROME_BIN = '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome';
@@ -30,29 +29,27 @@ function getPlaywright() {
   }
 }
 
-/** Default macOS Chrome user-data dir (reuses the user's real, logged-in profile). */
+/** Default macOS Chrome user-data dir (the user's real, logged-in profile). */
 function defaultChromeUserDataDir() {
   return path.join(os.homedir(), 'Library', 'Application Support', 'Google', 'Chrome');
 }
 
-const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
-
-/** Is Google Chrome ACTUALLY running right now? (pgrep — not just a lock file,
- *  which can be stale after a crash and cause false "Chrome is open" errors.) */
-function chromeIsRunning() {
-  try { execSync('pgrep -x "Google Chrome"', { stdio: 'ignore' }); return true; } // exit 0 = a process matched
-  catch (e) {
-    // pgrep exits 1 ONLY when nothing matched → truly not running. Any other
-    // failure (pgrep missing, permission) must NOT be read as "not running",
-    // or we'd delete a live Chrome's lock files and corrupt its session.
-    if (e && e.status === 1) return false;
-    return true;
-  }
+/**
+ * A DEDICATED Chrome profile that PracticeSync drives. This is the key to the
+ * "don't close my tabs" requirement: because it's a separate user-data-dir,
+ * our automation Chrome runs ALONGSIDE the user's normal Chrome — they never
+ * have to quit anything. The user signs into the target sites once in this
+ * window and the persistent profile keeps them logged in for future runs.
+ */
+function automationUserDataDir() {
+  return path.join(os.homedir(), 'Library', 'Application Support', 'PracticeSync', 'chrome-automation');
 }
 
-/** Remove stale single-instance lock files left by a crashed Chrome. Safe to do
- *  only when Chrome is NOT running — these locks are the #1 cause of the new
- *  Playwright Chrome handing off to a dead session and getting stuck on about:blank. */
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+/** Remove single-instance lock files in OUR dedicated automation profile (left
+ *  behind only if a previous PracticeSync run crashed). Safe because nothing but
+ *  PracticeSync ever uses this profile. */
 function clearStaleLocks(userDataDir) {
   for (const f of ['SingletonLock', 'SingletonCookie', 'SingletonSocket']) {
     try { fs.unlinkSync(path.join(userDataDir, f)); } catch {}
@@ -69,24 +66,20 @@ async function withBrowser(opts, fn) {
   if (!fs.existsSync(CHROME_APP)) {
     return fail('Google Chrome isn’t installed. Please install Google Chrome, sign into Practice Fusion & SimplePractice in it, then try again.');
   }
-  const userDataDir = opts.userDataDir || defaultChromeUserDataDir();
-  // If Chrome is genuinely running, a new launch just hands its URL to the open
-  // window and exits → Playwright attaches to nothing → about:blank. So require
-  // Chrome to be quit. Give a just-quit Chrome a few seconds to actually exit
-  // (Cmd-Q isn't instant), then — only once it's really gone — clear any stale
-  // lock files left by a previous crash.
-  let running = chromeIsRunning();
-  for (let i = 0; running && i < 8; i++) { await sleep(400); running = chromeIsRunning(); }
-  if (running) {
-    return fail('Google Chrome is open — please QUIT Chrome completely (Cmd-Q), then click again. PracticeSync borrows your signed-in Chrome, so it can’t run while Chrome is open.');
-  }
+  // Drive our OWN dedicated profile (not the user's everyday Chrome), so the
+  // user never has to quit their browser — the two run side by side. Clearing
+  // stale locks here is always safe: this directory belongs to PracticeSync, so
+  // there's no live user session to corrupt (it only matters if a previous
+  // automation run crashed and left a lock behind).
+  const userDataDir = opts.userDataDir || automationUserDataDir();
+  try { fs.mkdirSync(userDataDir, { recursive: true }); } catch {}
   clearStaleLocks(userDataDir);
 
   // The update/background-networking flags keep Chrome from launching its own
   // updater (Keystone) — that updater modifies /Applications/Google Chrome.app,
   // which is what makes macOS pop the "App Management" permission prompt.
   const launchOpts = {
-    headless: false,
+    headless: !!opts.headless, // visible by default ("watch it work"); headless for tests / future background mode
     viewport: null,
     args: [
       `--profile-directory=${opts.profileDir || 'Default'}`,
@@ -101,20 +94,22 @@ async function withBrowser(opts, fn) {
       '--restore-last-session=false',
     ],
   };
+  const launch = () => pw.chromium.launchPersistentContext(userDataDir, { channel: 'chrome', ...launchOpts })
+    .catch(() => pw.chromium.launchPersistentContext(userDataDir, { executablePath: CHROME_BIN, ...launchOpts }));
   let context;
   try {
-    // Prefer the installed Chrome channel; fall back to its explicit binary path.
-    try {
-      context = await pw.chromium.launchPersistentContext(userDataDir, { channel: 'chrome', ...launchOpts });
-    } catch (e1) {
-      context = await pw.chromium.launchPersistentContext(userDataDir, { executablePath: CHROME_BIN, ...launchOpts });
-    }
+    context = await launch();
   } catch (e) {
     const s = String((e && e.message) || e);
+    // The only thing that can lock OUR profile is a previous PracticeSync window
+    // that's still open (or crashed). Clear the lock and retry once.
     if (/ProcessSingleton|cannot create|in use|locked|SingletonLock/i.test(s)) {
-      return fail('Google Chrome is open — please QUIT Chrome completely (Cmd-Q), then click again.', s);
+      clearStaleLocks(userDataDir);
+      try { context = await launch(); }
+      catch (e2) { return fail('A PracticeSync browser window is already open — close it and click again.', String((e2 && e2.message) || e2)); }
+    } else {
+      return fail('Could not open Chrome. Make sure Google Chrome is installed, then try again.', s);
     }
-    return fail('Could not open Chrome. Make sure Google Chrome is installed and fully quit, then try again.', s);
   }
   try {
     return await fn(context);
@@ -328,12 +323,12 @@ async function searchPatient(page, selectors, name, baseUrl, onStep) {
  * patient by name (no URL needed) and reads their visits. Otherwise it just
  * reads whatever patient page is already open at `url` (the old behavior).
  */
-async function pullVisits({ userDataDir, profileDir, url, selectors, limit = 10, patientNames = [], onStep }) {
+async function pullVisits({ userDataDir, profileDir, url, selectors, limit = 10, patientNames = [], onStep, headless = false }) {
   if (!url || !selectors || !selectors.rowSelector) {
     return { ok: false, error: 'Practice Fusion isn\'t set up yet — use Teach Mode to show the app the patient page first.' };
   }
   const names = (patientNames || []).map((n) => String(n || '').trim()).filter(Boolean);
-  return withBrowser({ userDataDir, profileDir }, async (context) => {
+  return withBrowser({ userDataDir, profileDir, headless }, async (context) => {
     const page = await openPage(context, url);
     await announce(page, onStep, 'Opening Practice Fusion…');
     const { JSDOM } = require('jsdom');
@@ -371,12 +366,12 @@ async function pullVisits({ userDataDir, profileDir, url, selectors, limit = 10,
  * Create one appointment in SimplePractice via the taught form fields, then save.
  * (Used only when spMode === 'standard'; the 'enterprise' path uses the API.)
  */
-async function createAppointmentLive({ userDataDir, profileDir, url, selectors, appointment, onStep }) {
+async function createAppointmentLive({ userDataDir, profileDir, url, selectors, appointment, onStep, headless = false }) {
   if (!url || !selectors || !selectors.saveButton) {
     return { ok: false, error: 'SimplePractice isn\'t set up yet — use Teach Mode to show the app the appointment form.' };
   }
   const who = appointment.patientName || 'the patient';
-  return withBrowser({ userDataDir, profileDir }, async (context) => {
+  return withBrowser({ userDataDir, profileDir, headless }, async (context) => {
     const page = await openPage(context, url);
     await announce(page, onStep, `Booking ${who} on ${appointment.date}…`);
     if (selectors.newApptButton) {
@@ -388,38 +383,70 @@ async function createAppointmentLive({ userDataDir, profileDir, url, selectors, 
     }
     // Plain-English label for each field as the cursor lands on it.
     const labelFor = { patient: `Entering patient: ${who}`, doctor: `Selecting clinician: ${appointment.mainDoctor || ''}`, date: `Setting the date: ${appointment.date}`, codes: 'Adding the code', units: 'Setting the units', modifier: 'Adding the modifier' };
-    // Every required field must actually fill — and we VERIFY each one took its
-    // value (read it back) so we never save on a field that silently rejected
-    // input. Abort before Save if anything required is missing.
-    const required = ['doctor', 'date', 'codes', 'patient'];
-    const filled = new Set();
-    let extraCodeLines = 0;
-    for (const f of planFormValues(selectors, appointment)) {
-      const line = f.line || 0;
-      // There is ONE taught code/units/modifier field, so only the first service
-      // line can be entered. Never silently overwrite it with later codes —
-      // count the extras and surface a warning instead of mis-booking.
-      if (line > 0) { if (f.kind === 'codes') extraCodeLines += 1; continue; }
+
+    // Fill one field and VERIFY it took its value (read it back), so we never
+    // save on a field that silently rejected input. Returns true if it landed.
+    const fillField = async (f) => {
       try {
         const el = await page.$(f.selector);
-        if (!el) continue;
+        if (!el) return false;
         await announce(page, onStep, labelFor[f.kind] || 'Filling a field');
         await stage(page, 'moveTo', f.selector);
         const tag = await el.evaluate((n) => n.tagName.toLowerCase());
         if (tag === 'select') {
           await page.selectOption(f.selector, { label: f.value }).catch(() => page.selectOption(f.selector, f.value));
-          filled.add(f.kind); // a <select> doesn't expose a typed value to read back
-        } else {
-          await el.fill('');
-          await el.type(String(f.value), { delay: 55 }); // visibly typed
-          const got = String((await el.inputValue().catch(() => '')) || '').trim();
-          const want = String(f.value).trim();
-          if (got === want || (want && got.includes(want))) filled.add(f.kind); // verified it landed
+          await stage(page, 'press');
+          return true; // a <select> doesn't expose a typed value to read back
         }
+        await el.fill('');
+        await el.type(String(f.value), { delay: 55 }); // visibly typed
         await stage(page, 'press');
-      } catch { /* field failed — handled by the required-check below */ }
+        const got = String((await el.inputValue().catch(() => '')) || '').trim();
+        const want = String(f.value).trim();
+        return got === want || (want && got.includes(want));
+      } catch { return false; }
+    };
+
+    const values = planFormValues(selectors, appointment);
+    const filled = new Set();
+    // Patient / clinician / date are entered once.
+    for (const f of values.filter((v) => typeof v.line !== 'number')) {
+      if (await fillField(f)) filled.add(f.kind);
     }
-    const missing = required.filter((k) => !filled.has(k));
+
+    // Every code is a SERVICE LINE. Line 0 uses the taught fields directly; each
+    // additional line is created by clicking the taught "Add service" button
+    // first, then re-filling those fields for the new row. If no add button was
+    // taught, we enter the first line and flag the rest for manual entry rather
+    // than mis-booking.
+    const serviceVals = values.filter((v) => typeof v.line === 'number');
+    const lineNos = [...new Set(serviceVals.map((v) => v.line))].sort((a, b) => a - b);
+    let bookedLines = 0;
+    let manualLines = 0;
+    for (const li of lineNos) {
+      if (li > 0) {
+        if (!selectors.addServiceBtn) { manualLines += 1; continue; }
+        try {
+          await announce(page, onStep, `Adding service line ${li + 1}…`);
+          await stage(page, 'moveTo', selectors.addServiceBtn);
+          await page.click(selectors.addServiceBtn, { timeout: 8000 });
+          await stage(page, 'press');
+          await page.waitForTimeout(500);
+        } catch { manualLines += 1; continue; }
+      }
+      const lineFields = serviceVals.filter((v) => v.line === li);
+      const codeField = lineFields.find((v) => v.kind === 'codes');
+      let codeOk = !codeField; // if no code on this line, nothing to verify
+      for (const f of lineFields) {
+        const ok = await fillField(f);
+        if (f.kind === 'codes') codeOk = ok;
+      }
+      if (codeOk) bookedLines += 1; else manualLines += 1;
+    }
+    if (bookedLines > 0) filled.add('codes');
+
+    // Require the essentials before saving.
+    const missing = ['doctor', 'date', 'codes', 'patient'].filter((k) => !filled.has(k));
     if (missing.length) {
       await stage(page, 'done', `Stopped — couldn't fill ${missing.join(', ')}`);
       return { ok: false, error: `Didn't save — couldn't fill: ${missing.join(', ')}. Re-teach the SimplePractice screen.` };
@@ -430,8 +457,8 @@ async function createAppointmentLive({ userDataDir, profileDir, url, selectors, 
     await stage(page, 'press');
     await page.waitForTimeout(900);
     const result = { ok: true };
-    if (extraCodeLines > 0) result.warning = `Entered the first code only — ${extraCodeLines} more code line(s) must be added by hand in SimplePractice.`;
-    await stage(page, 'done', extraCodeLines ? `Booked ${who} — extra codes need manual entry` : `Booked ${who} ✓`);
+    if (manualLines > 0) result.warning = `Entered ${bookedLines} service line(s); ${manualLines} more couldn't be added automatically — add them by hand in SimplePractice (teach the “Add service” button to automate this).`;
+    await stage(page, 'done', manualLines ? `Booked ${who} — ${manualLines} line(s) need manual entry` : `Booked ${who} ✓`);
     return result;
   });
 }
@@ -441,8 +468,8 @@ async function createAppointmentLive({ userDataDir, profileDir, url, selectors, 
  * Each step waits for one click and captures a stable selector for it.
  * `steps` = [{ key, label, relativeTo? }]; returns { ok, selectors }.
  */
-async function teach({ userDataDir, profileDir, url, steps }) {
-  return withBrowser({ userDataDir, profileDir }, async (context) => {
+async function teach({ userDataDir, profileDir, url, steps, headless = false }) {
+  return withBrowser({ userDataDir, profileDir, headless }, async (context) => {
     const page = await openPage(context, url);
     // If the link didn't open on its own, prompt the user to type it and wait —
     // never start highlighting fields on a blank page.
@@ -453,7 +480,7 @@ async function teach({ userDataDir, profileDir, url, steps }) {
       // Fields inside a repeating row are captured RELATIVE to that row so they
       // generalize across every row.
       const ancestor = step.relativeTo ? selectors[step.relativeTo] : null;
-      const sel = await captureClick(page, step.label, ancestor, { index: i + 1, total: steps.length }, !!step.allowDefault);
+      const sel = await captureClick(page, step.label, ancestor, { index: i + 1, total: steps.length }, !!step.allowDefault, !!step.optional);
       if (sel) selectors[step.key] = sel;
     }
     return { ok: true, selectors };
@@ -475,7 +502,7 @@ function pickerSource() {
       const root = document.documentElement;
 
       const banner = document.createElement('div'); banner.id = '__ps_teach_banner';
-      banner.innerHTML = '<span style="font-size:20px;vertical-align:-2px">👉</span>  ' + cfg.stepText + 'Click: <b>' + cfg.label + '</b>';
+      banner.innerHTML = '<span style="font-size:20px;vertical-align:-2px">👉</span>  ' + cfg.stepText + 'Click: <b>' + cfg.label + '</b>' + (cfg.optional ? '<span style="opacity:.85;font-weight:500"> — or press <b>Esc</b> to skip</span>' : '');
       Object.assign(banner.style, { position: 'fixed', top: '0', left: '0', right: '0', zIndex: '2147483647', background: '#d6231f', color: '#fff', font: '700 16px/1.45 -apple-system, system-ui, sans-serif', padding: '14px 18px', textAlign: 'center', boxShadow: '0 3px 14px rgba(0,0,0,.45)', pointerEvents: 'none' });
       root.appendChild(banner);
 
@@ -513,19 +540,33 @@ function pickerSource() {
         }
         return parts.join(' > ');
       }
+      function cleanup() {
+        document.removeEventListener('click', onClick, true);
+        document.removeEventListener('mousemove', onMove, true);
+        document.removeEventListener('keydown', onKey, true);
+        [banner, box, tag].forEach((x) => { try { x.remove(); } catch {} });
+      }
       function onClick(e) {
         if (window.__psBinding !== cfg.binding) return; // a newer step owns the page now
         if (ours(e.target)) return;
         if (!cfg.allowDefault) { e.preventDefault(); e.stopPropagation(); }
         const stop = cfg.ancestorSelector ? e.target.closest(cfg.ancestorSelector) : null;
         const result = sel(e.target, stop, stop);
-        document.removeEventListener('click', onClick, true);
-        document.removeEventListener('mousemove', onMove, true);
-        [banner, box, tag].forEach((x) => { try { x.remove(); } catch {} });
+        cleanup();
         try { if (window[cfg.binding]) window[cfg.binding](result); } catch {}
+      }
+      // Optional steps: Esc skips them (returns no selector), so a form without
+      // e.g. an "Add service" button doesn't trap the user.
+      function onKey(e) {
+        if (e.key === 'Escape' && cfg.optional) {
+          e.preventDefault();
+          cleanup();
+          try { if (window[cfg.binding]) window[cfg.binding](''); } catch {}
+        }
       }
       document.addEventListener('mousemove', onMove, true);
       document.addEventListener('click', onClick, true);
+      document.addEventListener('keydown', onKey, true);
     } catch {}
   };
 }
@@ -536,14 +577,14 @@ function pickerSource() {
  * `allowDefault` lets the click do its normal thing (e.g. open a patient / the
  * New-Appointment form) instead of being swallowed.
  */
-async function captureClick(page, label, ancestorSelector = null, stepInfo = null, allowDefault = false) {
+async function captureClick(page, label, ancestorSelector = null, stepInfo = null, allowDefault = false, optional = false) {
   const stepText = stepInfo ? `Step ${stepInfo.index} of ${stepInfo.total} — ` : '';
   const binding = '__psPick_' + (stepInfo ? stepInfo.index : 0) + '_' + Math.floor(Math.random() * 1e6);
   let resolveSel; let settled = false;
   const done = new Promise((r) => { resolveSel = r; });
   try { await page.exposeFunction(binding, (s) => { if (!settled) { settled = true; resolveSel(s || null); } }); } catch {}
 
-  const cfg = { label, ancestorSelector, stepText, binding, allowDefault };
+  const cfg = { label, ancestorSelector, stepText, binding, allowDefault, optional };
   const inject = `(${pickerSource().toString()})(${JSON.stringify(cfg)})`;
   const reinject = () => { page.evaluate(inject).catch(() => {}); };
   reinject();

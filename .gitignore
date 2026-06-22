@@ -1,6 +1,7 @@
 node_modules/
 dist/
 build/icon.iconset/
+build/bin/
 *.log
 .DS_Store
 # never commit local app state / secrets

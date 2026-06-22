@@ -90,6 +90,7 @@ html, body {
 .pill-safe { background: rgba(52, 211, 153, 0.12); color: var(--good); }
 .pill-pending { background: rgba(251, 191, 36, 0.14); color: var(--warn); }
 .pill-good { background: rgba(52, 211, 153, 0.14); color: var(--good); }
+.pill-todo { background: rgba(61, 123, 255, 0.14); color: var(--accent-2); }
 
 /* Content */
 .content { overflow-y: auto; padding: 22px 30px 40px; }
@@ -118,6 +119,7 @@ html, body {
 
 /* Cards / grid */
 .grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 14px; margin-bottom: 20px; }
+.grid-2 { grid-template-columns: 1fr 1fr; }
 .card {
   background: var(--panel); border: 1px solid var(--line);
   border-radius: var(--radius); padding: 16px 18px;
@@ -164,6 +166,7 @@ input[type="text"], input[type="password"], input[type="number"], select {
   font-family: inherit;
 }
 input:focus, select:focus { border-color: var(--accent); box-shadow: 0 0 0 3px rgba(61,123,255,0.18); }
+input::placeholder, textarea::placeholder { color: #7d8aa8; }
 .row { display: flex; gap: 8px; align-items: center; }
 .row input[type="text"] { flex: 1; }
 
@@ -253,15 +256,30 @@ input:focus, select:focus { border-color: var(--accent); box-shadow: 0 0 0 3px r
   border: 1px solid var(--line); border-radius: 20px;
   box-shadow: 0 30px 80px rgba(0,0,0,0.55);
   padding: 30px 34px 22px; animation: pop 0.22s ease;
+  min-height: 440px; display: flex; flex-direction: column;
 }
+.onboard-card .ob-step { flex: 1; }
 @keyframes pop { from { opacity: 0; transform: scale(0.97) translateY(8px); } to { opacity: 1; transform: none; } }
+.engine-status { margin: 6px 0 14px; display: flex; flex-direction: column; gap: 8px; }
+.engine-row { display: flex; align-items: center; gap: 8px; font-size: 13px; }
+.engine-row .seg-dot { width: 9px; height: 9px; flex: 0 0 auto; border-radius: 50%; background: var(--line); }
+.engine-row .seg-dot.on { background: var(--good, #34d399); }
 .onboard-progress { display: flex; gap: 6px; margin-bottom: 24px; }
 .onboard-progress .seg-dot { height: 4px; flex: 1; border-radius: 99px; background: var(--line); transition: background 0.2s; }
 .onboard-progress .seg-dot.on { background: var(--accent); }
-.ob-hero { font-size: 44px; margin-bottom: 8px; }
+.ob-hero {
+  width: 64px; height: 64px; border-radius: 18px; display: grid; place-items: center;
+  font-size: 34px; margin-bottom: 16px;
+  background: linear-gradient(135deg, rgba(61,123,255,0.18), rgba(138,92,255,0.18));
+  border: 1px solid rgba(122,160,255,0.35);
+  box-shadow: 0 8px 22px rgba(61,123,255,0.18);
+}
 .ob-step h2 { font-size: 22px; margin: 0 0 8px; letter-spacing: -0.3px; }
 .ob-step > p { color: var(--muted); font-size: 14px; line-height: 1.55; margin: 0 0 18px; }
 .ob-points { display: flex; flex-direction: column; gap: 12px; margin-top: 6px; }
+.ob-list { margin: 0 0 16px; padding-left: 22px; display: flex; flex-direction: column; gap: 8px; }
+.ob-list li { font-size: 13.5px; line-height: 1.5; color: var(--text); padding-left: 4px; }
+.ob-list li::marker { color: var(--accent-2); font-weight: 700; }
 .ob-point { display: flex; gap: 12px; align-items: flex-start; font-size: 13.5px; line-height: 1.5; color: var(--text); }
 .ob-point span { font-size: 18px; line-height: 1.2; }
 .ob-note { font-size: 12px; color: var(--muted); background: rgba(251,191,36,0.08); border: 1px solid rgba(251,191,36,0.2); border-radius: 10px; padding: 10px 12px; margin-top: 6px; }
@@ -287,9 +305,9 @@ textarea:focus { border-color: var(--accent); box-shadow: 0 0 0 3px rgba(61,123,
 .main-row { margin-bottom: 8px; }
 .main-code { text-transform: uppercase; font-family: ui-monospace, "SF Mono", Menlo, monospace; text-align: center; }
 
-/* Three-column doctor grid: small doctor | big doctor | codes | (remove) */
+/* Three-column doctor grid: doctor | main doctor | codes | (remove) */
 .roster-head, .roster-row {
-  display: grid; grid-template-columns: 1.5fr 1.3fr 1.4fr 38px; gap: 8px; align-items: center;
+  display: grid; grid-template-columns: 1.1fr 1.2fr 1.9fr 38px; gap: 8px; align-items: center;
 }
 .roster-head { margin-bottom: 8px; }
 .roster-head > div { font-size: 11px; text-transform: uppercase; letter-spacing: 0.5px; color: var(--muted); font-weight: 600; }
@@ -353,15 +371,40 @@ input[type="number"]::-webkit-outer-spin-button { -webkit-appearance: none; marg
 @media (prefers-color-scheme: light) {
   :root {
     --bg: #f4f6fb; --bg-2: #ffffff; --panel: #ffffff; --panel-2: #eef2fa;
-    --line: #d8e0ee; --text: #16213a; --muted: #5c6b87;
-    --accent: #2d6cdf; --accent-2: #2d6cdf;
-    --shadow: 0 10px 28px rgba(40, 60, 100, 0.12);
+    --line: #d3dcec; --text: #16213a; --muted: #4b5870;
+    --accent: #2d6cdf; --accent-2: #2257c4;
+    --good: #15803d; --warn: #b45309; --bad: #dc2626;
+    --shadow: 0 8px 24px rgba(40, 60, 100, 0.10);
   }
   html, body { background: radial-gradient(1200px 700px at 80% -10%, #e7eefc 0%, var(--bg) 55%); }
-  .titlebar .brand { color: var(--muted); }
+  .titlebar .brand { color: #46506a; opacity: 1; }
   .logo-mark { color: #fff; }
   .nav-item:hover { background: rgba(20, 40, 90, 0.05); }
   ::-webkit-scrollbar-thumb { background: #c5d0e4; }
+
+  /* Cards need a visible edge on a white page so they don't disappear. */
+  .card, .status-card, .result, .seg, .engine-status { box-shadow: 0 1px 2px rgba(30,50,90,0.06); }
+  .card, .result { border-color: #e1e8f4; }
+
+  /* Eyebrow / uppercase labels: darken so they meet contrast on white. */
+  .card-k, .stat-lbl, .appt-table th,
+  .main-head > div, .roster-head > div { color: #46526b; }
+
+  /* Inputs must read as active (not disabled) — solid text + clearer border. */
+  input[type="text"], input[type="password"], input[type="number"], select, textarea {
+    background: #fbfcff; border-color: #c4cfe2; color: #16213a;
+  }
+  input::placeholder, textarea::placeholder { color: #97a3bb; }
+
+  /* Status pills: darker text on their tinted fills. */
+  .pill-safe { background: rgba(21,128,61,0.10); color: #15803d; }
+  .pill-good { background: rgba(21,128,61,0.12); color: #15803d; }
+  .pill-pending { background: rgba(180,83,9,0.12); color: #b45309; }
+
+  /* Amber/info callouts: readable warm text instead of pale gray. */
+  .ob-note { background: rgba(180,83,9,0.08); border-color: rgba(180,83,9,0.28); color: #7c4a12; }
+  .ob-selected { color: #15803d; background: rgba(21,128,61,0.10); }
+  .map-note { color: #7c4a12; }
 }
 
 ::-webkit-scrollbar { width: 10px; }

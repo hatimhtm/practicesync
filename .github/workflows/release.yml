@@ -26,6 +26,9 @@ jobs:
       - name: Rebuild the icon
         run: npm run icon
 
+      - name: Build the Apple Intelligence helper (on-device, macOS 26+)
+        run: npm run apple-helper
+
       - name: Build & publish to GitHub Releases
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}

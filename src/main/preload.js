@@ -6,6 +6,7 @@ contextBridge.exposeInMainWorld('api', {
   getSettings: () => ipcRenderer.invoke('settings:get'),
   saveSettings: (patch) => ipcRenderer.invoke('settings:save', patch),
   setAI: (cfg) => ipcRenderer.invoke('ai:set', cfg),
+  detectEngines: () => ipcRenderer.invoke('ai:detect'),
   parseRoster: (text) => ipcRenderer.invoke('roster:parse', { text }),
   saveRoster: (data) => ipcRenderer.invoke('roster:save', data),
   loadDemo: () => ipcRenderer.invoke('demo:load'),
