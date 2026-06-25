@@ -12,6 +12,8 @@ contextBridge.exposeInMainWorld('api', {
   loadDemo: () => ipcRenderer.invoke('demo:load'),
   runSync: (opts) => ipcRenderer.invoke('run:sync', opts),
   runNow: () => ipcRenderer.invoke('run:now'),
+  runSiteDemo: (opts) => ipcRenderer.invoke('demo:run-site', opts),
+  onDemoStep: (cb) => ipcRenderer.on('demo-step', (_e, s) => cb(s)),
   teach: (target, url) => ipcRenderer.invoke('teach:run', { target, url }),
   onRunStatus: (cb) => ipcRenderer.on('run-status', (_e, s) => cb(s)),
   onRunFinished: (cb) => ipcRenderer.on('run-finished', (_e, r) => cb(r)),

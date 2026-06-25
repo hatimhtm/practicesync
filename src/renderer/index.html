@@ -24,6 +24,7 @@
         <button class="nav-item" data-view="connect"><span class="dot"></span> Connection</button>
         <button class="nav-item" data-view="ai"><span class="dot"></span> AI Engine</button>
         <button class="nav-item" data-view="schedule"><span class="dot"></span> Schedule</button>
+        <button class="nav-item" data-view="test"><span class="dot"></span> Test drive</button>
       </nav>
       <div class="sidebar-foot">
         <div class="pill pill-safe">🔒 No patient data leaves this Mac</div>
@@ -241,6 +242,39 @@
 
         <div class="callout small">
           <strong>Safe to leave on:</strong> each run only books visits it hasn't booked before, so nothing is ever double-entered. You'll get a notification when a run finishes.
+        </div>
+      </section>
+
+      <!-- TEST DRIVE -->
+      <section class="view hidden" data-view="test">
+        <header class="view-head">
+          <h1>Test drive</h1>
+          <p class="muted">Watch PracticeSync read data from a real web page and type it into a sheet — the same automation it uses for Practice Fusion → SimplePractice. A Chrome window opens and the cursor does the work, so anyone can see it's real.</p>
+        </header>
+
+        <div class="card">
+          <div class="card-k">1 · Pick a page to read</div>
+          <p class="muted" style="font-size:13px;margin:2px 0 12px">Tap a preset to run it instantly, or paste any web page below.</p>
+          <div class="row" id="demoPresets" style="flex-wrap:wrap;gap:8px">
+            <button class="btn" data-url="https://en.wikipedia.org/wiki/List_of_largest_cities" data-a="City" data-b="Country">🏙️ Largest cities</button>
+            <button class="btn" data-url="https://en.wikipedia.org/wiki/List_of_countries_and_dependencies_by_population" data-a="Country" data-b="Population">🌍 Countries by population</button>
+            <button class="btn" data-url="https://en.wikipedia.org/wiki/List_of_tallest_buildings" data-a="Building" data-b="City">🏢 Tallest buildings</button>
+            <button class="btn" data-url="https://en.wikipedia.org/wiki/List_of_chemical_elements" data-a="Atomic #" data-b="Symbol">⚗️ Chemical elements</button>
+          </div>
+          <label class="field" style="margin-top:16px">
+            <span>…or paste any web page address</span>
+            <input type="text" id="demoUrl" placeholder="https://en.wikipedia.org/wiki/…" />
+          </label>
+          <div class="row">
+            <button class="btn btn-primary" id="demoRunBtn">▶ Run the test drive</button>
+            <span class="muted" style="font-size:12px">Reads the first table on the page (up to 6 rows), then types each row into the sheet.</span>
+          </div>
+        </div>
+
+        <div class="card live-card hidden" id="demoCard">
+          <div class="card-k">🤖 Live — watch the cursor in the Chrome window</div>
+          <p class="muted" style="font-size:12.5px;margin:0 0 10px">A Chrome window opened with a visible cursor. Here's the running log:</p>
+          <div class="live-log" id="demoLog"></div>
         </div>
       </section>
     </main>

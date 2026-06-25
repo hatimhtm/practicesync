@@ -20,7 +20,7 @@ const INDEX = 'file://' + path.join(ROOT, 'src', 'renderer', 'index.html');
 
 // Realistic settings so the views populate like a configured, mid-use app.
 const STUB_SETTINGS = {
-  appVersion: '1.0.0',
+  appVersion: '1.0.1',
   providers: [
     { name: 'Jess', mainDoctor: 'Heather Vines-Dubose', codes: [{ code: '97112', units: 2, modifiers: [] }, { code: '97530', units: 2, modifiers: ['59'] }] },
     { name: 'Gianna', mainDoctor: 'Caryn McAllister', codes: [{ code: '97112', units: 2, modifiers: [] }, { code: '97530', units: 2, modifiers: ['59'] }] },
@@ -56,13 +56,15 @@ const API_STUB = `
     loadDemo: async () => ({}),
     runSync: async () => ({ ok: true }),
     runNow: async () => ({ ok: true }),
+    runSiteDemo: async () => ({ ok: true }),
+    onDemoStep: () => {},
     teach: async () => ({ ok: true }),
     onRunStatus: () => {}, onRunFinished: () => {}, onLiveStep: () => {},
     checkForUpdates: async () => {}, installUpdate: async () => {}, onUpdateStatus: () => {},
   };
 `;
 
-const VIEWS = ['home', 'doctors', 'connect', 'ai', 'schedule'];
+const VIEWS = ['home', 'doctors', 'connect', 'ai', 'schedule', 'test'];
 const OB_STEPS = [0, 1, 2, 3, 4, 5];
 
 async function main() {

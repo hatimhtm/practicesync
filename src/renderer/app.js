@@ -384,6 +384,41 @@ $$('#scheduleSeg button').forEach((b) => b.addEventListener('click', async () =>
   toast('Schedule updated.');
 }));
 
+/* ------------------------------ test drive ------------------------------ */
+let demoRunning = false;
+async function runTestDrive(sourceUrl, colA, colB) {
+  if (demoRunning) return;
+  const url = String(sourceUrl || '').trim();
+  if (!url) { toast('Paste a web page address or pick a preset.'); return; }
+  demoRunning = true;
+  const btn = $('#demoRunBtn');
+  if (btn) { btn.disabled = true; btn.textContent = 'Running… watch Chrome'; }
+  $$('#demoPresets button').forEach((b) => (b.disabled = true));
+  const res = await window.api.runSiteDemo({ sourceUrl: url, colA: colA || 'Item', colB: colB || 'Detail', rows: 6 });
+  if (btn) { btn.disabled = false; btn.textContent = '▶ Run the test drive'; }
+  $$('#demoPresets button').forEach((b) => (b.disabled = false));
+  demoRunning = false;
+  if (!res || !res.ok) toast(res && res.error ? res.error : 'The test drive could not run.');
+}
+$$('#demoPresets button').forEach((b) => b.addEventListener('click', () => {
+  $('#demoUrl').value = b.dataset.url;
+  runTestDrive(b.dataset.url, b.dataset.a, b.dataset.b);
+}));
+$('#demoRunBtn').addEventListener('click', () => runTestDrive($('#demoUrl').value, 'Item', 'Detail'));
+
+window.api.onDemoStep((s) => {
+  if (!s) return;
+  const log = $('#demoLog'); const card = $('#demoCard');
+  if (!log || !card) return;
+  if (s.reset) { log.innerHTML = ''; card.classList.remove('hidden'); showView('test'); }
+  const prev = log.querySelector('.live-line.cur'); if (prev) prev.classList.remove('cur');
+  const line = document.createElement('div');
+  line.className = 'live-line' + (s.done ? '' : ' cur');
+  line.innerHTML = `<span class="t">${fmtClock(s.at)}</span><span>${escapeHtml(s.text || '')}</span>`;
+  log.appendChild(line);
+  log.scrollTop = log.scrollHeight;
+});
+
 /* -------------------- onboarding (mandatory, gated) --------------------- */
 const SETUP_VERSION = 4; // bump forces everyone through setup again after an update
 // Steps by ROLE so inserting/reordering never breaks the gates.

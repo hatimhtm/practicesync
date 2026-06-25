@@ -600,4 +600,78 @@ async function captureClick(page, label, ancestorSelector = null, stepInfo = nul
   return selector || null;
 }
 
-module.exports = { pullVisits, createAppointmentLive, teach, defaultChromeUserDataDir, openPage, normalizeUrl, isBlank, waitForRealPage, ensureStage, stage, announce };
+/**
+ * "Test drive" demo: read rows from ANY real page (a table, or a bulleted list
+ * as fallback) and type each one — with the visible cursor — into the bundled
+ * DataDesk sheet at `destUrl`. Same engine and stage as the real sync, so it's a
+ * faithful "watch it work" demonstration on a site anyone can see.
+ */
+async function runSiteDemo({ userDataDir, profileDir, sourceUrl, destUrl, rows = 6, onStep, headless = false }) {
+  const url = normalizeUrl(sourceUrl);
+  if (!url) return { ok: false, error: 'Enter a page address first.' };
+  let host = 'the page';
+  try { host = new URL(url).hostname.replace(/^www\./, ''); } catch {}
+
+  return withBrowser({ userDataDir, profileDir, headless }, async (context) => {
+    const page = await openPage(context, url);
+    await ensureStage(page);
+    await announce(page, onStep, `Reading data from ${host}…`);
+    try { await page.waitForLoadState('domcontentloaded', { timeout: 30000 }); } catch {}
+    await page.waitForTimeout(800);
+
+    // Read the first table's rows (first two text cells each); fall back to the
+    // first bulleted list. Pure in-page extraction, works on most pages.
+    const data = await page.evaluate((limit) => {
+      const clean = (s) => String(s || '').replace(/\[[^\]]*\]/g, '').replace(/\s+/g, ' ').trim();
+      const out = [];
+      const table = document.querySelector('table.wikitable') || document.querySelector('table');
+      if (table) {
+        for (const tr of table.querySelectorAll('tbody tr')) {
+          const cells = [...tr.querySelectorAll('th,td')].map((c) => clean(c.textContent)).filter(Boolean);
+          if (cells.length >= 2 && /[a-z]/i.test(cells[0] + cells[1])) out.push({ a: cells[0].slice(0, 60), b: cells[1].slice(0, 60) });
+          if (out.length >= limit) break;
+        }
+      }
+      if (!out.length) {
+        for (const li of [...document.querySelectorAll('.mw-parser-output ul li, ul li')].slice(0, limit)) {
+          const t = clean(li.textContent); if (t) out.push({ a: t.slice(0, 60), b: '' });
+        }
+      }
+      return out;
+    }, rows);
+
+    if (!data.length) {
+      await stage(page, 'done', "Couldn't find a table or list to read");
+      return { ok: false, error: "Couldn't find a table or list on that page. Try a Wikipedia article with a table." };
+    }
+    await stage(page, 'done', `Read ${data.length} row(s)`);
+    if (onStep) try { onStep(`Read ${data.length} rows from ${host}`); } catch {}
+
+    // Type each row into the bundled sheet, with the visible cursor.
+    await page.goto(destUrl, { waitUntil: 'domcontentloaded' });
+    await ensureStage(page);
+    const typeInto = async (sel, val) => {
+      if (!val) return;
+      await stage(page, 'moveTo', sel);
+      await page.click(sel).catch(() => {});
+      await page.fill(sel, '').catch(() => {});
+      await page.type(sel, String(val), { delay: 45 });
+      await stage(page, 'press');
+    };
+    for (let i = 0; i < data.length; i++) {
+      await announce(page, onStep, `Copying row ${i + 1} of ${data.length}: ${data[i].a}…`);
+      await typeInto('#cellA', data[i].a);
+      await typeInto('#cellB', data[i].b);
+      await stage(page, 'moveTo', '#addRow');
+      await page.click('#addRow').catch(() => {});
+      await stage(page, 'press');
+      await page.waitForTimeout(450);
+    }
+    await stage(page, 'done', `Copied ${data.length} row(s) ✓`);
+    if (onStep) try { onStep(`Done — copied ${data.length} rows into the sheet ✓`); } catch {}
+    await page.waitForTimeout(2800); // hold the finished state so it's visible before the window closes
+    return { ok: true, read: data.length, copied: data.length };
+  });
+}
+
+module.exports = { pullVisits, createAppointmentLive, teach, runSiteDemo, defaultChromeUserDataDir, openPage, normalizeUrl, isBlank, waitForRealPage, ensureStage, stage, announce };

@@ -11,6 +11,14 @@ highlight follows your cursor), then it works by **patient name** — no URLs to
 paste — and you **watch it work**: a visible cursor glides to each field, types,
 and clicks.
 
+## Test drive (built in)
+
+The **Test drive** screen lets anyone demo the engine with no logins or setup:
+paste any web page (or tap a preset like "Largest cities"), and PracticeSync
+opens a Chrome window, reads the first table off the page, and types each row —
+with the visible cursor — into a bundled spreadsheet. It's the same automation
+that powers the real Practice Fusion → SimplePractice sync.
+
 ## Watch it work
 
 During a run, PracticeSync injects a visible cursor + status HUD into the

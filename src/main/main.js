@@ -7,7 +7,8 @@ const store = require('./store');
 const { runSync } = require('./automation');
 const { parseRoster, appleIntelligenceAvailable, detectEngines, appleHelperPath } = require('./ai');
 const { DEMO_MAIN_DOCTORS, DEMO_PROVIDERS, makeProvider, makeMainDoctor } = require('./model');
-const { teach } = require('./liveEngine');
+const { teach, runSiteDemo } = require('./liveEngine');
+const { startSheetServer } = require('./demoSheet');
 const { Scheduler } = require('./scheduler');
 const updater = require('./updater');
 
@@ -231,6 +232,30 @@ function registerIpc() {
   // it instead of retyping (it's their real roster, not patient data).
   ipcMain.handle('demo:load', () => {
     return store.save({ mainDoctors: DEMO_MAIN_DOCTORS, providers: DEMO_PROVIDERS });
+  });
+
+  // "Test drive": read rows from a real page and type them into the bundled
+  // sheet, with the visible cursor — a self-contained demo of the engine.
+  ipcMain.handle('demo:run-site', async (_e, opts) => {
+    const { sourceUrl, colA = 'Item', colB = 'Detail', rows = 6 } = opts || {};
+    const onStep = (text) => sendToRenderer('demo-step', { text, at: nowISO() });
+    let server;
+    try {
+      sendToRenderer('demo-step', { text: 'Starting the test drive…', at: nowISO(), reset: true });
+      server = await startSheetServer();
+      const destUrl = `${server.url}?a=${encodeURIComponent(colA)}&b=${encodeURIComponent(colB)}`;
+      const s = store.load();
+      const res = await runSiteDemo({
+        userDataDir: s.chromeUserDataDir, profileDir: s.chromeProfileDir,
+        sourceUrl, destUrl, rows, onStep,
+      });
+      sendToRenderer('demo-step', { text: res.ok ? 'Test drive finished.' : (res.error || 'Stopped.'), at: nowISO(), done: true });
+      return res;
+    } catch (err) {
+      return { ok: false, error: 'The test drive could not run. Make sure Google Chrome is installed.' };
+    } finally {
+      if (server) try { await server.close(); } catch {}
+    }
   });
 
   ipcMain.handle('run:sync', async (_e, opts) => performSync('manual', opts || {}));
