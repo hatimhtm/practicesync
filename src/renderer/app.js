@@ -318,7 +318,7 @@ async function teachScreen(target, urlSel) {
   await window.api.saveSettings(target === 'pf' ? { pfUrl: url } : { spUrl: url });
   toast('Opening the page — click each field as prompted…');
   const res = await window.api.teach(target, url);
-  if (res && res.ok) toast('Screen set up ✓');
+  if (res && res.ok) toast(`Screen set up ✓${res.captureCount ? ` · ${res.captureCount} screenshots saved (folder opened)` : ''}`);
   else toast(res && res.error ? res.error : 'Teach Mode could not run here.');
   refresh();
 }
@@ -501,11 +501,11 @@ async function obTeach(target, urlSel, btn) {
   if (!url) { toast('Paste the page address first.'); return; }
   $('#obError').classList.add('hidden');
   $(btn).disabled = true; $(btn).textContent = '→ Switch to Chrome & click each field…';
-  toast('Switch to Chrome. If the page isn’t open, type the address there and press Enter — then follow the red bar.');
+  toast('Switch to Chrome. Click the field the bar shows, then press “Next step”. You can re-click to fix a choice, or press Back.');
   const res = await window.api.teach(target, url);
   $(btn).disabled = false; $(btn).textContent = 'Open & show the fields';
   if (res && res.ok) {
-    toast('Got it ✓');
+    toast(`Got it ✓${res.captureCount ? ` · ${res.captureCount} screenshots saved` : ''}`);
   } else {
     // Show the exact reason, persistently, so it's never a silent no-op.
     const err = $('#obError');

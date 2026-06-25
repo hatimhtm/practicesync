@@ -464,65 +464,114 @@ async function createAppointmentLive({ userDataDir, profileDir, url, selectors, 
 }
 
 /**
- * Teach Mode: open a page and let the user click the fields the app needs.
- * Each step waits for one click and captures a stable selector for it.
- * `steps` = [{ key, label, relativeTo? }]; returns { ok, selectors }.
+ * Teach Mode: open a page and let the user point at the fields the app needs.
+ *
+ * One field at a time, the user CLICKS the element to select it (it highlights
+ * green) and then presses a "Next step" button to move on — they're never rushed
+ * by a click, and can re-click to fix a selection or press Back. Every click is
+ * screenshotted into `capturesDir` (with a visual gallery) so you can see exactly
+ * what was taught and diagnose anything that looks off.
+ *
+ * `steps` = [{ key, label, relativeTo?, allowDefault?, optional? }].
+ * Returns { ok, selectors, capturesDir, captureCount }.
  */
-async function teach({ userDataDir, profileDir, url, steps, headless = false }) {
+async function teach({ userDataDir, profileDir, url, steps, headless = false, capturesDir = null }) {
   return withBrowser({ userDataDir, profileDir, headless }, async (context) => {
     const page = await openPage(context, url);
     // If the link didn't open on its own, prompt the user to type it and wait —
     // never start highlighting fields on a blank page.
     await waitForRealPage(page);
+
+    const manifest = [];
+    if (capturesDir) { try { fs.mkdirSync(capturesDir, { recursive: true }); } catch {} }
+    // Save a screenshot (+ the element's HTML) for every click during a step.
+    const capture = async (stepIndex, clickN, selector) => {
+      if (!capturesDir) return;
+      const step = steps[stepIndex - 1] || {};
+      const name = `step${String(stepIndex).padStart(2, '0')}-${String(step.key || 'field').replace(/[^\w-]/g, '')}-click${clickN}.png`;
+      try { await page.screenshot({ path: path.join(capturesDir, name) }); } catch {}
+      let html = '';
+      try { html = await page.evaluate((s) => { try { const el = document.querySelector(s); return el ? el.outerHTML.slice(0, 300) : ''; } catch { return ''; } }, selector); } catch {}
+      manifest.push({ step: stepIndex, key: step.key, label: step.label, click: clickN, selector, screenshot: name, html, at: new Date().toISOString() });
+    };
+
     const selectors = {};
-    for (let i = 0; i < steps.length; i++) {
+    let i = 0;
+    while (i < steps.length) {
       const step = steps[i];
       // Fields inside a repeating row are captured RELATIVE to that row so they
       // generalize across every row.
       const ancestor = step.relativeTo ? selectors[step.relativeTo] : null;
-      const sel = await captureClick(page, step.label, ancestor, { index: i + 1, total: steps.length }, !!step.allowDefault, !!step.optional);
-      if (sel) selectors[step.key] = sel;
+      const payload = await captureStep(page, step, { index: i + 1, total: steps.length, hasBack: i > 0 }, ancestor, capture);
+      if (payload.action === 'back') { i = Math.max(0, i - 1); continue; }
+      if (payload.action === 'skip') { delete selectors[step.key]; i += 1; continue; }
+      if (payload.selector) selectors[step.key] = payload.selector;
+      // Steps marked allowDefault actually perform their action now (open the
+      // patient / the New-Appointment form) so the next field is on the new page.
+      if (step.allowDefault && payload.selector) {
+        try { await page.click(payload.selector, { timeout: 8000 }); } catch {}
+        try { await page.waitForLoadState('domcontentloaded', { timeout: 8000 }); } catch {}
+        await page.waitForTimeout(700);
+      }
+      i += 1;
     }
-    return { ok: true, selectors };
+
+    if (capturesDir && manifest.length) { try { writeGallery(capturesDir, manifest); } catch {} }
+    return { ok: true, selectors, capturesDir: capturesDir || null, captureCount: manifest.length };
   });
 }
 
-/* The in-page picker: a big red banner + a highlight box ("⬆ click here") that
- * follows the cursor, so the user SEES what they're about to click. It is
- * re-installed on every page load, so the user can freely navigate Chrome to the
- * right page themselves and the overlay just follows them. On click it calls a
- * Node binding with a stable selector for the element. */
+/* The in-page teach overlay: a calm status pill at the top (step counter +
+ * progress dots + the field to click), a hover outline that follows the cursor,
+ * a GREEN "selected" outline once you click an element, and a control bar with
+ * Back / Skip / Next. Clicking only SELECTS — nothing advances until "Next", so
+ * the user is never rushed and can re-click to fix a choice. Re-installed on
+ * every page load so the user can freely navigate Chrome. */
 function pickerSource() {
   return (cfg) => {
     try {
-      // Already showing for this exact step? Don't double-install.
-      if (window.__psBinding === cfg.binding && document.getElementById('__ps_teach_banner')) return;
-      window.__psBinding = cfg.binding;
-      ['__ps_teach_banner', '__ps_teach_box', '__ps_teach_tag'].forEach((id) => { const e = document.getElementById(id); if (e) e.remove(); });
+      if (window.__psTeachBinding === cfg.binding && document.getElementById('__ps_teach_ui')) return;
+      window.__psTeachBinding = cfg.binding;
+      const stale = document.getElementById('__ps_teach_ui'); if (stale) stale.remove();
       const root = document.documentElement;
+      const ui = document.createElement('div'); ui.id = '__ps_teach_ui';
 
-      const banner = document.createElement('div'); banner.id = '__ps_teach_banner';
-      banner.innerHTML = '<span style="font-size:20px;vertical-align:-2px">👉</span>  ' + cfg.stepText + 'Click: <b>' + cfg.label + '</b>' + (cfg.optional ? '<span style="opacity:.85;font-weight:500"> — or press <b>Esc</b> to skip</span>' : '');
-      Object.assign(banner.style, { position: 'fixed', top: '0', left: '0', right: '0', zIndex: '2147483647', background: '#d6231f', color: '#fff', font: '700 16px/1.45 -apple-system, system-ui, sans-serif', padding: '14px 18px', textAlign: 'center', boxShadow: '0 3px 14px rgba(0,0,0,.45)', pointerEvents: 'none' });
-      root.appendChild(banner);
+      // top status pill
+      const top = document.createElement('div');
+      Object.assign(top.style, { position: 'fixed', top: '14px', left: '50%', transform: 'translateX(-50%)', zIndex: '2147483647', background: 'rgba(17,24,40,.97)', color: '#eaf0fb', font: '600 14px/1.4 -apple-system,system-ui,sans-serif', padding: '12px 20px', borderRadius: '14px', boxShadow: '0 12px 34px rgba(0,0,0,.5)', border: '1px solid rgba(122,160,255,.45)', pointerEvents: 'none', maxWidth: '92vw', textAlign: 'center' });
+      let dots = '';
+      for (let d = 0; d < cfg.total; d++) { const col = d < cfg.index - 1 ? '#34d399' : (d === cfg.index - 1 ? '#3d7bff' : 'rgba(255,255,255,.25)'); dots += '<span style="display:inline-block;width:7px;height:7px;border-radius:50%;margin:0 2px;vertical-align:middle;background:' + col + '"></span>'; }
+      top.innerHTML = '<div style="font-size:11px;letter-spacing:.5px;color:#9fb3da;margin-bottom:6px">STEP ' + cfg.index + ' OF ' + cfg.total + '&nbsp;&nbsp;' + dots + '</div>'
+        + '<div style="font-size:15px;font-weight:700">' + cfg.label + '</div>'
+        + '<div id="__ps_teach_status" style="font-size:12px;color:#9fb3da;margin-top:6px">Move your mouse over the field and click it.</div>';
+      ui.appendChild(top);
 
-      const box = document.createElement('div'); box.id = '__ps_teach_box';
-      Object.assign(box.style, { position: 'fixed', zIndex: '2147483646', border: '3px solid #d6231f', borderRadius: '6px', background: 'rgba(214,35,31,0.12)', boxShadow: '0 0 0 2px rgba(255,255,255,.7)', pointerEvents: 'none', display: 'none' });
-      root.appendChild(box);
+      // hover + selected outlines
+      const hover = document.createElement('div');
+      Object.assign(hover.style, { position: 'fixed', zIndex: '2147483645', border: '2px dashed #3d7bff', borderRadius: '7px', background: 'rgba(61,123,255,.10)', pointerEvents: 'none', display: 'none' });
+      ui.appendChild(hover);
+      const pick = document.createElement('div');
+      Object.assign(pick.style, { position: 'fixed', zIndex: '2147483645', border: '3px solid #34d399', borderRadius: '7px', background: 'rgba(52,211,153,.16)', boxShadow: '0 0 0 2px rgba(255,255,255,.5)', pointerEvents: 'none', display: 'none' });
+      const pickTag = document.createElement('div'); pickTag.textContent = '✓ selected';
+      Object.assign(pickTag.style, { position: 'absolute', top: '-22px', left: '0', background: '#34d399', color: '#04240f', font: '700 11px -apple-system,sans-serif', padding: '2px 7px', borderRadius: '5px', whiteSpace: 'nowrap' });
+      pick.appendChild(pickTag); ui.appendChild(pick);
 
-      const tag = document.createElement('div'); tag.id = '__ps_teach_tag'; tag.textContent = '⬆ click here';
-      Object.assign(tag.style, { position: 'fixed', zIndex: '2147483647', background: '#d6231f', color: '#fff', font: '700 12px -apple-system, sans-serif', padding: '3px 8px', borderRadius: '5px', pointerEvents: 'none', display: 'none', whiteSpace: 'nowrap' });
-      root.appendChild(tag);
+      // control bar
+      const bar = document.createElement('div');
+      Object.assign(bar.style, { position: 'fixed', bottom: '22px', left: '50%', transform: 'translateX(-50%)', zIndex: '2147483647', display: 'flex', gap: '10px', alignItems: 'center', background: 'rgba(17,24,40,.97)', padding: '10px 12px', borderRadius: '14px', boxShadow: '0 12px 34px rgba(0,0,0,.5)', border: '1px solid rgba(122,160,255,.35)', pointerEvents: 'auto' });
+      const mkBtn = (txt, primary, disabled) => {
+        const b = document.createElement('button'); b.textContent = txt;
+        Object.assign(b.style, { font: '600 13px -apple-system,system-ui,sans-serif', border: '0', borderRadius: '9px', padding: '9px 16px', cursor: disabled ? 'not-allowed' : 'pointer', opacity: disabled ? '.45' : '1', color: primary ? '#fff' : '#dbe6ff', background: primary ? '#3d7bff' : 'rgba(255,255,255,.08)' });
+        b.disabled = !!disabled; return b;
+      };
+      const backBtn = mkBtn('◀ Back', false, !cfg.hasBack);
+      const skipBtn = cfg.optional ? mkBtn('Skip this', false, false) : null;
+      const nextBtn = mkBtn(cfg.index === cfg.total ? '✓ Finish' : 'Next step ▶', true, true);
+      bar.appendChild(backBtn); if (skipBtn) bar.appendChild(skipBtn); bar.appendChild(nextBtn);
+      ui.appendChild(bar);
+      root.appendChild(ui);
 
-      const ours = (el) => el === banner || el === box || el === tag;
-      function onMove(e) {
-        const el = e.target;
-        if (!el || ours(el)) { box.style.display = tag.style.display = 'none'; return; }
-        const r = el.getBoundingClientRect();
-        if (!r.width && !r.height) { box.style.display = tag.style.display = 'none'; return; }
-        box.style.display = 'block'; box.style.left = r.left + 'px'; box.style.top = r.top + 'px'; box.style.width = r.width + 'px'; box.style.height = r.height + 'px';
-        tag.style.display = 'block'; tag.style.left = r.left + 'px'; tag.style.top = Math.max(0, r.top - 24) + 'px';
-      }
+      // selector builders
       function nth(n) { const sibs = [...(n.parentElement ? n.parentElement.children : [])].filter((c) => c.tagName === n.tagName); return sibs.length > 1 ? ':nth-of-type(' + (sibs.indexOf(n) + 1) + ')' : ''; }
       function uniq(s, scope) { try { return (scope || document).querySelectorAll(s).length === 1; } catch { return false; } }
       function av(v) { return String(v).replace(/(["\\])/g, '\\$1'); }
@@ -540,51 +589,68 @@ function pickerSource() {
         }
         return parts.join(' > ');
       }
-      function cleanup() {
+
+      const ourEls = [top, hover, pick, pickTag, bar, backBtn, nextBtn]; if (skipBtn) ourEls.push(skipBtn);
+      const ours = (el) => el && (ourEls.indexOf(el) >= 0 || ui.contains(el));
+      let selectedEl = null; let selectedSel = '';
+      function drawPick() { if (!selectedEl) { pick.style.display = 'none'; return; } const r = selectedEl.getBoundingClientRect(); pick.style.display = 'block'; pick.style.left = r.left + 'px'; pick.style.top = r.top + 'px'; pick.style.width = r.width + 'px'; pick.style.height = r.height + 'px'; }
+      function setStatus(t) { const s = document.getElementById('__ps_teach_status'); if (s) s.textContent = t; }
+      function onMove(e) {
+        const el = e.target;
+        if (!el || ours(el)) { hover.style.display = 'none'; return; }
+        const r = el.getBoundingClientRect();
+        if (!r.width && !r.height) { hover.style.display = 'none'; return; }
+        hover.style.display = 'block'; hover.style.left = r.left + 'px'; hover.style.top = r.top + 'px'; hover.style.width = r.width + 'px'; hover.style.height = r.height + 'px';
+      }
+      function onClick(e) {
+        if (window.__psTeachBinding !== cfg.binding) return;
+        if (ours(e.target)) return; // our own buttons handle themselves
+        e.preventDefault(); e.stopPropagation();
+        const stop = cfg.ancestorSelector ? e.target.closest(cfg.ancestorSelector) : null;
+        selectedEl = e.target; selectedSel = sel(e.target, stop, stop);
+        drawPick(); hover.style.display = 'none';
+        nextBtn.disabled = false; nextBtn.style.opacity = '1'; nextBtn.style.cursor = 'pointer';
+        setStatus('Selected ✓  —  press Next step, or click a different element to change it.');
+        try { if (window[cfg.shotBinding]) window[cfg.shotBinding](selectedSel); } catch {}
+      }
+      function finish(action) {
         document.removeEventListener('click', onClick, true);
         document.removeEventListener('mousemove', onMove, true);
         document.removeEventListener('keydown', onKey, true);
-        [banner, box, tag].forEach((x) => { try { x.remove(); } catch {} });
+        window.removeEventListener('scroll', drawPick, true);
+        window.removeEventListener('resize', drawPick);
+        try { ui.remove(); } catch {}
+        try { if (window[cfg.binding]) window[cfg.binding](action); } catch {}
       }
-      function onClick(e) {
-        if (window.__psBinding !== cfg.binding) return; // a newer step owns the page now
-        if (ours(e.target)) return;
-        if (!cfg.allowDefault) { e.preventDefault(); e.stopPropagation(); }
-        const stop = cfg.ancestorSelector ? e.target.closest(cfg.ancestorSelector) : null;
-        const result = sel(e.target, stop, stop);
-        cleanup();
-        try { if (window[cfg.binding]) window[cfg.binding](result); } catch {}
-      }
-      // Optional steps: Esc skips them (returns no selector), so a form without
-      // e.g. an "Add service" button doesn't trap the user.
-      function onKey(e) {
-        if (e.key === 'Escape' && cfg.optional) {
-          e.preventDefault();
-          cleanup();
-          try { if (window[cfg.binding]) window[cfg.binding](''); } catch {}
-        }
-      }
+      function onKey(e) { if (e.key === 'Escape' && cfg.optional) { e.preventDefault(); finish({ action: 'skip' }); } }
+      backBtn.addEventListener('click', () => { if (cfg.hasBack) finish({ action: 'back' }); });
+      if (skipBtn) skipBtn.addEventListener('click', () => finish({ action: 'skip' }));
+      nextBtn.addEventListener('click', () => { if (!nextBtn.disabled) finish({ action: 'next', selector: selectedSel }); });
       document.addEventListener('mousemove', onMove, true);
       document.addEventListener('click', onClick, true);
       document.addEventListener('keydown', onKey, true);
+      window.addEventListener('scroll', drawPick, true);
+      window.addEventListener('resize', drawPick);
     } catch {}
   };
 }
 
 /**
- * Capture ONE click. Survives page navigation: the overlay is re-installed on
- * every load, so the user can navigate Chrome to the right page themselves.
- * `allowDefault` lets the click do its normal thing (e.g. open a patient / the
- * New-Appointment form) instead of being swallowed.
+ * Drive ONE teach step: inject the overlay, screenshot each click, and resolve
+ * when the user presses Back / Skip / Next. Survives navigation (re-injects).
+ * Returns { action:'next'|'back'|'skip', selector? }.
  */
-async function captureClick(page, label, ancestorSelector = null, stepInfo = null, allowDefault = false, optional = false) {
-  const stepText = stepInfo ? `Step ${stepInfo.index} of ${stepInfo.total} — ` : '';
-  const binding = '__psPick_' + (stepInfo ? stepInfo.index : 0) + '_' + Math.floor(Math.random() * 1e6);
-  let resolveSel; let settled = false;
-  const done = new Promise((r) => { resolveSel = r; });
-  try { await page.exposeFunction(binding, (s) => { if (!settled) { settled = true; resolveSel(s || null); } }); } catch {}
+async function captureStep(page, step, stepInfo, ancestorSelector, capture) {
+  const rnd = Math.floor(Math.random() * 1e6);
+  const binding = '__psStep_' + stepInfo.index + '_' + rnd;
+  const shotBinding = '__psShot_' + stepInfo.index + '_' + rnd;
+  let resolveStep; let settled = false;
+  const done = new Promise((r) => { resolveStep = r; });
+  try { await page.exposeFunction(binding, (payload) => { if (!settled) { settled = true; resolveStep(payload && payload.action ? payload : { action: 'skip' }); } }); } catch {}
+  let clickN = 0;
+  try { await page.exposeFunction(shotBinding, async (selector) => { clickN += 1; try { await capture(stepInfo.index, clickN, selector); } catch {} }); } catch {}
 
-  const cfg = { label, ancestorSelector, stepText, binding, allowDefault, optional };
+  const cfg = { label: step.label, ancestorSelector: ancestorSelector || null, binding, shotBinding, index: stepInfo.index, total: stepInfo.total, optional: !!step.optional, hasBack: !!stepInfo.hasBack };
   const inject = `(${pickerSource().toString()})(${JSON.stringify(cfg)})`;
   const reinject = () => { page.evaluate(inject).catch(() => {}); };
   reinject();
@@ -593,11 +659,32 @@ async function captureClick(page, label, ancestorSelector = null, stepInfo = nul
   page.on('load', reinject);
   page.on('domcontentloaded', reinject);
 
-  const selector = await done;
+  const payload = await done;
   page.off('framenavigated', onNav);
   page.off('load', reinject);
   page.off('domcontentloaded', reinject);
-  return selector || null;
+  return payload;
+}
+
+function escapeHtmlNode(s) { return String(s == null ? '' : s).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c])); }
+
+/** Write a tiny self-contained gallery (index.html + captures.json) so opening
+ *  the folder shows every taught click as a labelled screenshot. */
+function writeGallery(dir, manifest) {
+  try { fs.writeFileSync(path.join(dir, 'captures.json'), JSON.stringify(manifest, null, 2)); } catch {}
+  const cards = manifest.map((m) => `
+    <div class="card">
+      <div class="cap"><b>Step ${m.step}</b> — ${escapeHtmlNode(m.label)}<div class="sel">${escapeHtmlNode(m.selector || '')}</div></div>
+      <img src="${escapeHtmlNode(m.screenshot)}" alt="" />
+    </div>`).join('');
+  const html = `<!doctype html><meta charset="utf-8"><title>PracticeSync — teach captures</title>
+<style>body{font:14px -apple-system,system-ui,sans-serif;background:#0f1422;color:#eaf0fb;margin:0;padding:26px}
+h1{font-size:18px;margin:0 0 4px} p.sub{color:#9fb3da;margin:0 0 22px;font-size:13px}
+.card{background:#1a2336;border:1px solid #2a3650;border-radius:12px;padding:14px;margin:0 0 16px}
+.cap{margin-bottom:10px} .sel{color:#9fb3da;font:12px ui-monospace,Menlo,monospace;margin-top:4px;word-break:break-all}
+img{max-width:100%;border-radius:8px;border:1px solid #2a3650;display:block}</style>
+<h1>What you taught PracticeSync</h1><p class="sub">${manifest.length} screenshot(s) — one per click. Each card shows the field, the element the app will use, and what the screen looked like.</p>${cards}`;
+  try { fs.writeFileSync(path.join(dir, 'index.html'), html); } catch {}
 }
 
 /**
@@ -674,4 +761,4 @@ async function runSiteDemo({ userDataDir, profileDir, sourceUrl, destUrl, rows =
   });
 }
 
-module.exports = { pullVisits, createAppointmentLive, teach, runSiteDemo, defaultChromeUserDataDir, openPage, normalizeUrl, isBlank, waitForRealPage, ensureStage, stage, announce };
+module.exports = { pullVisits, createAppointmentLive, teach, runSiteDemo, defaultChromeUserDataDir, openPage, normalizeUrl, isBlank, waitForRealPage, ensureStage, stage, announce, pickerSource };

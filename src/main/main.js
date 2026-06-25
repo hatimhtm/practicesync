@@ -1,7 +1,7 @@
 'use strict';
 
 const path = require('path');
-const { app, BrowserWindow, Tray, Menu, nativeImage, ipcMain, Notification } = require('electron');
+const { app, BrowserWindow, Tray, Menu, nativeImage, ipcMain, Notification, shell } = require('electron');
 
 const store = require('./store');
 const { runSync } = require('./automation');
@@ -276,32 +276,38 @@ function registerIpc() {
     if (!url) return { ok: false, error: 'Enter the page address first.' };
     const steps = target === 'pf'
       ? [
-          { key: 'searchBox', label: 'the patient SEARCH box — then TYPE a patient name into it' },
-          { key: 'firstResult', label: 'the matching PATIENT in the results that appear', allowDefault: true },
-          { key: 'patientSelector', label: 'the PATIENT NAME at the top of the page' },
-          { key: 'rowSelector', label: 'one visit ROW in the list' },
-          { key: 'doctorSelector', label: 'the DOCTOR NAME in that row', relativeTo: 'rowSelector' },
-          { key: 'dateSelector', label: 'the DATE in that row', relativeTo: 'rowSelector' },
+          { key: 'searchBox', label: 'Click the patient SEARCH box, type a patient name, then press Next' },
+          { key: 'firstResult', label: 'Click the matching PATIENT in the results (Next opens them)', allowDefault: true },
+          { key: 'patientSelector', label: 'Click the PATIENT NAME at the top of their chart' },
+          { key: 'rowSelector', label: 'Click one VISIT row in the list' },
+          { key: 'doctorSelector', label: 'Click the DOCTOR name inside that visit row', relativeTo: 'rowSelector' },
+          { key: 'dateSelector', label: 'Click the DATE inside that visit row', relativeTo: 'rowSelector' },
         ]
       : [
-          { key: 'newApptButton', label: 'the "New appointment" button', allowDefault: true },
-          { key: 'patientField', label: 'the PATIENT NAME field' },
-          { key: 'mainDoctorField', label: 'the CLINICIAN (big doctor) field' },
-          { key: 'dateField', label: 'the DATE field' },
-          { key: 'codeField', label: 'the CPT CODE / service field' },
-          { key: 'unitsField', label: 'the UNITS field' },
-          { key: 'modifierField', label: 'the MODIFIER field (where GP/GO/GN and 59 go)' },
-          { key: 'addServiceBtn', label: 'the "Add service / Add line" button (so multiple codes can be entered)', allowDefault: true, optional: true },
-          { key: 'saveButton', label: 'the SAVE button' },
+          { key: 'newApptButton', label: 'Click the "New appointment" button (Next opens the form)', allowDefault: true },
+          { key: 'patientField', label: 'Click the PATIENT NAME field' },
+          { key: 'mainDoctorField', label: 'Click the CLINICIAN (main doctor) field' },
+          { key: 'dateField', label: 'Click the DATE field' },
+          { key: 'codeField', label: 'Click the CPT CODE / service field' },
+          { key: 'unitsField', label: 'Click the UNITS field' },
+          { key: 'modifierField', label: 'Click the MODIFIER field (GP/GO/GN and 59 go here)' },
+          { key: 'addServiceBtn', label: 'Click the "Add service / Add line" button — or Skip if there isn\'t one', optional: true },
+          { key: 'saveButton', label: 'Click the SAVE button' },
         ];
+    // Each click is screenshotted into a per-session folder (with a gallery)
+    // so the user can see exactly what they taught and spot anything wrong.
+    const stamp = nowISO().replace(/[:.]/g, '-');
+    const capturesDir = path.join(app.getPath('userData'), 'teach-captures', `${target}-${stamp}`);
     try {
-      const res = await teach({ userDataDir: s.chromeUserDataDir, profileDir: s.chromeProfileDir, url, steps });
+      const res = await teach({ userDataDir: s.chromeUserDataDir, profileDir: s.chromeProfileDir, url, steps, capturesDir });
       if (!res.ok) return res;
       if (target === 'pf') store.save({ pfUrl: url, pfSelectors: res.selectors });
       else store.save({ spUrl: url, spSelectors: res.selectors });
-      return { ok: true, selectors: res.selectors };
+      // Open the screenshots folder so the user can review what was captured.
+      if (res.captureCount) { try { shell.openPath(res.capturesDir); } catch {} }
+      return { ok: true, selectors: res.selectors, capturesDir: res.capturesDir, captureCount: res.captureCount };
     } catch {
-      return { ok: false, error: 'Teach Mode could not open the page. Make sure Google Chrome is installed and closed.' };
+      return { ok: false, error: 'Teach Mode could not open the page. Make sure Google Chrome is installed.' };
     }
   });
 }
