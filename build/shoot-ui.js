@@ -58,13 +58,16 @@ const API_STUB = `
     runNow: async () => ({ ok: true }),
     runSiteDemo: async () => ({ ok: true }),
     onDemoStep: () => {},
+    recordStart: async () => ({ ok: true }), recordStop: async () => ({ ok: true, events: [] }),
+    recordSave: async () => ({ ok: true }), recordList: async () => ({ ok: true, workflows: [] }),
+    recordDelete: async () => ({ ok: true }), recordReplay: async () => ({ ok: true }), onRecordEvent: () => {},
     teach: async () => ({ ok: true }),
     onRunStatus: () => {}, onRunFinished: () => {}, onLiveStep: () => {},
     checkForUpdates: async () => {}, installUpdate: async () => {}, onUpdateStatus: () => {},
   };
 `;
 
-const VIEWS = ['home', 'doctors', 'connect', 'ai', 'schedule', 'test'];
+const VIEWS = ['home', 'doctors', 'connect', 'ai', 'schedule', 'test', 'record'];
 const OB_STEPS = [0, 1, 2, 3, 4, 5];
 
 async function main() {

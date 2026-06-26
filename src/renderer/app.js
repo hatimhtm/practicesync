@@ -419,6 +419,107 @@ window.api.onDemoStep((s) => {
   log.scrollTop = log.scrollHeight;
 });
 
+/* --------------------------- record a workflow -------------------------- */
+function hostOf(u) { try { return new URL(u).hostname.replace(/^www\./, ''); } catch { return u; } }
+function recDesc(e) {
+  if (e.type === 'navigate') return '🌐 Opened ' + escapeHtml(hostOf(e.url));
+  if (e.type === 'click') return '🖱 Clicked ' + escapeHtml(e.label || e.selector || 'something');
+  if (e.type === 'input') return '⌨️ Typed “' + escapeHtml(e.value || '') + '” into ' + escapeHtml(e.label || 'a field');
+  return escapeHtml(e.type || '');
+}
+let recReviewItems = []; // events from the last recording (with .keep)
+
+function recLogLine(logSel, text, cls) {
+  const log = $(logSel); if (!log) return;
+  const prev = log.querySelector('.live-line.cur'); if (prev) prev.classList.remove('cur');
+  const line = document.createElement('div');
+  line.className = 'live-line' + (cls ? ' ' + cls : '');
+  line.innerHTML = `<span class="t">${fmtClock(new Date().toISOString())}</span><span>${text}</span>`;
+  log.appendChild(line); log.scrollTop = log.scrollHeight;
+}
+
+$('#recStartBtn').addEventListener('click', async () => {
+  const res = await window.api.recordStart({ startUrl: $('#recUrl').value.trim() });
+  if (!res || !res.ok) { toast(res && res.error ? res.error : 'Could not start recording.'); return; }
+  $('#recLog').innerHTML = '';
+  $('#recStartCard').classList.add('hidden');
+  $('#recReviewCard').classList.add('hidden');
+  $('#recLiveCard').classList.remove('hidden');
+  toast('Recording — do your task in the Chrome window, then press Stop.');
+});
+
+$('#recStopBtn').addEventListener('click', async () => {
+  const res = await window.api.recordStop();
+  $('#recLiveCard').classList.add('hidden');
+  $('#recStartCard').classList.remove('hidden');
+  if (!res || !res.ok) { toast(res && res.error ? res.error : 'Nothing was recording.'); return; }
+  recReviewItems = (res.events || []).map((e) => ({ ...e, keep: true }));
+  renderRecReview();
+  $('#recReviewCard').classList.remove('hidden');
+  if (!recReviewItems.length) toast('No actions were captured — try again and click/type in the Chrome window.');
+});
+
+function renderRecReview() {
+  const wrap = $('#recReview'); wrap.innerHTML = '';
+  recReviewItems.forEach((e, i) => {
+    if (e.type === 'flag') return;
+    const row = document.createElement('label');
+    row.className = 'rec-row';
+    row.innerHTML = `<input type="checkbox" data-i="${i}" ${e.keep ? 'checked' : ''} />`
+      + `<span class="rec-desc">${e.flagged ? '<span class="rec-star">★</span> ' : ''}${recDesc(e)}</span>`;
+    wrap.appendChild(row);
+  });
+  $$('#recReview input[type="checkbox"]').forEach((c) => c.addEventListener('change', () => { recReviewItems[+c.dataset.i].keep = c.checked; }));
+}
+
+$('#recSaveBtn').addEventListener('click', async () => {
+  const steps = recReviewItems.filter((e) => e.keep && e.type !== 'flag').map((e) => ({ type: e.type, selector: e.selector, value: e.value, url: e.url, label: e.label }));
+  if (!steps.length) { toast('Keep at least one step first.'); return; }
+  const name = $('#recName').value.trim() || 'Untitled workflow';
+  const res = await window.api.recordSave({ name, steps });
+  if (res && res.ok) {
+    toast('Workflow saved ✓');
+    $('#recReviewCard').classList.add('hidden');
+    $('#recName').value = '';
+    renderWorkflowList();
+  } else toast('Could not save the workflow.');
+});
+
+async function renderWorkflowList() {
+  const res = await window.api.recordList();
+  const list = $('#recList'); list.innerHTML = '';
+  const wfs = (res && res.workflows) || [];
+  if (!wfs.length) { list.innerHTML = '<p class="muted" style="font-size:13px;margin:6px 0 0">No workflows yet — record one above.</p>'; return; }
+  wfs.forEach((w) => {
+    const stepCount = (w.steps || []).filter((s) => s.type !== 'flag').length;
+    const row = document.createElement('div');
+    row.className = 'wf-row';
+    row.innerHTML = `<div class="wf-meta"><b>${escapeHtml(w.name)}</b><span class="muted"> · ${stepCount} step${stepCount === 1 ? '' : 's'}</span></div>`
+      + `<div class="wf-actions"><button class="btn btn-primary wf-replay" data-id="${w.id}">▶ Replay</button><button class="btn wf-del" data-id="${w.id}" title="Delete">✕</button></div>`;
+    list.appendChild(row);
+  });
+  $$('.wf-replay').forEach((b) => b.addEventListener('click', async () => {
+    $('#recReplayLog').innerHTML = '';
+    $('#recReplayCard').classList.remove('hidden');
+    b.disabled = true;
+    const res2 = await window.api.recordReplay({ id: b.dataset.id });
+    b.disabled = false;
+    if (!res2 || !res2.ok) toast(res2 && res2.error ? res2.error : 'Replay failed.');
+  }));
+  $$('.wf-del').forEach((b) => b.addEventListener('click', async () => { await window.api.recordDelete(b.dataset.id); renderWorkflowList(); }));
+}
+
+window.api.onRecordEvent((s) => {
+  if (!s) return;
+  if (s.type === 'replay') {
+    if (s.reset) $('#recReplayLog').innerHTML = '';
+    recLogLine('#recReplayLog', escapeHtml(s.text || ''), s.done ? '' : 'cur');
+    return;
+  }
+  if (s.type === 'flag') { recLogLine('#recLog', '<b>★ step marked</b>', ''); toast('Step marked ★'); return; }
+  recLogLine('#recLog', recDesc(s), 'cur');
+});
+
 /* -------------------- onboarding (mandatory, gated) --------------------- */
 const SETUP_VERSION = 4; // bump forces everyone through setup again after an update
 // Steps by ROLE so inserting/reordering never breaks the gates.
@@ -624,6 +725,7 @@ window.api.onRunStatus((s) => { if (s && s.phase === 'running') $('#statusIcon')
 /* --------------------------------- init --------------------------------- */
 (async () => {
   await refresh();
+  renderWorkflowList();
   // Force the full setup on first run AND after an update (version bump), and
   // whenever the screens aren't taught — so the app can never run on wrong data.
   const needsSetup = !settings.setupComplete

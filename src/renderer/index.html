@@ -25,6 +25,7 @@
         <button class="nav-item" data-view="ai"><span class="dot"></span> AI Engine</button>
         <button class="nav-item" data-view="schedule"><span class="dot"></span> Schedule</button>
         <button class="nav-item" data-view="test"><span class="dot"></span> Test drive</button>
+        <button class="nav-item" data-view="record"><span class="dot"></span> Record a workflow</button>
       </nav>
       <div class="sidebar-foot">
         <div class="pill pill-safe">🔒 No patient data leaves this Mac</div>
@@ -275,6 +276,52 @@
           <div class="card-k">🤖 Live — watch the cursor in the Chrome window</div>
           <p class="muted" style="font-size:12.5px;margin:0 0 10px">A Chrome window opened with a visible cursor. Here's the running log:</p>
           <div class="live-log" id="demoLog"></div>
+        </div>
+      </section>
+
+      <!-- RECORD A WORKFLOW -->
+      <section class="view hidden" data-view="record">
+        <header class="view-head">
+          <h1>Record a workflow</h1>
+          <p class="muted">Do the task once — open the sites, click, and type — and PracticeSync watches <strong>silently</strong>. Afterward you pick which actions are the real steps, save it, and it can replay them on its own with the visible cursor. Your logins stay signed in between runs.</p>
+        </header>
+
+        <div class="card" id="recStartCard">
+          <div class="card-k">1 · Start a recording</div>
+          <label class="field" style="margin-top:6px">
+            <span>Start page (optional)</span>
+            <input type="text" id="recUrl" placeholder="https://… — or leave blank and type the address in Chrome yourself" />
+          </label>
+          <button class="btn btn-primary" id="recStartBtn">● Start recording</button>
+          <p class="muted" style="font-size:12px;margin-top:10px">A Chrome window opens. Do your task naturally across both sites. Press <strong>⌘⇧S</strong> to flag an important step. Then come back here and press <strong>Stop</strong>.</p>
+        </div>
+
+        <div class="card hidden" id="recLiveCard">
+          <div class="card-k" style="color:var(--bad)">● Recording — live</div>
+          <p class="muted" style="font-size:12.5px;margin:0 0 10px">Everything you do in the Chrome window is being captured. Here's the running log:</p>
+          <div class="live-log" id="recLog"></div>
+          <button class="btn btn-primary" id="recStopBtn" style="margin-top:12px">■ Stop recording</button>
+        </div>
+
+        <div class="card hidden" id="recReviewCard">
+          <div class="card-k">2 · Keep the real steps</div>
+          <p class="muted" style="font-size:12.5px;margin:2px 0 12px">Uncheck anything that isn't a real step (stray clicks, etc.). ★ are the steps you flagged with ⌘⇧S.</p>
+          <div id="recReview"></div>
+          <label class="field" style="margin-top:14px">
+            <span>Name this workflow</span>
+            <input type="text" id="recName" placeholder="e.g. Book today's appointments" />
+          </label>
+          <button class="btn btn-primary" id="recSaveBtn">Save workflow</button>
+        </div>
+
+        <div class="card">
+          <div class="card-k">Saved workflows</div>
+          <div id="recList"><p class="muted" style="font-size:13px;margin:6px 0 0">No workflows yet — record one above.</p></div>
+        </div>
+
+        <div class="card live-card hidden" id="recReplayCard">
+          <div class="card-k">🤖 Replaying — watch the cursor in the Chrome window</div>
+          <div class="live-log" id="recReplayLog"></div>
         </div>
       </section>
     </main>

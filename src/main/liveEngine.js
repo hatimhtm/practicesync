@@ -60,17 +60,20 @@ function fail(error, detail) {
   return { ok: false, error, detail: detail ? String(detail).slice(0, 300) : undefined };
 }
 
-async function withBrowser(opts, fn) {
+/**
+ * Open the dedicated-profile Chrome and return its context (the caller owns
+ * closing it). Shared by withBrowser (one-shot) and the recorder (long-lived).
+ * Returns { context } on success or { error } (a friendly fail() object).
+ */
+async function openAutomationContext(opts = {}) {
   const { pw, err } = getPlaywright();
-  if (!pw) return fail('The automation component could not load in this build.', err);
+  if (!pw) return { error: fail('The automation component could not load in this build.', err) };
   if (!fs.existsSync(CHROME_APP)) {
-    return fail('Google Chrome isn’t installed. Please install Google Chrome, sign into Practice Fusion & SimplePractice in it, then try again.');
+    return { error: fail('Google Chrome isn’t installed. Please install Google Chrome, then try again.') };
   }
   // Drive our OWN dedicated profile (not the user's everyday Chrome), so the
   // user never has to quit their browser — the two run side by side. Clearing
-  // stale locks here is always safe: this directory belongs to PracticeSync, so
-  // there's no live user session to corrupt (it only matters if a previous
-  // automation run crashed and left a lock behind).
+  // stale locks here is always safe: this directory belongs to PracticeSync.
   const userDataDir = opts.userDataDir || automationUserDataDir();
   try { fs.mkdirSync(userDataDir, { recursive: true }); } catch {}
   clearStaleLocks(userDataDir);
@@ -87,8 +90,6 @@ async function withBrowser(opts, fn) {
       '--no-default-browser-check',
       '--disable-component-update',
       '--disable-background-networking',
-      // Suppress the "Chrome didn't shut down correctly / Restore pages?" bubble
-      // that pops up after an unclean exit — it steals focus and confuses the user.
       '--hide-crash-restore-bubble',
       '--disable-session-crashed-bubble',
       '--restore-last-session=false',
@@ -96,25 +97,28 @@ async function withBrowser(opts, fn) {
   };
   const launch = () => pw.chromium.launchPersistentContext(userDataDir, { channel: 'chrome', ...launchOpts })
     .catch(() => pw.chromium.launchPersistentContext(userDataDir, { executablePath: CHROME_BIN, ...launchOpts }));
-  let context;
   try {
-    context = await launch();
+    return { context: await launch() };
   } catch (e) {
     const s = String((e && e.message) || e);
     // The only thing that can lock OUR profile is a previous PracticeSync window
     // that's still open (or crashed). Clear the lock and retry once.
     if (/ProcessSingleton|cannot create|in use|locked|SingletonLock/i.test(s)) {
       clearStaleLocks(userDataDir);
-      try { context = await launch(); }
-      catch (e2) { return fail('A PracticeSync browser window is already open — close it and click again.', String((e2 && e2.message) || e2)); }
-    } else {
-      return fail('Could not open Chrome. Make sure Google Chrome is installed, then try again.', s);
+      try { return { context: await launch() }; }
+      catch (e2) { return { error: fail('A PracticeSync browser window is already open — close it and click again.', String((e2 && e2.message) || e2)) }; }
     }
+    return { error: fail('Could not open Chrome. Make sure Google Chrome is installed, then try again.', s) };
   }
+}
+
+async function withBrowser(opts, fn) {
+  const { context, error } = await openAutomationContext(opts);
+  if (error) return error;
   try {
     return await fn(context);
   } catch (e) {
-    return fail('Something went wrong while controlling the browser. Try again with Chrome fully quit.', String((e && e.message) || e));
+    return fail('Something went wrong while controlling the browser. Please try again.', String((e && e.message) || e));
   } finally {
     try { await context.close(); } catch {}
   }
@@ -761,4 +765,4 @@ async function runSiteDemo({ userDataDir, profileDir, sourceUrl, destUrl, rows =
   });
 }
 
-module.exports = { pullVisits, createAppointmentLive, teach, runSiteDemo, defaultChromeUserDataDir, openPage, normalizeUrl, isBlank, waitForRealPage, ensureStage, stage, announce, pickerSource };
+module.exports = { pullVisits, createAppointmentLive, teach, runSiteDemo, defaultChromeUserDataDir, automationUserDataDir, openAutomationContext, openPage, normalizeUrl, isBlank, waitForRealPage, ensureStage, stage, announce, pickerSource };

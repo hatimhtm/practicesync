@@ -9,6 +9,7 @@ const { parseRoster, appleIntelligenceAvailable, detectEngines, appleHelperPath 
 const { DEMO_MAIN_DOCTORS, DEMO_PROVIDERS, makeProvider, makeMainDoctor } = require('./model');
 const { teach, runSiteDemo } = require('./liveEngine');
 const { startSheetServer } = require('./demoSheet');
+const recorder = require('./recorder');
 const { Scheduler } = require('./scheduler');
 const updater = require('./updater');
 
@@ -256,6 +257,43 @@ function registerIpc() {
     } finally {
       if (server) try { await server.close(); } catch {}
     }
+  });
+
+  // ---- Workflow recorder: record a workflow once, review/mark it, replay it ----
+  ipcMain.handle('record:start', async (_e, { startUrl } = {}) => {
+    const s = store.load();
+    const stamp = nowISO().replace(/[:.]/g, '-');
+    const capturesDir = path.join(app.getPath('userData'), 'recordings', `rec-${stamp}`);
+    return recorder.startRecording({
+      startUrl, capturesDir,
+      userDataDir: s.chromeUserDataDir, profileDir: s.chromeProfileDir,
+      onEvent: (ev) => sendToRenderer('record-event', ev),
+    });
+  });
+  ipcMain.handle('record:stop', async () => recorder.stopRecording());
+  ipcMain.handle('record:save', (_e, { name, steps }) => {
+    const cur = store.load();
+    const wf = { id: 'wf_' + Date.now().toString(36), name: String(name || 'Untitled workflow').slice(0, 80), steps: Array.isArray(steps) ? steps : [], createdAt: nowISO() };
+    store.save({ workflows: [...(cur.workflows || []), wf] });
+    return { ok: true, workflow: wf };
+  });
+  ipcMain.handle('record:list', () => ({ ok: true, workflows: store.load().workflows || [] }));
+  ipcMain.handle('record:delete', (_e, { id }) => {
+    const cur = store.load();
+    store.save({ workflows: (cur.workflows || []).filter((w) => w.id !== id) });
+    return { ok: true };
+  });
+  ipcMain.handle('record:replay', async (_e, { id, steps } = {}) => {
+    const s = store.load();
+    const wf = id ? (s.workflows || []).find((w) => w.id === id) : null;
+    const useSteps = (wf && wf.steps) || steps || [];
+    sendToRenderer('record-event', { type: 'replay', text: 'Starting replay…', reset: true });
+    const res = await recorder.replayWorkflow({
+      steps: useSteps, userDataDir: s.chromeUserDataDir, profileDir: s.chromeProfileDir,
+      onStep: (text) => sendToRenderer('record-event', { type: 'replay', text }),
+    });
+    sendToRenderer('record-event', { type: 'replay', text: res.ok ? 'Replay finished ✓' : (res.error || 'Replay stopped.'), done: true });
+    return res;
   });
 
   ipcMain.handle('run:sync', async (_e, opts) => performSync('manual', opts || {}));
