@@ -20,7 +20,7 @@ const INDEX = 'file://' + path.join(ROOT, 'src', 'renderer', 'index.html');
 
 // Realistic settings so the views populate like a configured, mid-use app.
 const STUB_SETTINGS = {
-  appVersion: '1.0.5',
+  appVersion: '1.0.6',
   providers: [
     { name: 'Jess', mainDoctor: 'Heather Vines-Dubose', codes: [{ code: '97112', units: 2, modifiers: [] }, { code: '97530', units: 2, modifiers: ['59'] }] },
     { name: 'Gianna', mainDoctor: 'Caryn McAllister', codes: [{ code: '97112', units: 2, modifiers: [] }, { code: '97530', units: 2, modifiers: ['59'] }] },

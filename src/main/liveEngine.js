@@ -486,6 +486,12 @@ async function teach({ userDataDir, profileDir, url, steps, headless = false, ca
     // never start highlighting fields on a blank page.
     await waitForRealPage(page);
 
+    // FREE-ROAM phase: let the user sign in, enter a 2-factor code, and navigate
+    // to the page they want WITHOUT the app intercepting their clicks. Field
+    // teaching (which blocks clicks to "select") only begins once they say
+    // they're ready. This is what lets them actually log in.
+    await waitForReady(page);
+
     const manifest = [];
     if (capturesDir) { try { fs.mkdirSync(capturesDir, { recursive: true }); } catch {} }
     // Save a screenshot (+ the element's HTML) for every click during a step.
@@ -523,6 +529,57 @@ async function teach({ userDataDir, profileDir, url, steps, headless = false, ca
     if (capturesDir && manifest.length) { try { writeGallery(capturesDir, manifest); } catch {} }
     return { ok: true, selectors, capturesDir: capturesDir || null, captureCount: manifest.length };
   });
+}
+
+/* The free-roam gate: a NON-blocking banner + a "Start teaching" button. It adds
+ * NO click handlers to the page, so the user can sign in, type a 2-factor code,
+ * click "Send code", and navigate completely normally. Re-installed on every
+ * page load. When the user clicks "Start teaching", it resolves. */
+function readyGateSource() {
+  return (cfg) => {
+    try {
+      if (window.__psGate === cfg.binding && document.getElementById('__ps_gate')) return;
+      window.__psGate = cfg.binding;
+      const old = document.getElementById('__ps_gate'); if (old) old.remove();
+      const ui = document.createElement('div'); ui.id = '__ps_gate';
+
+      const bar = document.createElement('div');
+      bar.innerHTML = '<span style="font-size:17px;vertical-align:-2px">👋</span> <b>First, sign in and open the page you want to teach.</b> Do anything you need — log in, enter a verification code, navigate. Nothing here is saved.';
+      Object.assign(bar.style, { position: 'fixed', top: '0', left: '0', right: '0', zIndex: '2147483646', background: 'rgba(17,24,40,.97)', color: '#eaf0fb', font: '600 14px/1.45 -apple-system,system-ui,sans-serif', padding: '13px 18px', textAlign: 'center', boxShadow: '0 3px 14px rgba(0,0,0,.4)', pointerEvents: 'none' });
+      ui.appendChild(bar);
+
+      const wrap = document.createElement('div');
+      Object.assign(wrap.style, { position: 'fixed', bottom: '22px', left: '50%', transform: 'translateX(-50%)', zIndex: '2147483647', pointerEvents: 'auto' });
+      const btn = document.createElement('button');
+      btn.textContent = "I'm on the right page — Start teaching ▶";
+      Object.assign(btn.style, { font: '700 14px -apple-system,system-ui,sans-serif', border: '0', borderRadius: '12px', padding: '13px 22px', cursor: 'pointer', color: '#04240f', background: '#34d399', boxShadow: '0 10px 28px rgba(0,0,0,.45)' });
+      btn.addEventListener('click', (e) => { e.preventDefault(); e.stopPropagation(); try { if (window[cfg.binding]) window[cfg.binding](); } catch {} }, true);
+      wrap.appendChild(btn); ui.appendChild(wrap);
+
+      document.documentElement.appendChild(ui);
+    } catch {}
+  };
+}
+
+/** Wait (non-blocking) until the user has signed in / navigated and clicks
+ *  "Start teaching". Survives page navigation. */
+async function waitForReady(page) {
+  const binding = '__psGate_' + Math.floor(Math.random() * 1e6);
+  let resolve; let settled = false;
+  const done = new Promise((r) => { resolve = r; });
+  try { await page.exposeFunction(binding, () => { if (!settled) { settled = true; resolve(); } }); } catch {}
+  const inject = `(${readyGateSource().toString()})(${JSON.stringify({ binding })})`;
+  const reinject = () => { page.evaluate(inject).catch(() => {}); };
+  reinject();
+  const onNav = (frame) => { if (frame === page.mainFrame()) setTimeout(reinject, 300); };
+  page.on('framenavigated', onNav);
+  page.on('load', reinject);
+  page.on('domcontentloaded', reinject);
+  await done;
+  page.off('framenavigated', onNav);
+  page.off('load', reinject);
+  page.off('domcontentloaded', reinject);
+  try { await page.evaluate(() => { const e = document.getElementById('__ps_gate'); if (e) e.remove(); window.__psGate = null; }); } catch {}
 }
 
 /* The in-page teach overlay: a calm status pill at the top (step counter +
@@ -765,4 +822,4 @@ async function runSiteDemo({ userDataDir, profileDir, sourceUrl, destUrl, rows =
   });
 }
 
-module.exports = { pullVisits, createAppointmentLive, teach, runSiteDemo, defaultChromeUserDataDir, automationUserDataDir, openAutomationContext, openPage, normalizeUrl, isBlank, waitForRealPage, ensureStage, stage, announce, pickerSource };
+module.exports = { pullVisits, createAppointmentLive, teach, runSiteDemo, defaultChromeUserDataDir, automationUserDataDir, openAutomationContext, openPage, normalizeUrl, isBlank, waitForRealPage, ensureStage, stage, announce, pickerSource, readyGateSource };
