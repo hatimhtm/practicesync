@@ -314,15 +314,15 @@ function registerIpc() {
     if (!url) return { ok: false, error: 'Enter the page address first.' };
     const steps = target === 'pf'
       ? [
-          { key: 'searchBox', label: 'The patient SEARCH box (click in it and type a name so results appear)' },
-          { key: 'firstResult', label: 'A matching PATIENT in the results (Next will open them)', allowDefault: true },
+          { key: 'searchBox', label: 'The patient SEARCH box', hint: 'Tip: before pointing, click in it and type a name so results appear — then point at the box.' },
+          { key: 'firstResult', label: 'A matching PATIENT in the results', hint: 'Pointing at it won’t open it — Next opens it for you.', allowDefault: true },
           { key: 'patientSelector', label: 'The PATIENT NAME at the top of their chart' },
           { key: 'rowSelector', label: 'One VISIT row in the list' },
           { key: 'doctorSelector', label: 'The DOCTOR name inside that visit row', relativeTo: 'rowSelector' },
           { key: 'dateSelector', label: 'The DATE inside that visit row', relativeTo: 'rowSelector' },
         ]
       : [
-          { key: 'newApptButton', label: 'The "New appointment" button (Next will open the form)', allowDefault: true },
+          { key: 'newApptButton', label: 'The "New appointment" button', hint: 'Pointing at it won’t open it — Next opens the form for you.', allowDefault: true },
           { key: 'patientField', label: 'The PATIENT NAME field' },
           { key: 'mainDoctorField', label: 'The CLINICIAN (main doctor) field' },
           { key: 'dateField', label: 'The DATE field' },

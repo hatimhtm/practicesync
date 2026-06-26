@@ -582,13 +582,19 @@ async function waitForReady(page) {
   try { await page.evaluate(() => { const e = document.getElementById('__ps_gate'); if (e) e.remove(); window.__psGate = null; }); } catch {}
 }
 
-/* The in-page teach overlay — NON-BLOCKING. The user navigates the site
- * completely normally (clicks open menus, links, the client section — nothing is
- * intercepted). A hover outline follows the cursor; when they reach the element
- * the app needs, they hover it and press "Mark this field" (or ⌘⇧M), which
- * captures a stable selector. Back / Skip / Next manage the short list of things
- * the app needs pointed out. Re-installed on every page load, so it follows the
- * user wherever they navigate. */
+/* The in-page teach overlay — TWO MODES, so navigating and selecting never fight.
+ *
+ *  • NAVIGATE (default): every click passes straight through. The user signs in,
+ *    opens menus, browses to the client section, types a name so results appear —
+ *    nothing is intercepted.
+ *  • PICK (one click): the user presses "Point at a field", then clicks the
+ *    element. That single click is captured AND suppressed (preventDefault), so
+ *    even a link or button is marked WITHOUT navigating or submitting. We record
+ *    exactly the element they clicked — no hover-travel guessing — then return to
+ *    navigate mode.
+ *
+ *  Back / Skip / Next manage the short list of things the app needs pointed out.
+ *  Re-installed on every page load, so it follows the user wherever they go. */
 function pickerSource() {
   return (cfg) => {
     try {
@@ -598,6 +604,9 @@ function pickerSource() {
       const root = document.documentElement;
       const ui = document.createElement('div'); ui.id = '__ps_teach_ui';
 
+      const navMsg = 'Browse to the screen you need — <b>clicking works normally</b>. When the field below is on screen, press <b>🎯 Point at a field</b>.';
+      const pickMsg = '<b>Now click the field on the page</b> — just one click. (Press <b>Esc</b> to cancel.)';
+
       // top status pill
       const top = document.createElement('div');
       Object.assign(top.style, { position: 'fixed', top: '14px', left: '50%', transform: 'translateX(-50%)', zIndex: '2147483647', background: 'rgba(17,24,40,.97)', color: '#eaf0fb', font: '600 14px/1.4 -apple-system,system-ui,sans-serif', padding: '12px 20px', borderRadius: '14px', boxShadow: '0 12px 34px rgba(0,0,0,.5)', border: '1px solid rgba(122,160,255,.45)', pointerEvents: 'none', maxWidth: '92vw', textAlign: 'center' });
@@ -605,10 +614,11 @@ function pickerSource() {
       for (let d = 0; d < cfg.total; d++) { const col = d < cfg.index - 1 ? '#34d399' : (d === cfg.index - 1 ? '#3d7bff' : 'rgba(255,255,255,.25)'); dots += '<span style="display:inline-block;width:7px;height:7px;border-radius:50%;margin:0 2px;vertical-align:middle;background:' + col + '"></span>'; }
       top.innerHTML = '<div style="font-size:11px;letter-spacing:.5px;color:#9fb3da;margin-bottom:6px">POINT OUT ' + cfg.index + ' OF ' + cfg.total + '&nbsp;&nbsp;' + dots + '</div>'
         + '<div style="font-size:15px;font-weight:700">' + cfg.label + '</div>'
-        + '<div id="__ps_teach_status" style="font-size:12px;color:#9fb3da;margin-top:6px">Navigate freely — clicking works normally. Hover this on the page, then press <b>Mark this field</b>.</div>';
+        + (cfg.hint ? '<div style="font-size:12px;color:#cdd9f2;margin-top:5px">' + cfg.hint + '</div>' : '')
+        + '<div id="__ps_teach_status" style="font-size:12px;color:#9fb3da;margin-top:6px">' + navMsg + '</div>';
       ui.appendChild(top);
 
-      // hover + marked outlines
+      // hover (only while picking) + marked outlines
       const hover = document.createElement('div');
       Object.assign(hover.style, { position: 'fixed', zIndex: '2147483645', border: '2px dashed #3d7bff', borderRadius: '7px', background: 'rgba(61,123,255,.10)', pointerEvents: 'none', display: 'none' });
       ui.appendChild(hover);
@@ -628,9 +638,10 @@ function pickerSource() {
       };
       const backBtn = mkBtn('◀ Back', false, !cfg.hasBack);
       const skipBtn = cfg.optional ? mkBtn('Skip this', false, false) : null;
-      const markBtn = mkBtn('✓ Mark this field', false, false);
+      const pickBtn = mkBtn('🎯 Point at a field', false, false);
+      Object.assign(pickBtn.style, { background: '#f0a93d', color: '#241300', fontWeight: '700' });
       const nextBtn = mkBtn(cfg.index === cfg.total ? '✓ Finish' : 'Next ▶', true, true);
-      bar.appendChild(backBtn); if (skipBtn) bar.appendChild(skipBtn); bar.appendChild(markBtn); bar.appendChild(nextBtn);
+      bar.appendChild(backBtn); if (skipBtn) bar.appendChild(skipBtn); bar.appendChild(pickBtn); bar.appendChild(nextBtn);
       ui.appendChild(bar);
       root.appendChild(ui);
 
@@ -653,32 +664,52 @@ function pickerSource() {
         return parts.join(' > ');
       }
 
-      const ourEls = [top, hover, pick, pickTag, bar, backBtn, markBtn, nextBtn]; if (skipBtn) ourEls.push(skipBtn);
+      const ourEls = [top, hover, pick, pickTag, bar, backBtn, pickBtn, nextBtn]; if (skipBtn) ourEls.push(skipBtn);
       const ours = (el) => el && (ourEls.indexOf(el) >= 0 || ui.contains(el));
-      let selectedEl = null; let selectedSel = ''; let lastHovered = null;
+      let selectedEl = null; let selectedSel = ''; let picking = false;
       function drawPick() { if (!selectedEl) { pick.style.display = 'none'; return; } const r = selectedEl.getBoundingClientRect(); pick.style.display = 'block'; pick.style.left = r.left + 'px'; pick.style.top = r.top + 'px'; pick.style.width = r.width + 'px'; pick.style.height = r.height + 'px'; }
       function setStatus(t) { const s = document.getElementById('__ps_teach_status'); if (s) s.innerHTML = t; }
+
+      // Toggle PICK mode. While armed, the cursor is a crosshair and the very next
+      // page click is captured-and-suppressed (so links/buttons don't fire).
+      function setPicking(on) {
+        picking = on;
+        pickBtn.textContent = on ? '✕ Cancel' : '🎯 Point at a field';
+        Object.assign(pickBtn.style, on ? { background: 'rgba(255,255,255,.10)', color: '#dbe6ff', fontWeight: '600' } : { background: '#f0a93d', color: '#241300', fontWeight: '700' });
+        try { root.style.cursor = on ? 'crosshair' : ''; } catch {}
+        if (!on) hover.style.display = 'none';
+        setStatus(on ? pickMsg : (selectedSel ? 'Marked ✓ — press <b>Next</b>, or <b>Point at a field</b> again to change it.' : navMsg));
+      }
+
       function onMove(e) {
+        if (!picking) { hover.style.display = 'none'; return; } // navigate mode → no highlight, no distraction
         const el = e.target;
-        if (!el || ours(el)) { hover.style.display = 'none'; return; } // over our UI → keep lastHovered so Mark still works
+        if (!el || ours(el)) { hover.style.display = 'none'; return; }
         const r = el.getBoundingClientRect();
         if (!r.width && !r.height) { hover.style.display = 'none'; return; }
-        lastHovered = el;
         hover.style.display = 'block'; hover.style.left = r.left + 'px'; hover.style.top = r.top + 'px'; hover.style.width = r.width + 'px'; hover.style.height = r.height + 'px';
       }
-      // Mark the element the cursor is over — NO clicking of the page, so links
-      // and buttons aren't triggered just to point them out.
-      function markCurrent() {
-        if (!lastHovered) { setStatus('Hover the field on the page first, then press <b>Mark this field</b>.'); return; }
-        const stop = cfg.ancestorSelector ? lastHovered.closest(cfg.ancestorSelector) : null;
-        selectedEl = lastHovered; selectedSel = sel(lastHovered, stop, stop);
+
+      // The ONE intercepted click: mark exactly what the user clicked, suppress its
+      // default (no navigation/submit), capture a stable selector, exit pick mode.
+      function onClick(e) {
+        if (!picking) return;              // navigate mode → let the click through
+        const el = e.target;
+        if (!el || ours(el)) return;       // our own buttons handle themselves
+        e.preventDefault(); e.stopPropagation();
+        const stop = cfg.ancestorSelector ? el.closest(cfg.ancestorSelector) : null;
+        selectedEl = el; selectedSel = sel(el, stop, stop);
+        hover.style.display = 'none';
         drawPick();
         nextBtn.disabled = false; nextBtn.style.opacity = '1'; nextBtn.style.cursor = 'pointer';
-        setStatus('Marked ✓ — press <b>Next</b>, or hover a different element and Mark to change it.');
+        setPicking(false);
         try { if (window[cfg.shotBinding]) window[cfg.shotBinding](selectedSel); } catch {}
       }
+
       function finish(action) {
+        try { root.style.cursor = ''; } catch {}
         document.removeEventListener('mousemove', onMove, true);
+        document.removeEventListener('click', onClick, true);
         document.removeEventListener('keydown', onKey, true);
         window.removeEventListener('scroll', drawPick, true);
         window.removeEventListener('resize', drawPick);
@@ -686,16 +717,16 @@ function pickerSource() {
         try { if (window[cfg.binding]) window[cfg.binding](action); } catch {}
       }
       function onKey(e) {
-        if (e.key === 'Escape' && cfg.optional) { e.preventDefault(); finish({ action: 'skip' }); return; }
-        if ((e.metaKey || e.ctrlKey) && e.shiftKey && (e.key === 'M' || e.key === 'm')) { e.preventDefault(); markCurrent(); }
+        if (e.key === 'Escape') { if (picking) { e.preventDefault(); setPicking(false); return; } if (cfg.optional) { e.preventDefault(); finish({ action: 'skip' }); } }
       }
-      markBtn.addEventListener('click', (e) => { e.preventDefault(); e.stopPropagation(); markCurrent(); });
+      pickBtn.addEventListener('click', (e) => { e.preventDefault(); e.stopPropagation(); setPicking(!picking); });
       backBtn.addEventListener('click', (e) => { e.preventDefault(); e.stopPropagation(); if (cfg.hasBack) finish({ action: 'back' }); });
       if (skipBtn) skipBtn.addEventListener('click', (e) => { e.preventDefault(); e.stopPropagation(); finish({ action: 'skip' }); });
       nextBtn.addEventListener('click', (e) => { e.preventDefault(); e.stopPropagation(); if (!nextBtn.disabled) finish({ action: 'next', selector: selectedSel }); });
-      // NOTE: deliberately NO document 'click' listener — the user's clicks must
-      // pass straight through so they can navigate the site normally.
+      // Capture-phase listeners: we see the click FIRST, so in pick mode we can
+      // suppress a link/button before it navigates; in navigate mode we do nothing.
       document.addEventListener('mousemove', onMove, true);
+      document.addEventListener('click', onClick, true);
       document.addEventListener('keydown', onKey, true);
       window.addEventListener('scroll', drawPick, true);
       window.addEventListener('resize', drawPick);
@@ -718,7 +749,7 @@ async function captureStep(page, step, stepInfo, ancestorSelector, capture) {
   let clickN = 0;
   try { await page.exposeFunction(shotBinding, async (selector) => { clickN += 1; try { await capture(stepInfo.index, clickN, selector); } catch {} }); } catch {}
 
-  const cfg = { label: step.label, ancestorSelector: ancestorSelector || null, binding, shotBinding, index: stepInfo.index, total: stepInfo.total, optional: !!step.optional, hasBack: !!stepInfo.hasBack };
+  const cfg = { label: step.label, hint: step.hint || null, ancestorSelector: ancestorSelector || null, binding, shotBinding, index: stepInfo.index, total: stepInfo.total, optional: !!step.optional, hasBack: !!stepInfo.hasBack };
   const inject = `(${pickerSource().toString()})(${JSON.stringify(cfg)})`;
   const reinject = () => { page.evaluate(inject).catch(() => {}); };
   reinject();
