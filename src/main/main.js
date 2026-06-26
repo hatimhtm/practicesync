@@ -314,22 +314,30 @@ function registerIpc() {
     if (!url) return { ok: false, error: 'Enter the page address first.' };
     const steps = target === 'pf'
       ? [
-          { key: 'searchBox', label: 'The patient SEARCH box', hint: 'Tip: before pointing, click in it and type a name so results appear — then point at the box.' },
-          { key: 'firstResult', label: 'A matching PATIENT in the results', hint: 'Pointing at it won’t open it — Next opens it for you.', allowDefault: true },
-          { key: 'patientSelector', label: 'The PATIENT NAME at the top of their chart' },
-          { key: 'rowSelector', label: 'One VISIT row in the list' },
-          { key: 'doctorSelector', label: 'The DOCTOR name inside that visit row', relativeTo: 'rowSelector' },
-          { key: 'dateSelector', label: 'The DATE inside that visit row', relativeTo: 'rowSelector' },
+          // The real Practice Fusion flow is READ-ONLY: the user opens the day's
+          // schedule for a date and the app reads every appointment on it — each
+          // row is a different patient + their doctor. No searching, no clicking
+          // into charts. Patient/doctor are pointed out INSIDE one row so the app
+          // generalizes to all rows on the day.
+          { key: 'rowSelector', label: 'One APPOINTMENT in the day’s schedule', hint: 'Point at any single appointment for the date you’re viewing — the app reads them all the same way.' },
+          { key: 'patientSelector', label: 'The PATIENT NAME inside that appointment', relativeTo: 'rowSelector' },
+          { key: 'doctorSelector', label: 'The DOCTOR shown in that appointment', relativeTo: 'rowSelector' },
+          { key: 'dateSelector', label: 'The DATE for the day (its time/date in the row, or the date heading on the page)', hint: 'Optional — if every appointment is clearly the same day you can Skip this.', optional: true },
         ]
       : [
-          { key: 'newApptButton', label: 'The "New appointment" button', hint: 'Pointing at it won’t open it — Next opens the form for you.', allowDefault: true },
-          { key: 'patientField', label: 'The PATIENT NAME field' },
-          { key: 'mainDoctorField', label: 'The CLINICIAN (main doctor) field' },
+          // SimplePractice is a calendar, but the app books through the New-Appointment
+          // dialog (where Clinician + Date are FIELDS) rather than clicking a grid
+          // cell — same result, far more reliable. Teach the button/“+” that opens
+          // that dialog, then point out each field inside it. The app picks the
+          // clinician (main doctor) from your roster, so you don’t click columns.
+          { key: 'newApptButton', label: 'The “+” / “New appointment” button that opens the booking form', hint: 'Teach the button that opens the appointment dialog — not an empty calendar slot. Next opens it for you.', allowDefault: true },
+          { key: 'patientField', label: 'The CLIENT / patient name field' },
+          { key: 'mainDoctorField', label: 'The CLINICIAN field (this is the main doctor)', hint: 'The app fills this with the main doctor your roster maps the patient’s doctor to.' },
           { key: 'dateField', label: 'The DATE field' },
           { key: 'codeField', label: 'The CPT CODE / service field' },
           { key: 'unitsField', label: 'The UNITS field' },
-          { key: 'modifierField', label: 'The MODIFIER field (GP/GO/GN and 59 go here)' },
-          { key: 'addServiceBtn', label: 'The "Add service / Add line" button — or Skip if there isn\'t one', optional: true },
+          { key: 'modifierField', label: 'The MODIFIER field (the 2-letter GP/GO/GN and the 2-digit 59 go here)' },
+          { key: 'addServiceBtn', label: 'The “Add service / Add line” button — or Skip if there isn’t one', hint: 'This lets the app add a second, third… service line when a doctor provides more than one.', optional: true },
           { key: 'saveButton', label: 'The SAVE button' },
         ];
     // Each click is screenshotted into a per-session folder (with a gallery)

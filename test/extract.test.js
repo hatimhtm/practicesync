@@ -44,6 +44,40 @@ const SEL = { patientSelector: '#patient-name', rowSelector: '.visit-row', dateS
   check('empty timeline → []', extractVisits(new JSDOM(dashboardHTML(0)).window.document, SEL, 10).length === 0);
 })();
 
+/* ---- Fixture: a Practice Fusion DAY SCHEDULE (the client's real flow) — one
+ *      day, every row a DIFFERENT patient with their own doctor. Patient + doctor
+ *      are read from inside each row. ---- */
+function scheduleHTML(rowsData) {
+  const rows = rowsData.map((r, i) => `
+    <div class="appt" data-testid="appt-${i}">
+      <span class="appt-patient">${r.patient}</span>
+      <span class="appt-provider">${r.doctor}</span>
+      <span class="appt-time">${r.time || '9:00 AM'}</span>
+    </div>`).join('');
+  return `<!DOCTYPE html><html><body>
+    <h2 id="day-heading">06/26/2026</h2>
+    <div id="calendar">${rows}</div>
+  </body></html>`;
+}
+
+(function testDaySchedule() {
+  console.log('# extractVisits — DAY SCHEDULE (each row a different patient + doctor)');
+  const data = [
+    { patient: 'Alice Adams', doctor: 'Dr. Patel' },
+    { patient: 'Bob Brown', doctor: 'Dr. Nguyen' },
+    { patient: 'Carla Cruz', doctor: 'Dr. Patel' },
+  ];
+  const doc = new JSDOM(scheduleHTML(data)).window.document;
+  // patient + doctor are row-relative; the date is the page heading (read once).
+  const sel = { rowSelector: '.appt', patientSelector: '.appt-patient', doctorSelector: '.appt-provider', dateSelector: '#day-heading' };
+  const visits = extractVisits(doc, sel, 10);
+  check('reads every appointment on the day', visits.length === 3);
+  check('each row keeps its OWN patient', visits.map((v) => v.patientName).join('|') === 'Alice Adams|Bob Brown|Carla Cruz');
+  check('each row keeps its OWN doctor', visits.map((v) => v.doctorName).join('|') === 'Dr. Patel|Dr. Nguyen|Dr. Patel');
+  check('the day heading date fills every row', visits.every((v) => v.date === '06/26/2026'));
+  check('no searching / chart drilling needed (header patient unused)', new Set(visits.map((v) => v.patientName)).size === 3);
+})();
+
 (function testBuildSelector() {
   console.log('# buildSelector — taught selectors actually resolve back');
   const doc = new JSDOM(dashboardHTML(5)).window.document;

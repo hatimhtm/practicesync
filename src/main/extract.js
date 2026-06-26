@@ -109,16 +109,28 @@ function text(el) {
  */
 function extractVisits(doc, sel, limit = 10) {
   if (!sel || !sel.rowSelector) return [];
-  // The PATIENT name is the page header (one element); each ROW is a visit with
-  // its own doctor + date. We read straight from the list — no drilling in.
-  const patientName = text(sel.patientSelector ? doc.querySelector(sel.patientSelector) : null);
+  // Two real shapes are supported, and the SAME taught selectors work for both:
+  //   • DAY SCHEDULE (the common case): each row is a DIFFERENT appointment —
+  //     patient + doctor (and maybe the time/date) are all read from WITHIN the
+  //     row. This is "show me the day, every patient and their doctor."
+  //   • PATIENT CHART: one patient (a page header) with many visit rows; the
+  //     patient name comes from the header and each row carries a doctor + date.
+  // For each field we read it from the row first and fall back to a page-level
+  // header, so a selector taught either way resolves correctly.
+  const headerName = text(sel.patientSelector ? doc.querySelector(sel.patientSelector) : null);
+  const headerDate = text(sel.dateSelector ? doc.querySelector(sel.dateSelector) : null);
   const rows = [...doc.querySelectorAll(sel.rowSelector)];
   const out = [];
   for (const row of rows) {
     if (out.length >= limit) break;
-    const date = text(sel.dateSelector ? row.querySelector(sel.dateSelector) : null);
+    const rowPatient = text(sel.patientSelector ? row.querySelector(sel.patientSelector) : null);
+    const rowDate = text(sel.dateSelector ? row.querySelector(sel.dateSelector) : null);
     const doctorName = text(sel.doctorSelector ? row.querySelector(sel.doctorSelector) : null);
-    if (doctorName || date) out.push({ patientName, date, doctorName });
+    const patientName = rowPatient || headerName;
+    const date = rowDate || headerDate;
+    // Push a row when it carries its OWN patient (day schedule) or its own
+    // doctor/date (patient chart) — never an empty inherited-only row.
+    if (rowPatient || doctorName || rowDate) out.push({ patientName, date, doctorName });
   }
   return out;
 }
