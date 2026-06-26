@@ -23,7 +23,7 @@ function getLatestRelease() {
       hostname: 'api.github.com',
       path: `/repos/${REPO}/releases/latest`,
       method: 'GET',
-      headers: { 'User-Agent': 'PracticeSync', Accept: 'application/vnd.github+json' },
+      headers: { 'User-Agent': 'Hope Assistant', Accept: 'application/vnd.github+json' },
     }, (res) => {
       if (res.statusCode !== 200) { res.resume(); return reject(new Error('HTTP ' + res.statusCode)); }
       let body = '';
@@ -77,7 +77,7 @@ function download(url, dest, onProgress) {
   return new Promise((resolve, reject) => {
     const fail = (e) => { try { fs.unlink(dest, () => {}); } catch {} reject(e); }; // never leave a truncated .dmg
     const get = (u, redirects) => {
-      https.get(u, { headers: { 'User-Agent': 'PracticeSync' } }, (res) => {
+      https.get(u, { headers: { 'User-Agent': 'Hope Assistant' } }, (res) => {
         if ([301, 302, 303, 307, 308].includes(res.statusCode) && res.headers.location && redirects < 6) {
           res.resume(); return get(new URL(res.headers.location, u).href, redirects + 1);
         }
@@ -98,7 +98,7 @@ function download(url, dest, onProgress) {
 
 /**
  * The "Update now" action: download the new .dmg in-app (with progress), then
- * open it so the user just drags PracticeSync onto Applications. Falls back to a
+ * open it so the user just drags Hope Assistant onto Applications. Falls back to a
  * plain browser download if anything goes wrong. Unsigned apps can't silently
  * self-replace on macOS, so this is the cleanest one-button update there is.
  */
@@ -107,7 +107,7 @@ async function downloadAndOpen({ onStatus } = {}) {
   if (!downloadUrl) { say({ phase: 'error', error: 'Nothing to download yet — check for updates first.' }); return; }
   // Not a direct .dmg (e.g. a release page) → just open it in the browser.
   if (!/\.dmg(\?|$)/i.test(downloadUrl)) { try { shell.openExternal(downloadUrl); } catch {} say({ phase: 'opening' }); return; }
-  const dest = path.join(os.tmpdir(), 'PracticeSync-Update.dmg');
+  const dest = path.join(os.tmpdir(), 'Hope Assistant-Update.dmg');
   try {
     say({ phase: 'downloading', percent: 0 });
     await download(downloadUrl, dest, (p) => say({ phase: 'downloading', percent: p }));

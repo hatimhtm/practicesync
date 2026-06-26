@@ -1,10 +1,10 @@
 {
   "name": "practicesync",
-  "productName": "PracticeSync",
-  "version": "1.0.4",
+  "productName": "Hope Assistant",
+  "version": "1.0.5",
   "description": "Reads patient visits from Practice Fusion and creates the matching coded appointments in SimplePractice — automatically.",
   "main": "src/main/main.js",
-  "author": "PracticeSync",
+  "author": "Hope Assistant",
   "license": "UNLICENSED",
   "private": true,
   "scripts": {
@@ -25,8 +25,8 @@
   },
   "build": {
     "appId": "com.practicesync.app",
-    "productName": "PracticeSync",
-    "copyright": "© 2026 PracticeSync",
+    "productName": "Hope Assistant",
+    "copyright": "© 2026 Hope Assistant",
     "afterPack": "build/afterPack.js",
     "files": [
       "src/**/*",
@@ -65,8 +65,8 @@
       }
     ],
     "dmg": {
-      "title": "PracticeSync",
-      "artifactName": "PracticeSync-Installer.dmg",
+      "title": "Hope Assistant",
+      "artifactName": "HopeAssistant-Installer.dmg",
       "contents": [
         {
           "x": 140,

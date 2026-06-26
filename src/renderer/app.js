@@ -105,7 +105,7 @@ async function refresh() {
 
 /* schedule status cards */
 const SCHED_NOTE = {
-  off: 'Off — PracticeSync runs only when you press <strong>Sync now</strong>.',
+  off: 'Off — Hope Assistant runs only when you press <strong>Sync now</strong>.',
   '6h': 'Runs automatically every 6 hours, plus whenever you press Sync now.',
   daily: 'Runs automatically once a day, plus whenever you press Sync now.',
 };
@@ -579,7 +579,7 @@ async function finishOnboarding() {
   inSetup = false;
   $('#onboard').classList.add('hidden');
   await refresh();
-  toast("All set — PracticeSync is ready.");
+  toast("All set — Hope Assistant is ready.");
 }
 
 $('#obBack').addEventListener('click', () => { $('#obError').classList.add('hidden'); obShow(obStep - 1); });
@@ -687,7 +687,7 @@ window.api.onUpdateStatus((s) => {
       break;
     case 'opening':
       ubTitle.textContent = 'Last step — finish in the window that opened';
-      ubSub.textContent = 'Quit PracticeSync, drag the new version onto Applications (replace the old one), then reopen it.';
+      ubSub.textContent = 'Quit Hope Assistant, drag the new version onto Applications (replace the old one), then reopen it.';
       ubBtn.textContent = 'Open installer again'; ubBtn.disabled = false;
       banner.classList.remove('hidden');
       if (sb) sb.textContent = 'Finish in Finder →';

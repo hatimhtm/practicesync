@@ -3,18 +3,18 @@
 <head>
   <meta charset="UTF-8" />
   <meta http-equiv="Content-Security-Policy" content="default-src 'self'; style-src 'self' 'unsafe-inline'; script-src 'self';" />
-  <title>PracticeSync</title>
+  <title>Hope Assistant</title>
   <link rel="stylesheet" href="styles.css" />
 </head>
 <body>
-  <div class="titlebar"><span class="brand">PracticeSync</span></div>
+  <div class="titlebar"><span class="brand">Hope Assistant</span></div>
 
   <div class="app">
     <aside class="sidebar">
       <div class="logo">
-        <div class="logo-mark">P</div>
+        <div class="logo-mark">H</div>
         <div>
-          <div class="logo-name">PracticeSync</div>
+          <div class="logo-name">Hope Assistant</div>
           <div class="logo-sub">Practice Fusion → SimplePractice</div>
         </div>
       </div>
@@ -62,7 +62,7 @@
         </div>
 
         <div class="card live-card hidden" id="liveCard">
-          <div class="card-k">🤖 Live — watch PracticeSync work</div>
+          <div class="card-k">🤖 Live — watch Hope Assistant work</div>
           <p class="muted" style="font-size:12.5px;margin:0 0 10px">The Chrome window shows the cursor moving and clicking. Here's the running log:</p>
           <div class="live-log" id="liveLog"></div>
         </div>
@@ -86,7 +86,7 @@
         </div>
 
         <div class="callout">
-          <strong>How it works:</strong> you give it patient names. For each one, PracticeSync looks the patient up in
+          <strong>How it works:</strong> you give it patient names. For each one, Hope Assistant looks the patient up in
           Practice Fusion, reads every visit's <em>date and doctor</em>, finds which main doctor they fall under, then
           books the appointment in SimplePractice with that doctor's codes — and saves it. <strong>You watch the whole
           thing happen</strong> in Chrome: the cursor moves, types, and clicks, step by step.
@@ -103,7 +103,7 @@
 
         <div class="card">
           <div class="card-k">Main doctors</div>
-          <p class="muted" style="font-size:13px;margin:2px 0 12px">Each main doctor has a <strong>2-letter code</strong> (you choose it) that PracticeSync adds to every appointment so the visit is filed under the right main doctor — e.g. Caryn = GP, Heather = GO, Karine = GN.</p>
+          <p class="muted" style="font-size:13px;margin:2px 0 12px">Each main doctor has a <strong>2-letter code</strong> (you choose it) that Hope Assistant adds to every appointment so the visit is filed under the right main doctor — e.g. Caryn = GP, Heather = GO, Karine = GN.</p>
           <div class="main-head hidden" id="mainGridHead"><div>Main doctor</div><div>2-letter code</div><div></div></div>
           <div id="mainList"></div>
           <button class="btn" id="addMainBtn">+ Add a main doctor</button>
@@ -139,7 +139,7 @@
       <section class="view hidden" data-view="connect">
         <header class="view-head">
           <h1>Connection</h1>
-          <p class="muted">PracticeSync opens its <strong>own</strong> Chrome window — your everyday Chrome can stay open. Sign in to each site once in that window and it stays signed in next time.</p>
+          <p class="muted">Hope Assistant opens its <strong>own</strong> Chrome window — your everyday Chrome can stay open. Sign in to each site once in that window and it stays signed in next time.</p>
         </header>
 
         <div id="liveSetup">
@@ -216,7 +216,7 @@
       <section class="view hidden" data-view="schedule">
         <header class="view-head">
           <h1>Schedule</h1>
-          <p class="muted">How often PracticeSync runs on its own — in the background, for the patient names you've saved.</p>
+          <p class="muted">How often Hope Assistant runs on its own — in the background, for the patient names you've saved.</p>
         </header>
         <div class="card">
           <div class="card-k">How often to run</div>
@@ -225,7 +225,7 @@
             <button data-val="6h">Every 6 hours</button>
             <button data-val="daily">Daily</button>
           </div>
-          <p class="muted" id="scheduleNote" style="font-size:12.5px;margin:0">Off — PracticeSync runs only when you press <strong>Sync now</strong>.</p>
+          <p class="muted" id="scheduleNote" style="font-size:12.5px;margin:0">Off — Hope Assistant runs only when you press <strong>Sync now</strong>.</p>
         </div>
 
         <div class="grid grid-2">
@@ -250,7 +250,7 @@
       <section class="view hidden" data-view="test">
         <header class="view-head">
           <h1>Test drive</h1>
-          <p class="muted">Watch PracticeSync read data from a real web page and type it into a sheet — the same automation it uses for Practice Fusion → SimplePractice. A Chrome window opens and the cursor does the work, so anyone can see it's real.</p>
+          <p class="muted">Watch Hope Assistant read data from a real web page and type it into a sheet — the same automation it uses for Practice Fusion → SimplePractice. A Chrome window opens and the cursor does the work, so anyone can see it's real.</p>
         </header>
 
         <div class="card">
@@ -283,7 +283,7 @@
       <section class="view hidden" data-view="record">
         <header class="view-head">
           <h1>Record a workflow</h1>
-          <p class="muted">Do the task once — open the sites, click, and type — and PracticeSync watches <strong>silently</strong>. Afterward you pick which actions are the real steps, save it, and it can replay them on its own with the visible cursor. Your logins stay signed in between runs.</p>
+          <p class="muted">Do the task once — open the sites, click, and type — and Hope Assistant watches <strong>silently</strong>. Afterward you pick which actions are the real steps, save it, and it can replay them on its own with the visible cursor. Your logins stay signed in between runs.</p>
         </header>
 
         <div class="card" id="recStartCard">
@@ -334,21 +334,21 @@
 
       <div class="ob-step" data-step="0">
         <div class="ob-hero"><svg viewBox="0 0 24 24" width="30" height="30" fill="none" stroke="#eaf2ff" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12a9 9 0 0 1 9-9 9.75 9.75 0 0 1 6.74 2.74L21 8"/><path d="M21 3v5h-5"/><path d="M21 12a9 9 0 0 1-9 9 9.75 9.75 0 0 1-6.74-2.74L3 16"/><path d="M3 21v-5h5"/></svg></div>
-        <h2>Welcome — let's set up PracticeSync</h2>
+        <h2>Welcome — let's set up Hope Assistant</h2>
         <p>It reads each visit from Practice Fusion and books it in SimplePractice for you — and you'll <strong>watch it work</strong>: the cursor moves, types, and clicks right on the screen.</p>
-        <p class="muted" style="margin-top:10px;font-size:13px">A few quick steps — about five minutes. PracticeSync opens its <strong>own</strong> Chrome window, so you can leave your everyday Chrome open.</p>
+        <p class="muted" style="margin-top:10px;font-size:13px">A few quick steps — about five minutes. Hope Assistant opens its <strong>own</strong> Chrome window, so you can leave your everyday Chrome open.</p>
       </div>
 
       <div class="ob-step hidden" data-step="1">
         <div class="ob-hero"><svg viewBox="0 0 24 24" width="30" height="30" fill="none" stroke="#eaf2ff" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 13c0 5-3.5 7.5-7.66 8.95a1 1 0 0 1-.67-.01C7.5 20.5 4 18 4 13V6a1 1 0 0 1 1-1c2 0 4.5-1.2 6.24-2.72a1.17 1.17 0 0 1 1.52 0C14.51 3.81 17 5 19 5a1 1 0 0 1 1 1z"/><path d="m9 12 2 2 4-4"/></svg></div>
         <h2>Permissions — kept simple</h2>
-        <p>Here's exactly what PracticeSync needs on your Mac. No surprises:</p>
+        <p>Here's exactly what Hope Assistant needs on your Mac. No surprises:</p>
         <div class="ob-points">
           <div class="ob-point"><span>✅</span><div><strong>No special permission required.</strong> Driving Chrome needs no Accessibility, Screen Recording, or anything scary.</div></div>
           <div class="ob-point"><span>🔔</span><div>It may ask permission to <strong>send a notification</strong> when a sync finishes. Allow it for a heads-up, or skip it — your choice.</div></div>
-          <div class="ob-point"><span>🔒</span><div><strong>Patient data never leaves this Mac</strong>, and you sign in inside PracticeSync's own Chrome window — the app never sees a password.</div></div>
+          <div class="ob-point"><span>🔒</span><div><strong>Patient data never leaves this Mac</strong>, and you sign in inside Hope Assistant's own Chrome window — the app never sees a password.</div></div>
         </div>
-        <div class="ob-note" style="margin-top:14px">If macOS ever shows a box about <strong>“App Management,”</strong> just click <strong>Don't Allow</strong> — PracticeSync doesn't need it and works fine without it.</div>
+        <div class="ob-note" style="margin-top:14px">If macOS ever shows a box about <strong>“App Management,”</strong> just click <strong>Don't Allow</strong> — Hope Assistant doesn't need it and works fine without it.</div>
       </div>
 
       <div class="ob-step hidden" data-step="2">

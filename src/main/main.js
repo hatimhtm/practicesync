@@ -16,14 +16,14 @@ const updater = require('./updater');
 let mainWindow = null;
 let tray = null;
 const scheduler = new Scheduler();
-const APP_NAME = 'PracticeSync';
+const APP_NAME = 'Hope Assistant';
 
 function nowISO() { return new Date().toISOString(); }
 
 /** Friendly desktop notification when a run finishes (the one macOS permission
  *  the app actually asks for — and only the first time). Always best-effort. */
 function notify(body) {
-  try { if (Notification.isSupported()) new Notification({ title: 'PracticeSync', body }).show(); } catch {}
+  try { if (Notification.isSupported()) new Notification({ title: 'Hope Assistant', body }).show(); } catch {}
 }
 
 /** Safely send to the renderer (no-op if the window is gone/destroyed). */
@@ -105,7 +105,7 @@ async function performSync(trigger = 'manual', overrides = {}) {
     sendToRenderer('run-finished', result);
     if (!dryRun) {
       if (result.ok) notify(result.created ? `Booked ${result.created} appointment${result.created === 1 ? '' : 's'}${result.unmatched ? ` · ${result.unmatched} not recognized` : ''} ✓` : 'No new appointments to book.');
-      else notify('Sync needs attention — open PracticeSync to see why.');
+      else notify('Sync needs attention — open Hope Assistant to see why.');
     }
     return result;
   } catch (err) {

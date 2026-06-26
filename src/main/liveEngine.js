@@ -35,21 +35,21 @@ function defaultChromeUserDataDir() {
 }
 
 /**
- * A DEDICATED Chrome profile that PracticeSync drives. This is the key to the
+ * A DEDICATED Chrome profile that Hope Assistant drives. This is the key to the
  * "don't close my tabs" requirement: because it's a separate user-data-dir,
  * our automation Chrome runs ALONGSIDE the user's normal Chrome — they never
  * have to quit anything. The user signs into the target sites once in this
  * window and the persistent profile keeps them logged in for future runs.
  */
 function automationUserDataDir() {
-  return path.join(os.homedir(), 'Library', 'Application Support', 'PracticeSync', 'chrome-automation');
+  return path.join(os.homedir(), 'Library', 'Application Support', 'Hope Assistant', 'chrome-automation');
 }
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 /** Remove single-instance lock files in OUR dedicated automation profile (left
- *  behind only if a previous PracticeSync run crashed). Safe because nothing but
- *  PracticeSync ever uses this profile. */
+ *  behind only if a previous Hope Assistant run crashed). Safe because nothing but
+ *  Hope Assistant ever uses this profile. */
 function clearStaleLocks(userDataDir) {
   for (const f of ['SingletonLock', 'SingletonCookie', 'SingletonSocket']) {
     try { fs.unlinkSync(path.join(userDataDir, f)); } catch {}
@@ -73,7 +73,7 @@ async function openAutomationContext(opts = {}) {
   }
   // Drive our OWN dedicated profile (not the user's everyday Chrome), so the
   // user never has to quit their browser — the two run side by side. Clearing
-  // stale locks here is always safe: this directory belongs to PracticeSync.
+  // stale locks here is always safe: this directory belongs to Hope Assistant.
   const userDataDir = opts.userDataDir || automationUserDataDir();
   try { fs.mkdirSync(userDataDir, { recursive: true }); } catch {}
   clearStaleLocks(userDataDir);
@@ -101,12 +101,12 @@ async function openAutomationContext(opts = {}) {
     return { context: await launch() };
   } catch (e) {
     const s = String((e && e.message) || e);
-    // The only thing that can lock OUR profile is a previous PracticeSync window
+    // The only thing that can lock OUR profile is a previous Hope Assistant window
     // that's still open (or crashed). Clear the lock and retry once.
     if (/ProcessSingleton|cannot create|in use|locked|SingletonLock/i.test(s)) {
       clearStaleLocks(userDataDir);
       try { return { context: await launch() }; }
-      catch (e2) { return { error: fail('A PracticeSync browser window is already open — close it and click again.', String((e2 && e2.message) || e2)) }; }
+      catch (e2) { return { error: fail('A Hope Assistant browser window is already open — close it and click again.', String((e2 && e2.message) || e2)) }; }
     }
     return { error: fail('Could not open Chrome. Make sure Google Chrome is installed, then try again.', s) };
   }
@@ -225,7 +225,7 @@ function stageSource() {
       Object.assign(dot.style, { width: '9px', height: '9px', borderRadius: '50%', background: '#3d7bff', flex: '0 0 auto', animation: '__psPulse 1.2s infinite' });
 
       const cur = document.createElement('div'); cur.id = '__ps_cursor';
-      cur.innerHTML = '<svg width="28" height="28" viewBox="0 0 24 24" style="filter:drop-shadow(0 2px 5px rgba(0,0,0,.55))"><path d="M5 2.5l15.5 8.8-6.6 1.4 3.9 6.7-2.9 1.7-3.9-6.7L5 20.6z" fill="#fff" stroke="#3d7bff" stroke-width="1.5"/></svg><span id="__ps_lbl">PracticeSync</span>';
+      cur.innerHTML = '<svg width="28" height="28" viewBox="0 0 24 24" style="filter:drop-shadow(0 2px 5px rgba(0,0,0,.55))"><path d="M5 2.5l15.5 8.8-6.6 1.4 3.9 6.7-2.9 1.7-3.9-6.7L5 20.6z" fill="#fff" stroke="#3d7bff" stroke-width="1.5"/></svg><span id="__ps_lbl">Hope Assistant</span>';
       Object.assign(cur.style, { position: 'fixed', left: '50%', top: '42%', zIndex: '2147483646', pointerEvents: 'none', transition: 'left .6s cubic-bezier(.22,.61,.36,1), top .6s cubic-bezier(.22,.61,.36,1)', transformOrigin: 'top left' });
       const lbl = cur.querySelector('#__ps_lbl');
       Object.assign(lbl.style, { position: 'absolute', left: '24px', top: '22px', background: '#3d7bff', color: '#fff', font: '700 10px -apple-system,sans-serif', padding: '2px 7px', borderRadius: '6px', whiteSpace: 'nowrap', boxShadow: '0 2px 8px rgba(0,0,0,.35)' });
@@ -681,13 +681,13 @@ function writeGallery(dir, manifest) {
       <div class="cap"><b>Step ${m.step}</b> — ${escapeHtmlNode(m.label)}<div class="sel">${escapeHtmlNode(m.selector || '')}</div></div>
       <img src="${escapeHtmlNode(m.screenshot)}" alt="" />
     </div>`).join('');
-  const html = `<!doctype html><meta charset="utf-8"><title>PracticeSync — teach captures</title>
+  const html = `<!doctype html><meta charset="utf-8"><title>Hope Assistant — teach captures</title>
 <style>body{font:14px -apple-system,system-ui,sans-serif;background:#0f1422;color:#eaf0fb;margin:0;padding:26px}
 h1{font-size:18px;margin:0 0 4px} p.sub{color:#9fb3da;margin:0 0 22px;font-size:13px}
 .card{background:#1a2336;border:1px solid #2a3650;border-radius:12px;padding:14px;margin:0 0 16px}
 .cap{margin-bottom:10px} .sel{color:#9fb3da;font:12px ui-monospace,Menlo,monospace;margin-top:4px;word-break:break-all}
 img{max-width:100%;border-radius:8px;border:1px solid #2a3650;display:block}</style>
-<h1>What you taught PracticeSync</h1><p class="sub">${manifest.length} screenshot(s) — one per click. Each card shows the field, the element the app will use, and what the screen looked like.</p>${cards}`;
+<h1>What you taught Hope Assistant</h1><p class="sub">${manifest.length} screenshot(s) — one per click. Each card shows the field, the element the app will use, and what the screen looked like.</p>${cards}`;
   try { fs.writeFileSync(path.join(dir, 'index.html'), html); } catch {}
 }
 

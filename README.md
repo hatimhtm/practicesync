@@ -1,4 +1,4 @@
-# PracticeSync
+# Hope Assistant
 
 A macOS app that reads each patient visit from **Practice Fusion** (patient name,
 date, diagnosing doctor) and books the matching coded appointment in
@@ -14,14 +14,14 @@ and clicks.
 ## Test drive (built in)
 
 The **Test drive** screen lets anyone demo the engine with no logins or setup:
-paste any web page (or tap a preset like "Largest cities"), and PracticeSync
+paste any web page (or tap a preset like "Largest cities"), and Hope Assistant
 opens a Chrome window, reads the first table off the page, and types each row —
 with the visible cursor — into a bundled spreadsheet. It's the same automation
 that powers the real Practice Fusion → SimplePractice sync.
 
 ## Watch it work
 
-During a run, PracticeSync injects a visible cursor + status HUD into the
+During a run, Hope Assistant injects a visible cursor + status HUD into the
 controlled Chrome window (`src/main/liveEngine.js` → the "stage"): the pointer
 moves to each field, types character by character, and clicks with a ripple, so
 the user and their bosses can see exactly what's happening. The app window
@@ -64,7 +64,7 @@ end to end, no logins, no internet. `HEADLESS=1 npm run demo` runs it as a test.
 ## Build a local installer
 
 ```bash
-npm run dist       # builds the Apple Intelligence helper, then dist/PracticeSync-Installer.dmg
+npm run dist       # builds the Apple Intelligence helper, then dist/Hope Assistant-Installer.dmg
 npm run make-icon  # regenerate the app + tray icons (build/make-icon.js)
 ```
 
