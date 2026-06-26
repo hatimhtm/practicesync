@@ -582,12 +582,13 @@ async function waitForReady(page) {
   try { await page.evaluate(() => { const e = document.getElementById('__ps_gate'); if (e) e.remove(); window.__psGate = null; }); } catch {}
 }
 
-/* The in-page teach overlay: a calm status pill at the top (step counter +
- * progress dots + the field to click), a hover outline that follows the cursor,
- * a GREEN "selected" outline once you click an element, and a control bar with
- * Back / Skip / Next. Clicking only SELECTS — nothing advances until "Next", so
- * the user is never rushed and can re-click to fix a choice. Re-installed on
- * every page load so the user can freely navigate Chrome. */
+/* The in-page teach overlay — NON-BLOCKING. The user navigates the site
+ * completely normally (clicks open menus, links, the client section — nothing is
+ * intercepted). A hover outline follows the cursor; when they reach the element
+ * the app needs, they hover it and press "Mark this field" (or ⌘⇧M), which
+ * captures a stable selector. Back / Skip / Next manage the short list of things
+ * the app needs pointed out. Re-installed on every page load, so it follows the
+ * user wherever they navigate. */
 function pickerSource() {
   return (cfg) => {
     try {
@@ -602,18 +603,18 @@ function pickerSource() {
       Object.assign(top.style, { position: 'fixed', top: '14px', left: '50%', transform: 'translateX(-50%)', zIndex: '2147483647', background: 'rgba(17,24,40,.97)', color: '#eaf0fb', font: '600 14px/1.4 -apple-system,system-ui,sans-serif', padding: '12px 20px', borderRadius: '14px', boxShadow: '0 12px 34px rgba(0,0,0,.5)', border: '1px solid rgba(122,160,255,.45)', pointerEvents: 'none', maxWidth: '92vw', textAlign: 'center' });
       let dots = '';
       for (let d = 0; d < cfg.total; d++) { const col = d < cfg.index - 1 ? '#34d399' : (d === cfg.index - 1 ? '#3d7bff' : 'rgba(255,255,255,.25)'); dots += '<span style="display:inline-block;width:7px;height:7px;border-radius:50%;margin:0 2px;vertical-align:middle;background:' + col + '"></span>'; }
-      top.innerHTML = '<div style="font-size:11px;letter-spacing:.5px;color:#9fb3da;margin-bottom:6px">STEP ' + cfg.index + ' OF ' + cfg.total + '&nbsp;&nbsp;' + dots + '</div>'
+      top.innerHTML = '<div style="font-size:11px;letter-spacing:.5px;color:#9fb3da;margin-bottom:6px">POINT OUT ' + cfg.index + ' OF ' + cfg.total + '&nbsp;&nbsp;' + dots + '</div>'
         + '<div style="font-size:15px;font-weight:700">' + cfg.label + '</div>'
-        + '<div id="__ps_teach_status" style="font-size:12px;color:#9fb3da;margin-top:6px">Move your mouse over the field and click it.</div>';
+        + '<div id="__ps_teach_status" style="font-size:12px;color:#9fb3da;margin-top:6px">Navigate freely — clicking works normally. Hover this on the page, then press <b>Mark this field</b>.</div>';
       ui.appendChild(top);
 
-      // hover + selected outlines
+      // hover + marked outlines
       const hover = document.createElement('div');
       Object.assign(hover.style, { position: 'fixed', zIndex: '2147483645', border: '2px dashed #3d7bff', borderRadius: '7px', background: 'rgba(61,123,255,.10)', pointerEvents: 'none', display: 'none' });
       ui.appendChild(hover);
       const pick = document.createElement('div');
       Object.assign(pick.style, { position: 'fixed', zIndex: '2147483645', border: '3px solid #34d399', borderRadius: '7px', background: 'rgba(52,211,153,.16)', boxShadow: '0 0 0 2px rgba(255,255,255,.5)', pointerEvents: 'none', display: 'none' });
-      const pickTag = document.createElement('div'); pickTag.textContent = '✓ selected';
+      const pickTag = document.createElement('div'); pickTag.textContent = '✓ marked';
       Object.assign(pickTag.style, { position: 'absolute', top: '-22px', left: '0', background: '#34d399', color: '#04240f', font: '700 11px -apple-system,sans-serif', padding: '2px 7px', borderRadius: '5px', whiteSpace: 'nowrap' });
       pick.appendChild(pickTag); ui.appendChild(pick);
 
@@ -627,8 +628,9 @@ function pickerSource() {
       };
       const backBtn = mkBtn('◀ Back', false, !cfg.hasBack);
       const skipBtn = cfg.optional ? mkBtn('Skip this', false, false) : null;
-      const nextBtn = mkBtn(cfg.index === cfg.total ? '✓ Finish' : 'Next step ▶', true, true);
-      bar.appendChild(backBtn); if (skipBtn) bar.appendChild(skipBtn); bar.appendChild(nextBtn);
+      const markBtn = mkBtn('✓ Mark this field', false, false);
+      const nextBtn = mkBtn(cfg.index === cfg.total ? '✓ Finish' : 'Next ▶', true, true);
+      bar.appendChild(backBtn); if (skipBtn) bar.appendChild(skipBtn); bar.appendChild(markBtn); bar.appendChild(nextBtn);
       ui.appendChild(bar);
       root.appendChild(ui);
 
@@ -651,31 +653,31 @@ function pickerSource() {
         return parts.join(' > ');
       }
 
-      const ourEls = [top, hover, pick, pickTag, bar, backBtn, nextBtn]; if (skipBtn) ourEls.push(skipBtn);
+      const ourEls = [top, hover, pick, pickTag, bar, backBtn, markBtn, nextBtn]; if (skipBtn) ourEls.push(skipBtn);
       const ours = (el) => el && (ourEls.indexOf(el) >= 0 || ui.contains(el));
-      let selectedEl = null; let selectedSel = '';
+      let selectedEl = null; let selectedSel = ''; let lastHovered = null;
       function drawPick() { if (!selectedEl) { pick.style.display = 'none'; return; } const r = selectedEl.getBoundingClientRect(); pick.style.display = 'block'; pick.style.left = r.left + 'px'; pick.style.top = r.top + 'px'; pick.style.width = r.width + 'px'; pick.style.height = r.height + 'px'; }
-      function setStatus(t) { const s = document.getElementById('__ps_teach_status'); if (s) s.textContent = t; }
+      function setStatus(t) { const s = document.getElementById('__ps_teach_status'); if (s) s.innerHTML = t; }
       function onMove(e) {
         const el = e.target;
-        if (!el || ours(el)) { hover.style.display = 'none'; return; }
+        if (!el || ours(el)) { hover.style.display = 'none'; return; } // over our UI → keep lastHovered so Mark still works
         const r = el.getBoundingClientRect();
         if (!r.width && !r.height) { hover.style.display = 'none'; return; }
+        lastHovered = el;
         hover.style.display = 'block'; hover.style.left = r.left + 'px'; hover.style.top = r.top + 'px'; hover.style.width = r.width + 'px'; hover.style.height = r.height + 'px';
       }
-      function onClick(e) {
-        if (window.__psTeachBinding !== cfg.binding) return;
-        if (ours(e.target)) return; // our own buttons handle themselves
-        e.preventDefault(); e.stopPropagation();
-        const stop = cfg.ancestorSelector ? e.target.closest(cfg.ancestorSelector) : null;
-        selectedEl = e.target; selectedSel = sel(e.target, stop, stop);
-        drawPick(); hover.style.display = 'none';
+      // Mark the element the cursor is over — NO clicking of the page, so links
+      // and buttons aren't triggered just to point them out.
+      function markCurrent() {
+        if (!lastHovered) { setStatus('Hover the field on the page first, then press <b>Mark this field</b>.'); return; }
+        const stop = cfg.ancestorSelector ? lastHovered.closest(cfg.ancestorSelector) : null;
+        selectedEl = lastHovered; selectedSel = sel(lastHovered, stop, stop);
+        drawPick();
         nextBtn.disabled = false; nextBtn.style.opacity = '1'; nextBtn.style.cursor = 'pointer';
-        setStatus('Selected ✓  —  press Next step, or click a different element to change it.');
+        setStatus('Marked ✓ — press <b>Next</b>, or hover a different element and Mark to change it.');
         try { if (window[cfg.shotBinding]) window[cfg.shotBinding](selectedSel); } catch {}
       }
       function finish(action) {
-        document.removeEventListener('click', onClick, true);
         document.removeEventListener('mousemove', onMove, true);
         document.removeEventListener('keydown', onKey, true);
         window.removeEventListener('scroll', drawPick, true);
@@ -683,12 +685,17 @@ function pickerSource() {
         try { ui.remove(); } catch {}
         try { if (window[cfg.binding]) window[cfg.binding](action); } catch {}
       }
-      function onKey(e) { if (e.key === 'Escape' && cfg.optional) { e.preventDefault(); finish({ action: 'skip' }); } }
-      backBtn.addEventListener('click', () => { if (cfg.hasBack) finish({ action: 'back' }); });
-      if (skipBtn) skipBtn.addEventListener('click', () => finish({ action: 'skip' }));
-      nextBtn.addEventListener('click', () => { if (!nextBtn.disabled) finish({ action: 'next', selector: selectedSel }); });
+      function onKey(e) {
+        if (e.key === 'Escape' && cfg.optional) { e.preventDefault(); finish({ action: 'skip' }); return; }
+        if ((e.metaKey || e.ctrlKey) && e.shiftKey && (e.key === 'M' || e.key === 'm')) { e.preventDefault(); markCurrent(); }
+      }
+      markBtn.addEventListener('click', (e) => { e.preventDefault(); e.stopPropagation(); markCurrent(); });
+      backBtn.addEventListener('click', (e) => { e.preventDefault(); e.stopPropagation(); if (cfg.hasBack) finish({ action: 'back' }); });
+      if (skipBtn) skipBtn.addEventListener('click', (e) => { e.preventDefault(); e.stopPropagation(); finish({ action: 'skip' }); });
+      nextBtn.addEventListener('click', (e) => { e.preventDefault(); e.stopPropagation(); if (!nextBtn.disabled) finish({ action: 'next', selector: selectedSel }); });
+      // NOTE: deliberately NO document 'click' listener — the user's clicks must
+      // pass straight through so they can navigate the site normally.
       document.addEventListener('mousemove', onMove, true);
-      document.addEventListener('click', onClick, true);
       document.addEventListener('keydown', onKey, true);
       window.addEventListener('scroll', drawPick, true);
       window.addEventListener('resize', drawPick);

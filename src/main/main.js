@@ -314,23 +314,23 @@ function registerIpc() {
     if (!url) return { ok: false, error: 'Enter the page address first.' };
     const steps = target === 'pf'
       ? [
-          { key: 'searchBox', label: 'Click the patient SEARCH box, type a patient name, then press Next' },
-          { key: 'firstResult', label: 'Click the matching PATIENT in the results (Next opens them)', allowDefault: true },
-          { key: 'patientSelector', label: 'Click the PATIENT NAME at the top of their chart' },
-          { key: 'rowSelector', label: 'Click one VISIT row in the list' },
-          { key: 'doctorSelector', label: 'Click the DOCTOR name inside that visit row', relativeTo: 'rowSelector' },
-          { key: 'dateSelector', label: 'Click the DATE inside that visit row', relativeTo: 'rowSelector' },
+          { key: 'searchBox', label: 'The patient SEARCH box (click in it and type a name so results appear)' },
+          { key: 'firstResult', label: 'A matching PATIENT in the results (Next will open them)', allowDefault: true },
+          { key: 'patientSelector', label: 'The PATIENT NAME at the top of their chart' },
+          { key: 'rowSelector', label: 'One VISIT row in the list' },
+          { key: 'doctorSelector', label: 'The DOCTOR name inside that visit row', relativeTo: 'rowSelector' },
+          { key: 'dateSelector', label: 'The DATE inside that visit row', relativeTo: 'rowSelector' },
         ]
       : [
-          { key: 'newApptButton', label: 'Click the "New appointment" button (Next opens the form)', allowDefault: true },
-          { key: 'patientField', label: 'Click the PATIENT NAME field' },
-          { key: 'mainDoctorField', label: 'Click the CLINICIAN (main doctor) field' },
-          { key: 'dateField', label: 'Click the DATE field' },
-          { key: 'codeField', label: 'Click the CPT CODE / service field' },
-          { key: 'unitsField', label: 'Click the UNITS field' },
-          { key: 'modifierField', label: 'Click the MODIFIER field (GP/GO/GN and 59 go here)' },
-          { key: 'addServiceBtn', label: 'Click the "Add service / Add line" button — or Skip if there isn\'t one', optional: true },
-          { key: 'saveButton', label: 'Click the SAVE button' },
+          { key: 'newApptButton', label: 'The "New appointment" button (Next will open the form)', allowDefault: true },
+          { key: 'patientField', label: 'The PATIENT NAME field' },
+          { key: 'mainDoctorField', label: 'The CLINICIAN (main doctor) field' },
+          { key: 'dateField', label: 'The DATE field' },
+          { key: 'codeField', label: 'The CPT CODE / service field' },
+          { key: 'unitsField', label: 'The UNITS field' },
+          { key: 'modifierField', label: 'The MODIFIER field (GP/GO/GN and 59 go here)' },
+          { key: 'addServiceBtn', label: 'The "Add service / Add line" button — or Skip if there isn\'t one', optional: true },
+          { key: 'saveButton', label: 'The SAVE button' },
         ];
     // Each click is screenshotted into a per-session folder (with a gallery)
     // so the user can see exactly what they taught and spot anything wrong.
