@@ -21,10 +21,12 @@ const PF = {
   scheduleUrl: 'https://static.practicefusion.com/apps/ehr/index.html#/PF/schedule/scheduler/agenda',
   // The "security check" (phone 2FA) page — the app pauses here for the user.
   twoFactorUrlMatch: '/login/securitycheck',
+  // Practice Fusion serves more than one login-page variant, so each field lists
+  // candidate selectors (tried in order until one is present + visible).
   login: {
-    username: '#inputUsername',
-    password: '#passwordDiv input[type="password"]',
-    submit: '#loginButton',
+    username: ['#inputUsername', 'input[type="email"]', 'input[name*="ser" i]'],
+    password: ['#inputPswd', 'input[type="password"]'],
+    submit: ['#loginButton', 'button.btn-login', 'button[type="submit"]'],
   },
   nav: {
     schedule: '[data-element="left-navigation-schedule"]',
@@ -52,9 +54,9 @@ const SP = {
   // Opening this route directly pops the new-appointment dialog.
   newApptUrl: 'https://secure.simplepractice.com/calendar/appointments/new',
   login: {
-    email: '#user_email',
-    password: '#user_password',
-    submit: '#submitBtn',
+    email: ['#user_email', 'input[type="email"]', 'input[name="user[email]"]'],
+    password: ['#user_password', 'input[type="password"]', 'input[name="user[password]"]'],
+    submit: ['#submitBtn', 'button[type="submit"]', 'input[type="submit"]'],
   },
   // The default location for the real practice (not selectable in the demo).
   defaultLocation: 'High Quality Home Therapy LLC',

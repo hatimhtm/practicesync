@@ -19,18 +19,26 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 /* Type into a field the "watch it work" way: the visible cursor glides to the
  * field and the value is typed character by character (same stage the test drive
- * uses). Best-effort — if the visuals fail, the plain fill still happens. */
+ * uses). VERIFIES the value actually landed (reads it back) and falls back to a
+ * direct fill — returns true only if the field really holds the value. */
 async function typeVisibly(page, sel, value, visual) {
+  const el = await page.$(sel);
+  if (!el) return false; // selector didn't match — caller logs + screenshots
   if (visual) { try { await liveEngine.ensureStage(page); await liveEngine.stage(page, 'moveTo', sel); } catch {} }
-  try { await page.click(sel, { timeout: 8000 }).catch(() => {}); } catch {}
-  try { await page.fill(sel, '').catch(() => {}); } catch {}
-  try { await page.type(sel, String(value), { delay: visual ? 55 : 0 }); } catch {}
+  try { await el.click({ timeout: 5000 }).catch(() => {}); } catch {}
+  try { await el.fill(''); await el.type(String(value), { delay: visual ? 55 : 0 }); } catch {}
+  let got = String((await el.inputValue().catch(() => '')) || '').trim();
+  if (got !== String(value).trim()) { try { await el.fill(String(value)); got = String((await el.inputValue().catch(() => '')) || '').trim(); } catch {} }
   if (visual) { try { await liveEngine.stage(page, 'press'); } catch {} }
+  return got === String(value).trim();
 }
 async function clickVisibly(page, sel, visual) {
+  const el = await page.$(sel);
+  if (!el) return false;
   if (visual) { try { await liveEngine.ensureStage(page); await liveEngine.stage(page, 'moveTo', sel); } catch {} }
-  try { await page.click(sel, { timeout: 8000 }); } catch {}
+  try { await el.click({ timeout: 8000 }); } catch {}
   if (visual) { try { await liveEngine.stage(page, 'press'); } catch {} }
+  return true;
 }
 
 /* Close promo / upgrade overlays so a run is never blocked by a popup. */
@@ -57,6 +65,21 @@ async function visible(page, sel) {
   try { const el = await page.$(sel); return !!el && (await el.isVisible().catch(() => false)); } catch { return false; }
 }
 
+/* Wait (up to timeoutMs) for ANY of the candidate selectors to be present +
+ * visible, and return the one that matched (or null). Handles both page
+ * variants and the Ember app rendering the form a beat after navigation. */
+async function firstSelector(page, candidates, timeoutMs = 12000) {
+  const list = Array.isArray(candidates) ? candidates : [candidates];
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    for (const s of list) {
+      try { const el = await page.$(s); if (el && await el.isVisible().catch(() => false)) return s; } catch {}
+    }
+    await sleep(300);
+  }
+  return null;
+}
+
 /* Banner shown in the controlled window while we wait for the user's 2FA code. */
 function twoFactorBannerSource() {
   return () => {
@@ -75,25 +98,36 @@ const removeBanner = (page) => page.evaluate(() => { const e = document.getEleme
  * Log in to Practice Fusion. Pauses (up to maxWaitMs) on the phone-2FA page.
  * Returns { ok } once the EHR is reached, or { ok:false, error }.
  */
-async function loginPracticeFusion(page, creds, { onStep, maxWaitMs = 5 * 60 * 1000, visual = true } = {}) {
+async function loginPracticeFusion(page, creds, { onStep, maxWaitMs = 5 * 60 * 1000, visual = true, shot = null } = {}) {
   const { PF } = presets;
+  const snap = async (n) => { try { if (shot) await shot(n); } catch {} };
   if (!creds || !creds.username || !creds.password) return { ok: false, error: 'Practice Fusion username/password not set.' };
   say(onStep, 'Opening Practice Fusion…');
   try { await page.goto(PF.loginUrl, { waitUntil: 'domcontentloaded', timeout: 45000 }); } catch {}
   await dismissPopups(page);
+  await sleep(1500); // let any "already signed in" redirect / Ember render settle
+  await snap('pf-1-login-page');
 
   // Already signed in? (the dedicated profile may remember the session)
   if (/#\/PF\//.test(page.url())) { say(onStep, 'Already signed in to Practice Fusion.'); return { ok: true }; }
 
-  // Fill + submit when the form is there — with the visible cursor.
-  if (await visible(page, PF.login.username)) {
+  // Wait for the login form (either page variant), then fill + submit with the cursor.
+  const uSel = await firstSelector(page, PF.login.username, 15000);
+  const pSel = uSel ? await firstSelector(page, PF.login.password, 5000) : null;
+  if (uSel && pSel) {
     say(onStep, 'Signing in to Practice Fusion…');
     if (visual) { try { await liveEngine.ensureStage(page); await liveEngine.stage(page, 'status', 'Signing in to Practice Fusion…'); } catch {} }
-    try {
-      await typeVisibly(page, PF.login.username, creds.username, visual);
-      await typeVisibly(page, PF.login.password, creds.password, visual);
-      await clickVisibly(page, PF.login.submit, visual);
-    } catch (e) { return { ok: false, error: 'Could not fill the Practice Fusion login form.' }; }
+    const okU = await typeVisibly(page, uSel, creds.username, visual);
+    const okP = await typeVisibly(page, pSel, creds.password, visual);
+    await snap('pf-2-filled');
+    if (!okU || !okP) { await snap('pf-2-fill-FAILED'); return { ok: false, error: `Could not fill the ${!okU ? 'username' : 'password'} field (it rendered but the value didn’t take).` }; }
+    say(onStep, 'Filled username + password ✓ — clicking Log in…');
+    const sSel = await firstSelector(page, PF.login.submit, 4000);
+    if (sSel) await clickVisibly(page, sSel, visual);
+    await page.waitForTimeout(2500);
+    await snap('pf-3-after-login');
+  } else if (!/#\/PF\//.test(page.url())) {
+    await snap('pf-no-form'); return { ok: false, error: 'Could not find the Practice Fusion login form.' };
   }
 
   // Wait for: the EHR (success), or the 2FA security-check page (pause).
@@ -101,14 +135,15 @@ async function loginPracticeFusion(page, creds, { onStep, maxWaitMs = 5 * 60 * 1
   let warned = false;
   while (Date.now() < deadline) {
     const url = page.url();
-    if (/#\/PF\//.test(url)) { await removeBanner(page); say(onStep, 'Signed in to Practice Fusion ✓'); return { ok: true }; }
+    if (/#\/PF\//.test(url)) { await removeBanner(page); await snap('pf-4-signed-in'); say(onStep, 'Signed in to Practice Fusion ✓'); return { ok: true }; }
     if (url.includes(PF.twoFactorUrlMatch)) {
-      if (!warned) { say(onStep, 'Practice Fusion needs your phone code — enter it in the window.'); warned = true; }
+      if (!warned) { say(onStep, 'Practice Fusion needs your phone code — enter it in the window.'); await snap('pf-3b-2fa'); warned = true; }
       await page.evaluate(`(${twoFactorBannerSource().toString()})()`).catch(() => {});
     }
     await sleep(1000);
   }
-  return { ok: false, error: 'Timed out waiting for Practice Fusion sign-in / verification.' };
+  await snap('pf-timeout');
+  return { ok: false, error: 'Timed out waiting for Practice Fusion sign-in / verification — see inspect-output/run-*.png.' };
 }
 
 /**
@@ -121,17 +156,20 @@ async function loginSimplePractice(page, creds, { onStep, maxWaitMs = 90 * 1000,
   try { await page.goto(SP.calendarUrl, { waitUntil: 'domcontentloaded', timeout: 45000 }); } catch {}
   await dismissPopups(page);
 
-  if (/secure\.simplepractice\.com\/calendar/.test(page.url()) && !(await visible(page, SP.login.email))) {
+  await sleep(1200);
+  const eSel = await firstSelector(page, SP.login.email, 8000);
+  if (/secure\.simplepractice\.com\/calendar/.test(page.url()) && !eSel) {
     say(onStep, 'Already signed in to SimplePractice.'); return { ok: true };
   }
-  if (await visible(page, SP.login.email)) {
+  if (eSel) {
+    const pSel = await firstSelector(page, SP.login.password, 5000);
     say(onStep, 'Signing in to SimplePractice…');
     if (visual) { try { await liveEngine.ensureStage(page); await liveEngine.stage(page, 'status', 'Signing in to SimplePractice…'); } catch {} }
-    try {
-      await typeVisibly(page, SP.login.email, creds.email, visual);
-      await typeVisibly(page, SP.login.password, creds.password, visual);
-      await clickVisibly(page, SP.login.submit, visual);
-    } catch { return { ok: false, error: 'Could not fill the SimplePractice login form.' }; }
+    const okE = await typeVisibly(page, eSel, creds.email, visual);
+    const okP = pSel ? await typeVisibly(page, pSel, creds.password, visual) : false;
+    if (!okE || !okP) return { ok: false, error: `Could not fill the SimplePractice ${!okE ? 'email' : 'password'} field.` };
+    const sSel = await firstSelector(page, SP.login.submit, 4000);
+    if (sSel) await clickVisibly(page, sSel, visual);
   }
 
   const deadline = Date.now() + maxWaitMs;
