@@ -50,6 +50,8 @@ function loadSecrets() {
     step('Opening the Schedule…');
     await page.goto(presets.PF.scheduleUrl, { waitUntil: 'domcontentloaded' }).catch(() => {});
     await dismissPopups(page);
+    await live.ensureStage(page).catch(() => {});
+    await live.announce(page, step, 'Reading the day’s appointments…').catch(() => {});
     try { await page.waitForSelector(presets.PF.selectors.rowSelector, { timeout: 20000 }); } catch {}
     await sleep(1200);
     await dismissPopups(page);
@@ -69,6 +71,7 @@ function loadSecrets() {
     }
     const matched = planned.filter((p) => p.matched).length;
     console.log(`\n  ${matched}/${planned.length} ready to book (read-only — nothing was booked).`);
+    await live.stage(page, 'done', `Read ${planned.length} appointment(s) — ${matched} ready to book`).catch(() => {});
 
     try { fs.mkdirSync('inspect-output', { recursive: true }); await page.screenshot({ path: 'inspect-output/run-schedule.png' }); console.log('  screenshot: inspect-output/run-schedule.png'); } catch {}
     console.log('\n  Leaving the window open for 20s so you can see it…');

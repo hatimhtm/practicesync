@@ -12,9 +12,26 @@
  */
 
 const presets = require('./presets');
+const liveEngine = require('./liveEngine');
 
 const say = (onStep, m) => { try { if (typeof onStep === 'function') onStep(m); } catch {} };
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+/* Type into a field the "watch it work" way: the visible cursor glides to the
+ * field and the value is typed character by character (same stage the test drive
+ * uses). Best-effort — if the visuals fail, the plain fill still happens. */
+async function typeVisibly(page, sel, value, visual) {
+  if (visual) { try { await liveEngine.ensureStage(page); await liveEngine.stage(page, 'moveTo', sel); } catch {} }
+  try { await page.click(sel, { timeout: 8000 }).catch(() => {}); } catch {}
+  try { await page.fill(sel, '').catch(() => {}); } catch {}
+  try { await page.type(sel, String(value), { delay: visual ? 55 : 0 }); } catch {}
+  if (visual) { try { await liveEngine.stage(page, 'press'); } catch {} }
+}
+async function clickVisibly(page, sel, visual) {
+  if (visual) { try { await liveEngine.ensureStage(page); await liveEngine.stage(page, 'moveTo', sel); } catch {} }
+  try { await page.click(sel, { timeout: 8000 }); } catch {}
+  if (visual) { try { await liveEngine.stage(page, 'press'); } catch {} }
+}
 
 /* Close promo / upgrade overlays so a run is never blocked by a popup. */
 async function dismissPopups(page) {
@@ -58,7 +75,7 @@ const removeBanner = (page) => page.evaluate(() => { const e = document.getEleme
  * Log in to Practice Fusion. Pauses (up to maxWaitMs) on the phone-2FA page.
  * Returns { ok } once the EHR is reached, or { ok:false, error }.
  */
-async function loginPracticeFusion(page, creds, { onStep, maxWaitMs = 5 * 60 * 1000 } = {}) {
+async function loginPracticeFusion(page, creds, { onStep, maxWaitMs = 5 * 60 * 1000, visual = true } = {}) {
   const { PF } = presets;
   if (!creds || !creds.username || !creds.password) return { ok: false, error: 'Practice Fusion username/password not set.' };
   say(onStep, 'Opening Practice Fusion…');
@@ -68,13 +85,14 @@ async function loginPracticeFusion(page, creds, { onStep, maxWaitMs = 5 * 60 * 1
   // Already signed in? (the dedicated profile may remember the session)
   if (/#\/PF\//.test(page.url())) { say(onStep, 'Already signed in to Practice Fusion.'); return { ok: true }; }
 
-  // Fill + submit when the form is there.
+  // Fill + submit when the form is there — with the visible cursor.
   if (await visible(page, PF.login.username)) {
     say(onStep, 'Signing in to Practice Fusion…');
+    if (visual) { try { await liveEngine.ensureStage(page); await liveEngine.stage(page, 'status', 'Signing in to Practice Fusion…'); } catch {} }
     try {
-      await page.fill(PF.login.username, creds.username);
-      await page.fill(PF.login.password, creds.password);
-      await page.click(PF.login.submit);
+      await typeVisibly(page, PF.login.username, creds.username, visual);
+      await typeVisibly(page, PF.login.password, creds.password, visual);
+      await clickVisibly(page, PF.login.submit, visual);
     } catch (e) { return { ok: false, error: 'Could not fill the Practice Fusion login form.' }; }
   }
 
@@ -96,7 +114,7 @@ async function loginPracticeFusion(page, creds, { onStep, maxWaitMs = 5 * 60 * 1
 /**
  * Log in to SimplePractice (no 2FA). Returns { ok } once the calendar is reached.
  */
-async function loginSimplePractice(page, creds, { onStep, maxWaitMs = 90 * 1000 } = {}) {
+async function loginSimplePractice(page, creds, { onStep, maxWaitMs = 90 * 1000, visual = true } = {}) {
   const { SP } = presets;
   if (!creds || !creds.email || !creds.password) return { ok: false, error: 'SimplePractice email/password not set.' };
   say(onStep, 'Opening SimplePractice…');
@@ -108,10 +126,11 @@ async function loginSimplePractice(page, creds, { onStep, maxWaitMs = 90 * 1000 
   }
   if (await visible(page, SP.login.email)) {
     say(onStep, 'Signing in to SimplePractice…');
+    if (visual) { try { await liveEngine.ensureStage(page); await liveEngine.stage(page, 'status', 'Signing in to SimplePractice…'); } catch {} }
     try {
-      await page.fill(SP.login.email, creds.email);
-      await page.fill(SP.login.password, creds.password);
-      await page.click(SP.login.submit);
+      await typeVisibly(page, SP.login.email, creds.email, visual);
+      await typeVisibly(page, SP.login.password, creds.password, visual);
+      await clickVisibly(page, SP.login.submit, visual);
     } catch { return { ok: false, error: 'Could not fill the SimplePractice login form.' }; }
   }
 
