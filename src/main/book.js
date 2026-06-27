@@ -67,19 +67,13 @@ async function typeaheadSelect(page, triggerSel, value, onStep, label, searchSel
     await sleep(350);
     if (searchSel && await page.$(searchSel)) { await page.fill(searchSel, '').catch(() => {}); await page.type(searchSel, String(value), { delay: 12 }); }
     else { await page.keyboard.type(String(value), { delay: 12 }); }
-    await sleep(650);
+    await sleep(600);
     const picked = await clickOptionMatching(page, value);
-    // No match (e.g. a location that only exists on the real account) → close the
-    // dropdown cleanly (Escape ×2 + blur) so it can't linger over the Save button,
-    // and move on fast instead of stalling.
-    if (!picked) {
-      await page.keyboard.press('Escape').catch(() => {});
-      await sleep(120);
-      await page.keyboard.press('Escape').catch(() => {});
-      try { await page.evaluate(() => document.activeElement && document.activeElement.blur && document.activeElement.blur()); } catch {}
-    }
+    // NEVER press Escape here — in SimplePractice that closes the whole
+    // appointment dialog (which is what made "Save button not found"). If there's
+    // no match we just leave the field and move on.
     await liveEngine.stage(page, 'press');
-    say(onStep, `${label}: ${value}${picked ? ' ✓' : ' (not on this account — left as is)'}`);
+    say(onStep, `${label}: ${value}${picked ? ' ✓' : ' (left as is)'}`);
     return picked;
   } catch { return false; }
 }
@@ -132,10 +126,10 @@ async function bookAppointment(page, appointment, { onStep, dryRun = true, overr
     }
   }
 
-  // 4) LOCATION — the practice default (real account: "High Quality Home Therapy LLC").
-  if (presets.SP.defaultLocation && await page.$(S.locationTrigger)) {
-    await typeaheadSelect(page, S.locationTrigger, presets.SP.defaultLocation, onStep, 'Location', S.locationSearchInput);
-  }
+  // 4) LOCATION — intentionally LEFT ALONE. SimplePractice already defaults the
+  // appointment to a valid location, and searching for one that isn't on the
+  // account just stalls the form. The practice's real location is the default
+  // there anyway, so we never touch this field.
 
   // SERVICES — one line per code (native <select>, verified). Units + modifiers
   // are TODO(real): filled when those inputs exist (absent in the demo dialog).
@@ -156,13 +150,16 @@ async function bookAppointment(page, appointment, { onStep, dryRun = true, overr
     (svc.modifiers || []).forEach(async (m, mi) => { if (modInputs[mi]) await modInputs[mi].fill(String(m)).catch(() => {}); });
   }
 
-  if (dryRun) { say(onStep, 'Filled (dry run — not saved).'); return { ok: true, dryRun: true }; }
+  if (dryRun) {
+    const sv = await page.$(S.saveButton);
+    const dis = sv ? await sv.isDisabled().catch(() => true) : null;
+    say(onStep, `Filled (dry run — not saved). Save button: ${sv ? (dis ? 'found but disabled' : 'found + ENABLED ✓') : 'NOT FOUND'}`);
+    return { ok: true, dryRun: true };
+  }
 
-  // SAVE — the button enables once required fields are valid. Make sure no
-  // dropdown is still open over it, then click with a bounded timeout so it can
-  // never hang for 30s if something briefly overlaps it.
-  try { await page.keyboard.press('Escape'); } catch {}
-  await sleep(150);
+  // SAVE — the button enables once required fields are valid. Bounded click +
+  // a direct JS-click fallback so it can never hang. (No Escape anywhere — that
+  // closes SimplePractice's dialog.)
   const save = await page.$(S.saveButton);
   if (!save) return { ok: false, error: 'Save button not found.' };
   await liveEngine.stage(page, 'moveTo', S.saveButton);
