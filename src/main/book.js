@@ -57,17 +57,27 @@ async function clickOptionMatching(page, value) {
 // reveals; if omitted we type into whatever gains focus.
 async function typeaheadSelect(page, triggerSel, value, onStep, label, searchSel) {
   try {
+    // Wait for the trigger (the dialog may still be rendering), but bounded so it
+    // can never hang. Real keystrokes (fast) so the typeahead actually filters.
+    const trig = await page.waitForSelector(triggerSel, { timeout: 6000 }).catch(() => null);
+    if (!trig) return false;
     await liveEngine.ensureStage(page);
     await liveEngine.stage(page, 'moveTo', triggerSel);
-    await page.click(triggerSel, { timeout: 8000 }).catch(() => {});
-    await sleep(400);
-    if (searchSel && await page.$(searchSel)) { await page.fill(searchSel, '').catch(() => {}); await page.type(searchSel, String(value), { delay: 35 }); }
-    else { await page.keyboard.type(String(value), { delay: 35 }); }
-    await sleep(900);
+    await trig.click({ timeout: 3000 }).catch(() => {});
+    await sleep(350);
+    if (searchSel && await page.$(searchSel)) { await page.fill(searchSel, '').catch(() => {}); await page.type(searchSel, String(value), { delay: 12 }); }
+    else { await page.keyboard.type(String(value), { delay: 12 }); }
+    await sleep(650);
     const picked = await clickOptionMatching(page, value);
     // No match (e.g. a location that only exists on the real account) → close the
-    // dropdown cleanly and leave the existing value, instead of forcing a guess.
-    if (!picked) await page.keyboard.press('Escape').catch(() => {});
+    // dropdown cleanly (Escape ×2 + blur) so it can't linger over the Save button,
+    // and move on fast instead of stalling.
+    if (!picked) {
+      await page.keyboard.press('Escape').catch(() => {});
+      await sleep(120);
+      await page.keyboard.press('Escape').catch(() => {});
+      try { await page.evaluate(() => document.activeElement && document.activeElement.blur && document.activeElement.blur()); } catch {}
+    }
     await liveEngine.stage(page, 'press');
     say(onStep, `${label}: ${value}${picked ? ' ✓' : ' (not on this account — left as is)'}`);
     return picked;
@@ -148,13 +158,17 @@ async function bookAppointment(page, appointment, { onStep, dryRun = true, overr
 
   if (dryRun) { say(onStep, 'Filled (dry run — not saved).'); return { ok: true, dryRun: true }; }
 
-  // SAVE — the button enables once required fields are valid.
+  // SAVE — the button enables once required fields are valid. Make sure no
+  // dropdown is still open over it, then click with a bounded timeout so it can
+  // never hang for 30s if something briefly overlaps it.
+  try { await page.keyboard.press('Escape'); } catch {}
+  await sleep(150);
   const save = await page.$(S.saveButton);
   if (!save) return { ok: false, error: 'Save button not found.' };
   await liveEngine.stage(page, 'moveTo', S.saveButton);
   if (await save.isDisabled().catch(() => false)) return { ok: false, error: 'Save is disabled — a required field did not fill (client/clinician/service). Re-check on this account.' };
   say(onStep, `Saving ${appointment.patientName}…`);
-  await save.click().catch(() => {});
+  await save.click({ timeout: 6000 }).catch(async () => { try { await save.evaluate((el) => el.click()); } catch {} });
   await liveEngine.stage(page, 'press');
   await sleep(2200);
   // Success = the dialog closed (the client field is gone). If it's still up, a
