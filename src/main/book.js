@@ -64,11 +64,13 @@ async function typeaheadSelect(page, triggerSel, value, onStep, label, searchSel
     await liveEngine.ensureStage(page);
     await liveEngine.stage(page, 'moveTo', triggerSel);
     await trig.click({ timeout: 3000 }).catch(() => {});
-    await sleep(350);
+    await sleep(250);
     if (searchSel && await page.$(searchSel)) { await page.fill(searchSel, '').catch(() => {}); await page.type(searchSel, String(value), { delay: 12 }); }
     else { await page.keyboard.type(String(value), { delay: 12 }); }
-    await sleep(600);
-    const picked = await clickOptionMatching(page, value);
+    // Poll for the matching option — clicks the instant it appears (fast), and
+    // keeps trying up to ~2.5s so a slightly slow search never gets skipped.
+    let picked = false;
+    for (let k = 0; k < 10 && !picked; k++) { picked = await clickOptionMatching(page, value); if (!picked) await sleep(250); }
     // NEVER press Escape here — in SimplePractice that closes the whole
     // appointment dialog (which is what made "Save button not found"). If there's
     // no match we just leave the field and move on.
@@ -94,14 +96,17 @@ async function bookAppointment(page, appointment, { onStep, dryRun = true, overr
 
   // 1) CLIENT FIRST (verified) — the clinician + services only render afterwards.
   if (appointment.patientName) await typeaheadSelect(page, S.clientTrigger, appointment.patientName, onStep, 'Client', S.clientSearchInput);
-  await sleep(1500); // let the rest of the form expand
+  // Proceed as soon as the services section renders (form is ready) instead of a
+  // fixed pause — much faster when it appears quickly.
+  await page.waitForSelector(S.codeSelect, { timeout: 3500 }).catch(() => {});
+  await sleep(200);
 
   // 2) DATE (verified) — MM/DD/YYYY, and the start TIME from Practice Fusion.
   const mdy = toMDY(appointment.date);
   if (mdy && await page.$(S.dateField)) {
     await liveEngine.stage(page, 'moveTo', S.dateField);
     await page.fill(S.dateField, '').catch(() => {});
-    await page.type(S.dateField, mdy, { delay: 40 }).catch(() => {});
+    await page.type(S.dateField, mdy, { delay: 14 }).catch(() => {});
     await page.keyboard.press('Tab').catch(() => {});
     await liveEngine.stage(page, 'press');
     say(onStep, `Date: ${mdy}`);
@@ -109,7 +114,7 @@ async function bookAppointment(page, appointment, { onStep, dryRun = true, overr
   if (appointment.time && await page.$(S.startTimeField)) {
     await liveEngine.stage(page, 'moveTo', S.startTimeField);
     await page.fill(S.startTimeField, '').catch(() => {});
-    await page.type(S.startTimeField, appointment.time, { delay: 40 }).catch(() => {});
+    await page.type(S.startTimeField, appointment.time, { delay: 14 }).catch(() => {});
     await page.keyboard.press('Tab').catch(() => {});
     say(onStep, `Time: ${appointment.time}`);
   }
@@ -120,7 +125,7 @@ async function bookAppointment(page, appointment, { onStep, dryRun = true, overr
     const open = await page.$(S.clinicianOpen);
     if (open) {
       await open.click().catch(() => {});
-      await sleep(500);
+      await sleep(250);
       const ok = await clickOptionMatching(page, appointment.mainDoctor.split(' ')[0]); // first name is enough
       say(onStep, `Clinician: ${appointment.mainDoctor}${ok ? ' ✓' : ' (single/locked on demo)'}`);
     }
@@ -138,11 +143,18 @@ async function bookAppointment(page, appointment, { onStep, dryRun = true, overr
   const services = appointment.services || [];
   for (let i = 0; i < services.length; i++) {
     const svc = services[i];
-    if (i > 0 && await page.$(S.addService)) { await page.click(S.addService).catch(() => {}); await sleep(500); }
+    if (i > 0) {
+      const addBtn = await page.$(S.addService);
+      // Bounded click + JS fallback so a momentarily-unclickable "Add service" can
+      // never hang for 30s; then wait briefly for the new service row to render.
+      if (addBtn) { await addBtn.click({ timeout: 4000 }).catch(async () => { try { await addBtn.evaluate((el) => el.click()); } catch {} }); }
+      await page.waitForFunction(({ sel, n }) => document.querySelectorAll(sel).length >= n, { sel: S.codeSelect, n: i + 1 }, { timeout: 4000 }).catch(() => {});
+      await sleep(200);
+    }
     const codeSelects = await page.$$(S.codeSelect);
     const sel = codeSelects[i] || codeSelects[codeSelects.length - 1];
     if (sel) {
-      await sel.selectOption({ value: svc.code }).catch(async () => { await sel.selectOption({ label: new RegExp('^' + svc.code) }).catch(() => {}); });
+      await sel.selectOption({ value: svc.code }, { timeout: 4000 }).catch(async () => { await sel.selectOption({ label: new RegExp('^' + svc.code) }, { timeout: 4000 }).catch(() => {}); });
       say(onStep, `Service: ${svc.code}`);
     }
     // TODO(real): units input + the four modifier boxes for this line.
@@ -195,17 +207,18 @@ async function spNavigateToDate(page, date, onStep) {
   if (!want) return false;
   await page.goto(presets.SP.calendarUrl, { waitUntil: 'domcontentloaded' }).catch(() => {});
   await dismissPopups(page);
-  await sleep(1500);
+  await page.waitForSelector(C.title, { timeout: 6000 }).catch(() => {});
+  await sleep(400);
   for (let i = 0; i < 200; i++) {
     const el = await page.$(C.title);
     const cur = parseCalTitle(el ? await el.textContent() : '');
-    if (!cur) { await sleep(400); continue; }
+    if (!cur) { await sleep(250); continue; }
     const diff = Math.round((want - cur) / 86400000);
     if (diff === 0) { say(onStep, `SimplePractice calendar on ${toMDY(date)} ✓`); return true; }
     const btn = diff > 0 ? C.nextDay : C.prevDay;
     await liveEngine.stage(page, 'moveTo', btn).catch(() => {});
     await page.click(btn).catch(() => {});
-    await sleep(500);
+    await sleep(300);
     await dismissPopups(page);
   }
   return false;

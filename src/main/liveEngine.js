@@ -254,13 +254,13 @@ function stageSource() {
           const el = typeof sel === 'string' ? document.querySelector(sel) : sel;
           if (!el) return false;
           try { el.scrollIntoView({ block: 'center', inline: 'center', behavior: 'smooth' }); } catch {}
-          await wait(350);
+          await wait(150);
           const r = el.getBoundingClientRect();
           if (!r.width && !r.height) return false;
           cx = r.left + Math.min(r.width / 2, 26); cy = r.top + r.height / 2;
           cur.style.left = cx + 'px'; cur.style.top = cy + 'px';
           hl.style.display = 'block'; hl.style.left = r.left + 'px'; hl.style.top = r.top + 'px'; hl.style.width = r.width + 'px'; hl.style.height = r.height + 'px';
-          await wait(640);
+          await wait(330); // glide is visible (cursor transition ~.3s) but snappy
           return true;
         },
         async press() {
@@ -268,10 +268,10 @@ function stageSource() {
           Object.assign(rp.style, { position: 'fixed', left: cx + 'px', top: cy + 'px', width: '46px', height: '46px', borderRadius: '50%', background: 'rgba(61,123,255,.5)', zIndex: '2147483645', pointerEvents: 'none', animation: '__psRip .5s ease-out forwards' });
           root.appendChild(rp);
           cur.style.transition = 'transform .1s'; cur.style.transform = 'scale(.82)';
-          await wait(120);
-          cur.style.transform = 'scale(1)'; cur.style.transition = 'left .6s cubic-bezier(.22,.61,.36,1), top .6s cubic-bezier(.22,.61,.36,1)';
-          setTimeout(() => { try { rp.remove(); } catch {} }, 520);
-          await wait(140);
+          await wait(80);
+          cur.style.transform = 'scale(1)'; cur.style.transition = 'left .3s cubic-bezier(.22,.61,.36,1), top .3s cubic-bezier(.22,.61,.36,1)';
+          setTimeout(() => { try { rp.remove(); } catch {} }, 300);
+          await wait(70);
         },
         done(msg) { this.status(msg || 'Done ✓'); try { const d = document.getElementById('__ps_dot'); d.style.animation = 'none'; d.style.background = '#34d399'; } catch {} hl.style.display = 'none'; },
         hide() { ['__ps_hud', '__ps_cursor', '__ps_hl', '__ps_style'].forEach((id) => { const e = document.getElementById(id); if (e) e.remove(); }); window.__psStage = null; },
