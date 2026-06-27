@@ -379,7 +379,7 @@ async function runSyncFlow(save, btn) {
   if ($('#syncResult')) {
     $('#syncResult').classList.remove('hidden');
     $('#syncResult').innerHTML = res && res.ok
-      ? `<div class="ob-result">${save ? `Booked <b>${res.booked}</b>` : `Would book <b>${res.planned ? res.planned.length : 0}</b>`} · skipped ${res.skipped || 0}${res.failed ? ` · <b>${res.failed} failed</b>` : ''}${res.unmatched ? ` · ${res.unmatched} unrecognized` : ''}</div>`
+      ? `<div class="ob-result">${save ? 'Booked' : 'Would book'} <b>${res.booked || 0}</b> · ${res.skipped || 0} already there${res.failed ? ` · <b>${res.failed} couldn’t book</b>` : ''}${res.unmatched ? ` · ${res.unmatched} unrecognized` : ''}</div>`
       : `<div class="ob-note">${(res && res.error) || 'Sync failed.'}</div>`;
   }
 }
