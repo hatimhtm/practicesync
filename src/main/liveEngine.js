@@ -2,7 +2,7 @@
 
 const os = require('os');
 const path = require('path');
-const { extractVisits, planFormValues } = require('./extract');
+const { extractVisits, planFormValues, inferSchedule } = require('./extract');
 
 /**
  * Live browser automation. Drives the user's EXISTING Chrome profile (so all
@@ -327,7 +327,7 @@ async function searchPatient(page, selectors, name, baseUrl, onStep) {
  * patient by name (no URL needed) and reads their visits. Otherwise it just
  * reads whatever patient page is already open at `url` (the old behavior).
  */
-async function pullVisits({ userDataDir, profileDir, url, selectors, limit = 10, patientNames = [], onStep, headless = false }) {
+async function pullVisits({ userDataDir, profileDir, url, selectors, limit = 10, patientNames = [], date = '', onStep, headless = false }) {
   if (!url || !selectors || !selectors.rowSelector) {
     return { ok: false, error: 'Practice Fusion isn\'t set up yet — use Teach Mode to show the app the patient page first.' };
   }
@@ -356,14 +356,67 @@ async function pullVisits({ userDataDir, profileDir, url, selectors, limit = 10,
       return { ok: true, visits: all };
     }
 
-    // Fallback: read the single patient page that's already open at `url`.
-    await announce(page, onStep, 'Reading the visits…');
-    try { await page.waitForSelector(selectors.rowSelector, { timeout: 15000 }); } catch {}
+    // DAY-SCHEDULE path (the real flow): read every appointment on the open
+    // schedule. If the appointments aren't visible yet, GUIDE the user to open
+    // the Schedule for the date instead of silently reading nothing and stopping.
+    await announce(page, onStep, `Looking for the day's appointments${date ? ' for ' + date : ''}…`);
+    await ensureSchedule(page, selectors, onStep, date);
     const doc = new JSDOM(await page.content()).window.document;
     const visits = extractVisits(doc, selectors, limit);
-    await stage(page, 'done', `Read ${visits.length} visit(s)`);
+    await stage(page, 'done', `Read ${visits.length} appointment(s)`);
+    if (onStep) { try { onStep(`Read ${visits.length} appointment${visits.length === 1 ? '' : 's'} off the schedule`); } catch {} }
     return { ok: true, visits };
   });
+}
+
+/* In-browser guide shown when the day's appointments aren't visible yet, so the
+ * run never just "gets confused and stops": a banner + a "Read this day" button.
+ * Non-blocking (no page click handlers), re-injected across navigation. */
+function scheduleGateSource() {
+  return (cfg) => {
+    try {
+      if (document.getElementById('__ps_sched')) return;
+      const ui = document.createElement('div'); ui.id = '__ps_sched';
+      const bar = document.createElement('div');
+      bar.innerHTML = '🗓️ <b>Open the Schedule' + (cfg.date ? ' for ' + cfg.date : '') + '</b> (under the Home icon) so the appointments are listed. I’ll read them automatically — or click <b>Read this day</b> when they’re showing.';
+      Object.assign(bar.style, { position: 'fixed', top: '0', left: '0', right: '0', zIndex: '2147483646', background: 'rgba(17,24,40,.97)', color: '#eaf0fb', font: '600 14px/1.45 -apple-system,system-ui,sans-serif', padding: '13px 18px', textAlign: 'center', boxShadow: '0 3px 14px rgba(0,0,0,.4)', pointerEvents: 'none' });
+      ui.appendChild(bar);
+      const wrap = document.createElement('div');
+      Object.assign(wrap.style, { position: 'fixed', bottom: '22px', left: '50%', transform: 'translateX(-50%)', zIndex: '2147483647', pointerEvents: 'auto' });
+      const btn = document.createElement('button');
+      btn.textContent = 'Read this day ▶';
+      Object.assign(btn.style, { font: '700 14px -apple-system,system-ui,sans-serif', border: '0', borderRadius: '12px', padding: '13px 22px', cursor: 'pointer', color: '#04240f', background: '#34d399', boxShadow: '0 10px 28px rgba(0,0,0,.45)' });
+      btn.addEventListener('click', (e) => { e.preventDefault(); e.stopPropagation(); try { if (window[cfg.binding]) window[cfg.binding](); } catch {} }, true);
+      wrap.appendChild(btn); ui.appendChild(wrap);
+      document.documentElement.appendChild(ui);
+    } catch {}
+  };
+}
+
+/** Make sure the day's appointment rows are actually on screen before reading.
+ *  Resolves true once rows appear (auto) or the user clicks "Read this day". */
+async function ensureSchedule(page, selectors, onStep, date) {
+  const countRows = async () => { try { return await page.evaluate((s) => document.querySelectorAll(s).length, selectors.rowSelector); } catch { return 0; } };
+  try { await page.waitForSelector(selectors.rowSelector, { timeout: 8000 }); } catch {}
+  if (await countRows() > 0) return true;
+
+  // Not visible yet — guide, and wait for rows to appear OR an explicit click.
+  await announce(page, onStep, `Open the Schedule${date ? ' for ' + date : ''} so I can read the appointments…`);
+  const binding = '__psSched_' + Math.floor(Math.random() * 1e6);
+  let resolve; let settled = false;
+  const done = new Promise((r) => { resolve = r; });
+  try { await page.exposeFunction(binding, () => { if (!settled) { settled = true; resolve('clicked'); } }); } catch {}
+  const inject = `(${scheduleGateSource().toString()})(${JSON.stringify({ binding, date: date || '' })})`;
+  const reinject = () => { page.evaluate(inject).catch(() => {}); };
+  reinject();
+  page.on('load', reinject); page.on('domcontentloaded', reinject);
+  const poll = setInterval(async () => { if (!settled && (await countRows()) > 0) { settled = true; resolve('appeared'); } }, 1000);
+  const to = setTimeout(() => { if (!settled) { settled = true; resolve('timeout'); } }, 180000);
+  await done;
+  clearInterval(poll); clearTimeout(to);
+  page.off('load', reinject); page.off('domcontentloaded', reinject);
+  try { await page.evaluate(() => { const e = document.getElementById('__ps_sched'); if (e) e.remove(); }); } catch {}
+  return (await countRows()) > 0;
 }
 
 /**
@@ -479,7 +532,7 @@ async function createAppointmentLive({ userDataDir, profileDir, url, selectors, 
  * `steps` = [{ key, label, relativeTo?, allowDefault?, optional? }].
  * Returns { ok, selectors, capturesDir, captureCount }.
  */
-async function teach({ userDataDir, profileDir, url, steps, headless = false, capturesDir = null }) {
+async function teach({ userDataDir, profileDir, url, steps, headless = false, capturesDir = null, infer = null }) {
   return withBrowser({ userDataDir, profileDir, headless }, async (context) => {
     const page = await openPage(context, url);
     // If the link didn't open on its own, prompt the user to type it and wait —
@@ -526,8 +579,31 @@ async function teach({ userDataDir, profileDir, url, steps, headless = false, ca
       i += 1;
     }
 
+    // SCHEDULE inference: the user pointed at one appointment's patient + date +
+    // provider — derive the repeating row and rewrite those as row-relative, so
+    // the app reads EVERY appointment on the day without the user ever pointing
+    // at "a row". Falls back to the absolute selectors if it can't generalize.
+    let inference = null;
+    if (infer === 'schedule' && selectors.patientSelector && selectors.doctorSelector && !selectors.rowSelector) {
+      try {
+        const doc = new JSDOM(await page.content()).window.document;
+        const got = inferSchedule(doc, selectors);
+        if (got && got.rowSelector && got.matchedRows >= 1) {
+          Object.assign(selectors, {
+            rowSelector: got.rowSelector,
+            patientSelector: got.patientSelector,
+            doctorSelector: got.doctorSelector,
+            ...(got.dateSelector ? { dateSelector: got.dateSelector } : {}),
+          });
+          inference = { ok: true, rows: got.rowCount, matched: got.matchedRows };
+        } else {
+          inference = { ok: false, reason: 'Could not see repeating appointments to generalize from.' };
+        }
+      } catch (e) { inference = { ok: false, reason: String((e && e.message) || e) }; }
+    }
+
     if (capturesDir && manifest.length) { try { writeGallery(capturesDir, manifest); } catch {} }
-    return { ok: true, selectors, capturesDir: capturesDir || null, captureCount: manifest.length };
+    return { ok: true, selectors, capturesDir: capturesDir || null, captureCount: manifest.length, inference };
   });
 }
 

@@ -43,7 +43,10 @@ async function performSync(trigger = 'manual', overrides = {}) {
   try {
     const settings = store.load();
     const dryRun = overrides.dryRun === true;
-    // Names come from this run (overrides) or fall back to the saved list.
+    // The run is DATE-driven: read every appointment on the chosen day's
+    // schedule. `date` is what the user picked (also the date booked in
+    // SimplePractice). Patient names remain only for the legacy search model.
+    const date = String(overrides.date || settings.runDate || '').trim();
     const patientNames = Array.isArray(overrides.patientNames) && overrides.patientNames.length
       ? overrides.patientNames
       : (settings.patientNames || []);
@@ -54,8 +57,7 @@ async function performSync(trigger = 'manual', overrides = {}) {
     if (!settings.pfSelectors) {
       return { ok: false, error: 'Teach the Practice Fusion screen first.', at: nowISO() };
     }
-    // When the search box was taught, the app looks patients up by name — so it
-    // needs at least one name to know who to sync.
+    // Legacy search model only: when a search box was taught, names are required.
     if (settings.pfSelectors.searchBox && patientNames.length === 0) {
       return { ok: false, error: 'Add at least one patient name on the Connection screen first.', at: nowISO() };
     }
@@ -76,6 +78,7 @@ async function performSync(trigger = 'manual', overrides = {}) {
       count: overrides.count || 6,
       dryRun,
       patientNames,
+      date,
       onStep,
       bookedKeys: settings.bookedKeys || [],
       live: {
@@ -314,15 +317,14 @@ function registerIpc() {
     if (!url) return { ok: false, error: 'Enter the page address first.' };
     const steps = target === 'pf'
       ? [
-          // The real Practice Fusion flow is READ-ONLY: the user opens the day's
-          // schedule for a date and the app reads every appointment on it — each
-          // row is a different patient + their doctor. No searching, no clicking
-          // into charts. Patient/doctor are pointed out INSIDE one row so the app
-          // generalizes to all rows on the day.
-          { key: 'rowSelector', label: 'One APPOINTMENT in the day’s schedule', hint: 'Point at any single appointment for the date you’re viewing — the app reads them all the same way.' },
-          { key: 'patientSelector', label: 'The PATIENT NAME inside that appointment', relativeTo: 'rowSelector' },
-          { key: 'doctorSelector', label: 'The DOCTOR shown in that appointment', relativeTo: 'rowSelector' },
-          { key: 'dateSelector', label: 'The DATE for the day (its time/date in the row, or the date heading on the page)', hint: 'Optional — if every appointment is clearly the same day you can Skip this.', optional: true },
+          // The real Practice Fusion flow is READ-ONLY, on the SCHEDULE screen
+          // (under Home): the user opens the day and the app reads every
+          // appointment — each is a patient + their provider. No searching, no
+          // clicking. The user points at just THREE things on ONE appointment;
+          // the app figures out the repeating row itself (infer:'schedule').
+          { key: 'patientSelector', label: 'A PATIENT’s name on the Schedule', hint: 'Open the Schedule (under the Home icon) for your day, then point at one patient’s name.' },
+          { key: 'dateSelector', label: 'That same patient’s DATE or time', hint: 'The date/time shown right with that patient. If there’s no per-appointment date, Skip it.', optional: true },
+          { key: 'doctorSelector', label: 'That same patient’s PROVIDER (the diagnosing / small doctor)', hint: 'The provider shown for that same appointment.' },
         ]
       : [
           // SimplePractice is a calendar, but the app books through the New-Appointment
@@ -345,13 +347,13 @@ function registerIpc() {
     const stamp = nowISO().replace(/[:.]/g, '-');
     const capturesDir = path.join(app.getPath('userData'), 'teach-captures', `${target}-${stamp}`);
     try {
-      const res = await teach({ userDataDir: s.chromeUserDataDir, profileDir: s.chromeProfileDir, url, steps, capturesDir });
+      const res = await teach({ userDataDir: s.chromeUserDataDir, profileDir: s.chromeProfileDir, url, steps, capturesDir, infer: target === 'pf' ? 'schedule' : null });
       if (!res.ok) return res;
       if (target === 'pf') store.save({ pfUrl: url, pfSelectors: res.selectors });
       else store.save({ spUrl: url, spSelectors: res.selectors });
       // Open the screenshots folder so the user can review what was captured.
       if (res.captureCount) { try { shell.openPath(res.capturesDir); } catch {} }
-      return { ok: true, selectors: res.selectors, capturesDir: res.capturesDir, captureCount: res.captureCount };
+      return { ok: true, selectors: res.selectors, capturesDir: res.capturesDir, captureCount: res.captureCount, inference: res.inference };
     } catch {
       return { ok: false, error: 'Teach Mode could not open the page. Make sure Google Chrome is installed.' };
     }

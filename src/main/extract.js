@@ -156,4 +156,68 @@ function planFormValues(sel, appointment) {
   return values;
 }
 
-module.exports = { buildSelector, extractVisits, planFormValues, stableClass };
+/**
+ * Infer the repeating appointment ROW from a few example fields the user pointed
+ * at on ONE appointment (patient + provider, and optionally the date). The user
+ * never has to point at "the row" — we find the smallest container that holds
+ * both the patient and the provider, generalize a selector that matches every
+ * appointment on the day, and re-express each field RELATIVE to that row so it
+ * works for all of them.
+ *
+ * @param {Document} doc  the live schedule (real or jsdom)
+ * @param {{patientSelector?:string, dateSelector?:string, doctorSelector?:string}} sel
+ *        absolute selectors for the example appointment's fields
+ * @returns {null | {rowSelector, patientSelector, doctorSelector, dateSelector?, rowCount, matchedRows}}
+ */
+function inferSchedule(doc, sel) {
+  const pEl = sel && sel.patientSelector ? doc.querySelector(sel.patientSelector) : null;
+  const docEl = sel && sel.doctorSelector ? doc.querySelector(sel.doctorSelector) : null;
+  if (!pEl || !docEl) return null;
+  // Smallest container holding BOTH patient and provider = the appointment row.
+  const ancestors = new Set();
+  for (let n = pEl; n; n = n.parentElement) ancestors.add(n);
+  let row = docEl;
+  while (row && !ancestors.has(row)) row = row.parentElement;
+  if (!row || row === doc.documentElement || row === doc.body) return null;
+
+  // Generalize the row so it matches EVERY appointment, not just this one.
+  const rowSelector = generalizeRow(doc, row);
+  const rel = (el) => (el && row.contains(el) ? buildSelector(el, row) : null);
+  const out = {
+    rowSelector,
+    patientSelector: rel(pEl) || sel.patientSelector,
+    doctorSelector: rel(docEl) || sel.doctorSelector,
+  };
+  const dtEl = sel.dateSelector ? doc.querySelector(sel.dateSelector) : null;
+  if (dtEl && row.contains(dtEl)) out.dateSelector = buildSelector(dtEl, row);
+  else if (sel.dateSelector) out.dateSelector = sel.dateSelector; // a page-level date heading
+
+  // Confidence: how many generalized rows actually contain a patient + provider.
+  const rows = [...doc.querySelectorAll(rowSelector)];
+  out.rowCount = rows.length;
+  out.matchedRows = rows.filter((r) => {
+    try { return r.querySelector(out.patientSelector) && r.querySelector(out.doctorSelector); }
+    catch { return false; }
+  }).length;
+  return out;
+}
+
+/** A selector for `row` that matches its repeating siblings too (not just it). */
+function generalizeRow(doc, row) {
+  const cls = stableClass(row);
+  if (cls) {
+    const byClass = '.' + cssEscapeIdent(cls);
+    try { if (doc.querySelectorAll(byClass).length > 1) return byClass; } catch {}
+  }
+  // Otherwise: the unique path with its LAST positional :nth-of-type removed, so
+  // it spans the siblings — but only if that actually matches more than one.
+  const full = buildSelector(row);
+  if (full) {
+    const stripped = full.replace(/:nth-of-type\(\d+\)\s*$/, '');
+    try { if (stripped !== full && doc.querySelectorAll(stripped).length > 1) return stripped; } catch {}
+    return full;
+  }
+  return row.tagName.toLowerCase();
+}
+
+module.exports = { buildSelector, extractVisits, planFormValues, stableClass, inferSchedule };

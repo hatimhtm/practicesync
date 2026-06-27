@@ -87,7 +87,7 @@ async function refresh() {
   // Connection (live only)
   $('#pfUrl').value = settings.pfUrl || '';
   $('#spUrl').value = settings.spUrl || '';
-  if ($('#pfPatients')) $('#pfPatients').value = (settings.patientNames || []).join('\n');
+  if ($('#pfDate')) $('#pfDate').value = settings.runDate || '';
   setPill($('#pfTaught'), settings.pfSelectors);
   setPill($('#spTaught'), settings.spSelectors);
   $$('#spModeSeg button').forEach((b) => b.classList.toggle('active', b.dataset.val === (settings.spMode || 'standard')));
@@ -294,7 +294,7 @@ function renderSyncResult(container, res) {
 }
 
 /* ------------------------------ connection ------------------------------ */
-let demoCount = 2;
+let demoCount = 10;
 // Split a textarea/line of patient names into a clean list (newline or comma).
 function parsePatientNames(raw) {
   return String(raw || '').split(/[\n,]+/).map((s) => s.trim()).filter(Boolean);
@@ -309,7 +309,7 @@ $$('#spModeSeg button').forEach((b) => b.addEventListener('click', async () => {
   toast(b.dataset.val === 'enterprise' ? 'Enterprise (API) selected.' : 'Standard (screen automation) selected.');
 }));
 $$('#demoCountSeg button').forEach((b) => b.addEventListener('click', () => {
-  demoCount = parseInt(b.dataset.val, 10) || 2;
+  demoCount = parseInt(b.dataset.val, 10) || 10;
   $$('#demoCountSeg button').forEach((x) => x.classList.toggle('active', x === b));
 }));
 async function teachScreen(target, urlSel) {
@@ -318,23 +318,30 @@ async function teachScreen(target, urlSel) {
   await window.api.saveSettings(target === 'pf' ? { pfUrl: url } : { spUrl: url });
   toast('Opening the page — click each field as prompted…');
   const res = await window.api.teach(target, url);
-  if (res && res.ok) toast(`Screen set up ✓${res.captureCount ? ` · ${res.captureCount} screenshots saved (folder opened)` : ''}`);
-  else toast(res && res.error ? res.error : 'Teach Mode could not run here.');
+  if (res && res.ok) {
+    let extra = res.captureCount ? ` · ${res.captureCount} screenshots saved (folder opened)` : '';
+    if (target === 'pf' && res.inference) {
+      extra += res.inference.ok
+        ? ` · found ${res.inference.matched} appointment${res.inference.matched === 1 ? '' : 's'} on the day ✓`
+        : ' · ⚠ couldn’t detect the repeating appointments — open the Schedule to a day WITH appointments and teach again';
+    }
+    toast(`Screen set up ✓${extra}`);
+  } else toast(res && res.error ? res.error : 'Teach Mode could not run here.');
   refresh();
 }
 $('#teachPf').addEventListener('click', () => teachScreen('pf', '#pfUrl'));
 $('#teachSp').addEventListener('click', () => teachScreen('sp', '#spUrl'));
 $('#demoPullBtn').addEventListener('click', async () => {
-  const names = parsePatientNames($('#pfPatients') && $('#pfPatients').value);
-  if (settings.pfSelectors && settings.pfSelectors.searchBox && !names.length) {
-    toast('Type at least one patient name first.'); return;
-  }
-  await window.api.saveSettings({ patientNames: names }); // remember for scheduled / Sync-now runs
+  // Legacy search model (a search box was taught) still reads by name.
+  const legacy = settings.pfSelectors && settings.pfSelectors.searchBox;
+  const date = ($('#pfDate') && $('#pfDate').value) || '';
+  if (!legacy && !date) { toast('Pick the date to read first.'); return; }
+  await window.api.saveSettings({ runDate: date }); // remember for scheduled / Sync-now runs
   $('#demoPullBtn').disabled = true;
-  $('#demoPullBtn').textContent = 'Pulling…';
-  const res = await window.api.runSync({ mode: 'live', count: demoCount, dryRun: true, patientNames: names });
+  $('#demoPullBtn').textContent = 'Reading…';
+  const res = await window.api.runSync({ mode: 'live', count: demoCount, dryRun: true, date });
   $('#demoPullBtn').disabled = false;
-  $('#demoPullBtn').textContent = 'Pull real visits (read only)';
+  $('#demoPullBtn').textContent = 'Read this day (read only)';
   renderSyncResult($('#demoResult'), res);
 });
 
@@ -622,14 +629,13 @@ $('#obTeachSp').addEventListener('click', () => obTeach('sp', '#obSpUrl', '#obTe
 
 // Step 5 — verify with a real read-only pull
 $('#obVerifyBtn').addEventListener('click', async () => {
-  const names = parsePatientNames($('#obPatient') && $('#obPatient').value);
-  if (settings.pfSelectors && settings.pfSelectors.searchBox && !names.length) {
-    toast('Type a patient name first.'); return;
-  }
-  await window.api.saveSettings({ patientNames: names });
-  $('#obVerifyBtn').disabled = true; $('#obVerifyBtn').textContent = 'Pulling…';
-  const res = await window.api.runSync({ count: 2, dryRun: true, patientNames: names });
-  $('#obVerifyBtn').disabled = false; $('#obVerifyBtn').textContent = "Pull this patient's visits";
+  const legacy = settings.pfSelectors && settings.pfSelectors.searchBox;
+  const date = ($('#obDate') && $('#obDate').value) || '';
+  if (!legacy && !date) { toast('Pick the date to read first.'); return; }
+  await window.api.saveSettings({ runDate: date });
+  $('#obVerifyBtn').disabled = true; $('#obVerifyBtn').textContent = 'Reading…';
+  const res = await window.api.runSync({ count: 25, dryRun: true, date });
+  $('#obVerifyBtn').disabled = false; $('#obVerifyBtn').textContent = "Read this day’s appointments";
   renderSyncResult($('#obResult'), res);
   obVerified = !!(res && res.ok && (res.planned || []).length > 0);
   obShow(obStep);

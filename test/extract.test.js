@@ -5,7 +5,7 @@
 
 const path = require('path');
 const { JSDOM } = require('jsdom');
-const { buildSelector, extractVisits, planFormValues } = require(path.join(__dirname, '..', 'src', 'main', 'extract'));
+const { buildSelector, extractVisits, planFormValues, inferSchedule } = require(path.join(__dirname, '..', 'src', 'main', 'extract'));
 
 let passed = 0;
 let failed = 0;
@@ -76,6 +76,42 @@ function scheduleHTML(rowsData) {
   check('each row keeps its OWN doctor', visits.map((v) => v.doctorName).join('|') === 'Dr. Patel|Dr. Nguyen|Dr. Patel');
   check('the day heading date fills every row', visits.every((v) => v.date === '06/26/2026'));
   check('no searching / chart drilling needed (header patient unused)', new Set(visits.map((v) => v.patientName)).size === 3);
+})();
+
+(function testInferSchedule() {
+  console.log('# inferSchedule — derive the appointment row from just patient + date + provider');
+  // A realistic schedule: the row has no obvious "row" class the user would know
+  // to click; they only point at the patient, the date, and the provider.
+  const data = [
+    { patient: 'Alice Adams', doctor: 'Dr. Patel', time: '9:00 AM' },
+    { patient: 'Bob Brown', doctor: 'Dr. Nguyen', time: '9:30 AM' },
+    { patient: 'Carla Cruz', doctor: 'Dr. Patel', time: '10:00 AM' },
+  ];
+  const rows = data.map((r) => `
+    <div class="appt-card">
+      <div class="hdr"><span class="who">${r.patient}</span><span class="when">${r.time}</span></div>
+      <div class="body"><span class="prov">${r.doctor}</span></div>
+    </div>`).join('');
+  const doc = new JSDOM(`<div id="cal">${rows}</div>`).window.document;
+  // Absolute selectors for the FIRST appointment's three fields (what teaching captures).
+  const first = doc.querySelectorAll('.appt-card')[0];
+  const example = {
+    patientSelector: buildSelector(first.querySelector('.who')),
+    dateSelector: buildSelector(first.querySelector('.when')),
+    doctorSelector: buildSelector(first.querySelector('.prov')),
+  };
+  const inferred = inferSchedule(doc, example);
+  check('inference succeeded', !!inferred);
+  check('found all 3 appointment rows', inferred.rowCount === 3 && inferred.matchedRows === 3);
+  // The inferred selectors must read all three appointments correctly.
+  const visits = extractVisits(doc, inferred, 10);
+  check('reads every patient via inferred row', visits.map((v) => v.patientName).join('|') === 'Alice Adams|Bob Brown|Carla Cruz');
+  check('reads every provider via inferred row', visits.map((v) => v.doctorName).join('|') === 'Dr. Patel|Dr. Nguyen|Dr. Patel');
+  check('reads each row’s own time/date', visits.map((v) => v.date).join('|') === '9:00 AM|9:30 AM|10:00 AM');
+
+  // Degenerate input (patient & provider have no common appointment container) → null, not a crash.
+  const flat = new JSDOM('<div><span id="p">Pat</span></div><div><span id="d">Doc</span></div>').window.document;
+  check('returns null when there is no real row', inferSchedule(flat, { patientSelector: '#p', doctorSelector: '#d' }) === null);
 })();
 
 (function testBuildSelector() {

@@ -11,7 +11,7 @@ const liveEngine = require('./liveEngine');
  */
 
 /* --------------------------- Practice Fusion (read) --------------------------- */
-async function readVisits({ count = 6, live = {}, patientNames = [], onStep }) {
+async function readVisits({ count = 6, live = {}, patientNames = [], date = '', onStep }) {
   const r = await liveEngine.pullVisits({
     userDataDir: live.userDataDir,
     profileDir: live.profileDir,
@@ -19,9 +19,14 @@ async function readVisits({ count = 6, live = {}, patientNames = [], onStep }) {
     selectors: live.pfSelectors,
     limit: count,
     patientNames,
+    date,
     onStep,
   });
-  return r.ok ? { ok: true, visits: r.visits } : { ok: false, visits: [], error: r.error };
+  if (!r.ok) return { ok: false, visits: [], error: r.error };
+  // Every appointment read off the day's schedule is booked on the chosen date;
+  // fill in the run date for any row that didn't carry its own.
+  const visits = (r.visits || []).map((v) => ({ ...v, date: v.date || date }));
+  return { ok: true, visits };
 }
 
 /* ------------------------- SimplePractice (create) --------------------------- */
@@ -93,9 +98,9 @@ function planAppointments(visits, providers, mainDoctors = []) {
  *
  * @returns {Promise<{ok:boolean, dryRun:boolean, planned:Array, created:number, unmatched:number, error?:string}>}
  */
-async function runSync({ providers = [], mainDoctors = [], count = 6, dryRun = true, live = {}, bookedKeys = [], patientNames = [], onStep } = {}) {
+async function runSync({ providers = [], mainDoctors = [], count = 6, dryRun = true, live = {}, bookedKeys = [], patientNames = [], date = '', onStep } = {}) {
   const say = (m) => { try { if (typeof onStep === 'function') onStep(m); } catch {} };
-  const read = await readVisits({ count, live, patientNames, onStep });
+  const read = await readVisits({ count, live, patientNames, date, onStep });
   if (!read.ok) return { ok: false, dryRun, planned: [], created: 0, unmatched: 0, skipped: 0, error: read.error, bookedKeys };
 
   // De-duplication applies to real bookings (not a dry run): never book a visit

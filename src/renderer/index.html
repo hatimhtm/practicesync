@@ -86,10 +86,10 @@
         </div>
 
         <div class="callout">
-          <strong>How it works:</strong> you give it patient names. For each one, Hope Assistant looks the patient up in
-          Practice Fusion, reads every visit's <em>date and doctor</em>, finds which main doctor they fall under, then
-          books the appointment in SimplePractice with that doctor's codes — and saves it. <strong>You watch the whole
-          thing happen</strong> in Chrome: the cursor moves, types, and clicks, step by step.
+          <strong>How it works:</strong> you pick a <em>date</em> and open Practice Fusion’s Schedule to it. Hope Assistant
+          reads <em>every appointment that day</em> — each patient and their <em>provider</em> — finds which main doctor
+          each falls under, then books each one in SimplePractice with that doctor’s codes and saves it. <strong>You watch
+          the whole thing happen</strong> in Chrome: the cursor moves, types, and clicks, step by step.
         </div>
         <div style="margin-top:18px"><button class="link" id="replayTutorial">Replay the setup tutorial →</button></div>
       </section>
@@ -169,18 +169,18 @@
 
           <div class="card">
             <div class="card-k">Step 3 · Try it on real data</div>
-            <p class="muted" style="font-size:13px;line-height:1.5">Type one or more patient names (one per line) — the app searches each in Practice Fusion and reads their visits. This only <em>reads</em>; it doesn't book anything.</p>
+            <p class="muted" style="font-size:13px;line-height:1.5">Pick a <strong>date</strong>. Open Practice Fusion’s <strong>Schedule</strong> (under Home) to that day in the controlled window, then read it — Hope Assistant pulls <em>every</em> appointment on that date (patient + provider). This only <em>reads</em>; it doesn’t book anything.</p>
             <label class="field">
-              <span>Patient name(s) — one per line</span>
-              <textarea id="pfPatients" rows="3" placeholder="Lochlann McNulty&#10;Jane Smith"></textarea>
+              <span>Date to read</span>
+              <input type="date" id="pfDate" />
             </label>
-            <p class="muted" style="font-size:12px;margin:0 0 8px">Most recent visits to read per patient:</p>
+            <p class="muted" style="font-size:12px;margin:0 0 8px">Most appointments to read:</p>
             <div class="seg" id="demoCountSeg">
-              <button data-val="1">1 visit</button>
-              <button data-val="2" class="active">2 visits</button>
-              <button data-val="10">10 visits</button>
+              <button data-val="10" class="active">10</button>
+              <button data-val="25">25</button>
+              <button data-val="50">50</button>
             </div>
-            <button class="btn btn-primary" id="demoPullBtn">Pull real visits (read only)</button>
+            <button class="btn btn-primary" id="demoPullBtn">Read this day (read only)</button>
             <div id="demoResult" class="hidden"></div>
           </div>
         </div>
@@ -365,16 +365,15 @@
       <div class="ob-step hidden" data-step="3">
         <div class="ob-hero"><svg viewBox="0 0 24 24" width="30" height="30" fill="none" stroke="#eaf2ff" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect width="8" height="4" x="8" y="2" rx="1" ry="1"/><path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2"/><path d="M12 11h4"/><path d="M12 16h4"/><path d="M8 11h.01"/><path d="M8 16h.01"/></svg></div>
         <h2>Step 2 — Practice Fusion</h2>
-        <p>Press the button — a Chrome window opens. <strong>Sign in / enter a verification code first if asked</strong>, then press <strong>“Start teaching.”</strong> Now <strong>navigate the site normally</strong> (clicking works — open menus, go to the patient section, anywhere you need). When you reach each thing below, press <strong>“🎯 Point at a field”</strong> and click it once, then <strong>Next</strong>. You point out, in order:</p>
+        <p>Press the button — a Chrome window opens. <strong>Sign in / enter a verification code first if asked</strong>, then open the <strong>Schedule</strong> (under the Home icon) for a day that has appointments and press <strong>“Start teaching.”</strong> For each thing below, press <strong>“🎯 Point at a field”</strong> and click it once, then <strong>Next</strong>. Point at just one appointment — the app reads the whole day:</p>
         <ol class="ob-list">
-          <li>The <strong>search box</strong> — then type any patient's name</li>
-          <li>The <strong>patient</strong> in the results</li>
-          <li>The <strong>patient name</strong> at the top of their chart</li>
-          <li>One <strong>visit row</strong>, then the <strong>doctor</strong> and the <strong>date</strong> in it</li>
+          <li>One <strong>patient’s name</strong> on the schedule</li>
+          <li>That patient’s <strong>date / time</strong> (or Skip if there isn’t one)</li>
+          <li>That patient’s <strong>provider</strong> (the diagnosing / small doctor)</li>
         </ol>
-        <p class="muted" style="font-size:13px;margin:0 0 4px">After this you only type a name — no more addresses.</p>
+        <p class="muted" style="font-size:13px;margin:0 0 4px">The app figures out the rest of the appointments by itself — no need to point at a row.</p>
         <label class="field">
-          <span>Practice Fusion home / search page address</span>
+          <span>Practice Fusion address (any page — you’ll open the Schedule yourself)</span>
           <input type="text" id="obPfUrl" placeholder="https://static.practicefusion.com/..." />
         </label>
         <div class="row"><button class="btn btn-primary" id="obTeachPf">Open &amp; show the fields</button><span class="pill pill-todo" id="obPfTaught">needs setup</span></div>
@@ -395,12 +394,12 @@
       <div class="ob-step hidden" data-step="5">
         <div class="ob-hero"><svg viewBox="0 0 24 24" width="30" height="30" fill="none" stroke="#eaf2ff" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M2 12s3-7 10-7 10 7 10 7-3 7-10 7-10-7-10-7Z"/><circle cx="12" cy="12" r="3"/></svg></div>
         <h2>Step 4 — Watch a test run</h2>
-        <p>Type a <strong>patient's name</strong>, then pull their visits. <strong>Watch the Chrome window</strong> — you'll see the cursor search and read. Nothing is booked; this only reads. When the doctor and date look right, press <strong>Finish</strong>.</p>
+        <p>Pick a <strong>date</strong>, open Practice Fusion’s <strong>Schedule</strong> to that day in the Chrome window, then read it. <strong>Watch the Chrome window</strong> — you’ll see it read every appointment (patient + provider). Nothing is booked; this only reads. When the providers and dates look right, press <strong>Finish</strong>.</p>
         <label class="field">
-          <span>Patient name</span>
-          <input type="text" id="obPatient" placeholder="e.g. Lochlann McNulty" />
+          <span>Date to read</span>
+          <input type="date" id="obDate" />
         </label>
-        <button class="btn btn-primary" id="obVerifyBtn">Pull this patient's visits</button>
+        <button class="btn btn-primary" id="obVerifyBtn">Read this day’s appointments</button>
         <div class="ob-result hidden" id="obResult"></div>
       </div>
 
