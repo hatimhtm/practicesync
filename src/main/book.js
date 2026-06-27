@@ -23,6 +23,18 @@ const { dismissPopups } = require('./login');
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const say = (onStep, m) => { try { if (typeof onStep === 'function') onStep(m); } catch {} };
 
+const MONTHS = { jan: 1, feb: 2, mar: 3, apr: 4, may: 5, jun: 6, jul: 7, aug: 8, sep: 9, oct: 10, nov: 11, dec: 12 };
+// Normalize a date to SimplePractice's MM/DD/YYYY, from "Mon, Jun 29, 2026",
+// "2026-06-29", or "06/29/2026".
+function toMDY(s) {
+  const str = String(s || '').trim();
+  let m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(str); if (m) return `${m[2]}/${m[3]}/${m[1]}`;
+  m = /^(\d{1,2})\/(\d{1,2})\/(\d{4})$/.exec(str); if (m) return `${String(+m[1]).padStart(2, '0')}/${String(+m[2]).padStart(2, '0')}/${m[3]}`;
+  m = /([A-Za-z]{3})[a-z]*\.?\s+(\d{1,2}),?\s+(\d{4})/.exec(str); // "Jun 29, 2026"
+  if (m && MONTHS[m[1].toLowerCase()]) return `${String(MONTHS[m[1].toLowerCase()]).padStart(2, '0')}/${String(+m[2]).padStart(2, '0')}/${m[3]}`;
+  return str;
+}
+
 // Best-effort option pickers for the opened dropdowns. TODO(verify) once we
 // capture an opened typeahead/clinician list on the real account.
 const OPTION_SELECTORS = ['.select-box__option', '[role="option"]', 'li[role="option"]', '.typeahead-option', '.select-box__options li'];
@@ -40,19 +52,24 @@ async function clickOptionMatching(page, value) {
   return false;
 }
 
-// Click a typeahead trigger, type, and pick the matching option (with cursor).
-async function typeaheadSelect(page, triggerSel, value, onStep, label) {
+// Click a typeahead trigger, type into its searchbox, and click the matching
+// option row (with the visible cursor). `searchSel` is the input the trigger
+// reveals; if omitted we type into whatever gains focus.
+async function typeaheadSelect(page, triggerSel, value, onStep, label, searchSel) {
   try {
     await liveEngine.ensureStage(page);
     await liveEngine.stage(page, 'moveTo', triggerSel);
     await page.click(triggerSel, { timeout: 8000 }).catch(() => {});
-    await sleep(350);
-    await page.keyboard.type(String(value), { delay: 40 }); // types into the input the trigger reveals
-    await sleep(700);
+    await sleep(400);
+    if (searchSel && await page.$(searchSel)) { await page.fill(searchSel, '').catch(() => {}); await page.type(searchSel, String(value), { delay: 35 }); }
+    else { await page.keyboard.type(String(value), { delay: 35 }); }
+    await sleep(900);
     const picked = await clickOptionMatching(page, value);
-    if (!picked) await page.keyboard.press('Enter').catch(() => {}); // fall back to top match
+    // No match (e.g. a location that only exists on the real account) → close the
+    // dropdown cleanly and leave the existing value, instead of forcing a guess.
+    if (!picked) await page.keyboard.press('Escape').catch(() => {});
     await liveEngine.stage(page, 'press');
-    say(onStep, `${label}: ${value}`);
+    say(onStep, `${label}: ${value}${picked ? ' ✓' : ' (not on this account — left as is)'}`);
     return picked;
   } catch { return false; }
 }
@@ -69,32 +86,43 @@ async function bookAppointment(page, appointment, { onStep, dryRun = true } = {}
   await liveEngine.ensureStage(page);
   await liveEngine.stage(page, 'status', `Booking ${appointment.patientName}…`);
 
-  // DATE (verified) — MM/DD/YYYY as SimplePractice shows it.
-  if (appointment.date && await page.$(S.dateField)) {
+  // 1) CLIENT FIRST (verified) — the clinician + services only render afterwards.
+  if (appointment.patientName) await typeaheadSelect(page, S.clientTrigger, appointment.patientName, onStep, 'Client', S.clientSearchInput);
+  await sleep(1500); // let the rest of the form expand
+
+  // 2) DATE (verified) — MM/DD/YYYY, and the start TIME from Practice Fusion.
+  const mdy = toMDY(appointment.date);
+  if (mdy && await page.$(S.dateField)) {
     await liveEngine.stage(page, 'moveTo', S.dateField);
     await page.fill(S.dateField, '').catch(() => {});
-    await page.type(S.dateField, appointment.date, { delay: 40 }).catch(() => {});
+    await page.type(S.dateField, mdy, { delay: 40 }).catch(() => {});
+    await page.keyboard.press('Tab').catch(() => {});
     await liveEngine.stage(page, 'press');
+    say(onStep, `Date: ${mdy}`);
+  }
+  if (appointment.time && await page.$(S.startTimeField)) {
+    await liveEngine.stage(page, 'moveTo', S.startTimeField);
+    await page.fill(S.startTimeField, '').catch(() => {});
+    await page.type(S.startTimeField, appointment.time, { delay: 40 }).catch(() => {});
+    await page.keyboard.press('Tab').catch(() => {});
+    say(onStep, `Time: ${appointment.time}`);
   }
 
-  // CLIENT (typeahead; trigger verified, options best-effort).
-  if (appointment.patientName) await typeaheadSelect(page, S.clientTrigger, appointment.patientName, onStep, 'Client');
-
-  // CLINICIAN = the main doctor. On the demo it's a single non-editable name, so
-  // this is a no-op there; on the real account it opens a list to pick from.
+  // 3) CLINICIAN = the main doctor. Demo has a single non-editable clinician (a
+  // no-op); the real account opens a list to pick from (all clinicians pre-loaded).
   if (appointment.mainDoctor) {
     const open = await page.$(S.clinicianOpen);
     if (open) {
       await open.click().catch(() => {});
-      await sleep(400);
-      await clickOptionMatching(page, appointment.mainDoctor.split(' ')[0]); // first name is enough
-      say(onStep, `Clinician: ${appointment.mainDoctor}`);
+      await sleep(500);
+      const ok = await clickOptionMatching(page, appointment.mainDoctor.split(' ')[0]); // first name is enough
+      say(onStep, `Clinician: ${appointment.mainDoctor}${ok ? ' ✓' : ' (single/locked on demo)'}`);
     }
   }
 
-  // LOCATION (best-effort) — the practice default.
+  // 4) LOCATION — the practice default (real account: "High Quality Home Therapy LLC").
   if (presets.SP.defaultLocation && await page.$(S.locationTrigger)) {
-    await typeaheadSelect(page, S.locationTrigger, presets.SP.defaultLocation, onStep, 'Location');
+    await typeaheadSelect(page, S.locationTrigger, presets.SP.defaultLocation, onStep, 'Location', S.locationSearchInput);
   }
 
   // SERVICES — one line per code (native <select>, verified). Units + modifiers

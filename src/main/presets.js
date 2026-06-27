@@ -44,6 +44,7 @@ const PF = {
     rowSelector: 'tr.data-table__row',
     patientSelector: 'a[data-element="cell-name"]',
     doctorSelector: 'td[data-element^="cell-provider-name-"]',
+    timeSelector: '[data-element="start-time"]', // per-row appointment time, e.g. "12:00 PM"
     dateSelector: '[data-element="scheduler-selected-date"]',
   },
 };
@@ -65,7 +66,11 @@ const SP = {
     // then click the matching option. Scoped by its validation path so it isn't
     // confused with the (identically-classed) Location typeahead.
     clientTrigger: '[data-validation-path="client"] .typeahead-trigger',
+    // After clicking the trigger, a searchbox appears and options render below.
+    clientSearchInput: '[data-validation-path="client"] .select-box__input',
+    optionRow: '.select-box__option', // role="option" rows (has a .client-name)
     locationTrigger: '[data-validation-path="officeId"] .typeahead-trigger',
+    locationSearchInput: '[data-validation-path="officeId"] .select-box__input',
     dateField: 'input[name="startDate"]',
     startTimeField: 'input[name="startTime"]',
     // Native <select>: set by value (the CPT code) or label.

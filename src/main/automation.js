@@ -78,6 +78,7 @@ function planAppointments(visits, providers, mainDoctors = []) {
     return {
       patientName: v.patientName,
       date: v.date,
+      time: v.time || '',
       doctorName: v.doctorName,
       matched: Boolean(provider),
       mainDoctor: provider ? provider.mainDoctor : null,
