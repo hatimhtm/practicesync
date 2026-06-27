@@ -95,6 +95,13 @@ html, body {
 .foot-meta { font-size: 10.5px; margin-top: 8px; text-align: center; color: #8d8275; }
 .foot-hope { font-size: 10.5px; margin-top: 3px; text-align: center; color: var(--sidebar-accent); letter-spacing: 0.2px; }
 
+/* Easter egg — Hope trots across the bottom (triple-click the paw logo) */
+@keyframes hopeRun { from { left: -90px; transform: scaleX(-1); } to { left: 100%; transform: scaleX(-1); } }
+@keyframes hopeBob { 0%,100% { bottom: 18px; } 50% { bottom: 26px; } }
+@keyframes pawFade { 0% { opacity: 0.55; transform: scale(0.5) rotate(8deg); } 100% { opacity: 0; transform: scale(1.05) rotate(8deg); } }
+.hope-runner { position: fixed; bottom: 18px; font-size: 40px; z-index: 2000; pointer-events: none; animation: hopeRun 2.6s linear forwards, hopeBob 0.4s ease-in-out infinite; }
+.hope-paw { position: fixed; bottom: 14px; font-size: 15px; z-index: 1999; pointer-events: none; animation: pawFade 1.7s ease forwards; }
+
 /* Dedication footer on every page — quiet and tasteful */
 .app-footer {
   margin-top: 34px; padding: 4px 0 10px;

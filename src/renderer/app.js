@@ -706,6 +706,29 @@ $('#obVerifyBtn').addEventListener('click', async () => {
 
 if ($('#openConnFromHome')) $('#openConnFromHome').addEventListener('click', () => showView('connect'));
 
+/* ----------------------------- Hope easter egg ---------------------------- */
+function runHopeEgg() {
+  const dog = document.createElement('div');
+  dog.className = 'hope-runner'; dog.textContent = '🐕';
+  document.body.appendChild(dog);
+  let x = 2;
+  const trail = setInterval(() => {
+    x += 7; if (x > 96) { clearInterval(trail); return; }
+    const paw = document.createElement('div');
+    paw.className = 'hope-paw'; paw.textContent = '🐾'; paw.style.left = x + '%';
+    document.body.appendChild(paw); setTimeout(() => paw.remove(), 1700);
+  }, 110);
+  setTimeout(() => dog.remove(), 2700);
+  toast('🐾 Woof! — Hope says hi');
+}
+if ($('#logoMark')) {
+  let taps = 0; let timer = null;
+  $('#logoMark').addEventListener('click', () => {
+    taps += 1; clearTimeout(timer); timer = setTimeout(() => { taps = 0; }, 700);
+    if (taps >= 3) { taps = 0; clearTimeout(timer); runHopeEgg(); }
+  });
+}
+
 /* ------------------------------- updates -------------------------------- */
 // Updates live entirely in the sidebar button + the auto banner (no duplicate
 // controls in the Overview body).
