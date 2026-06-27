@@ -126,10 +126,12 @@ async function bookAppointment(page, appointment, { onStep, dryRun = true, overr
     }
   }
 
-  // 4) LOCATION — intentionally LEFT ALONE. SimplePractice already defaults the
-  // appointment to a valid location, and searching for one that isn't on the
-  // account just stalls the form. The practice's real location is the default
-  // there anyway, so we never touch this field.
+  // 4) LOCATION — pick the practice's location. It exists on the account now, so
+  // the typeahead matches and selects it (and there is NO Escape anywhere, so the
+  // dialog stays open). If it ever doesn't match, typeaheadSelect just moves on.
+  if (presets.SP.defaultLocation && await page.$(S.locationTrigger)) {
+    await typeaheadSelect(page, S.locationTrigger, presets.SP.defaultLocation, onStep, 'Location', S.locationSearchInput);
+  }
 
   // SERVICES — one line per code (native <select>, verified). Units + modifiers
   // are TODO(real): filled when those inputs exist (absent in the demo dialog).
