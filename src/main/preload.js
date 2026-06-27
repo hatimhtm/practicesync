@@ -15,6 +15,7 @@ contextBridge.exposeInMainWorld('api', {
   credsStatus: () => ipcRenderer.invoke('creds:status'),
   saveCreds: (creds) => ipcRenderer.invoke('creds:save', creds),
   syncRun: (opts) => ipcRenderer.invoke('sync:run', opts || {}),
+  captureFields: () => ipcRenderer.invoke('capture:fields'),
   runSiteDemo: (opts) => ipcRenderer.invoke('demo:run-site', opts),
   onDemoStep: (cb) => ipcRenderer.on('demo-step', (_e, s) => cb(s)),
   recordStart: (opts) => ipcRenderer.invoke('record:start', opts || {}),

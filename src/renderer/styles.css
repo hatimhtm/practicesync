@@ -94,6 +94,20 @@ html, body {
 .sidebar-foot { margin-top: auto; }
 .foot-meta { font-size: 10.5px; margin-top: 8px; text-align: center; color: #8d8275; }
 .foot-hope { font-size: 10.5px; margin-top: 3px; text-align: center; color: var(--sidebar-accent); letter-spacing: 0.2px; }
+
+/* Dedication footer on every page — quiet and tasteful */
+.app-footer {
+  margin-top: 34px; padding: 4px 0 10px;
+  display: flex; align-items: center; justify-content: center; gap: 14px;
+}
+.app-footer .rule { height: 1px; width: 46px; background: var(--line); }
+.app-footer .ded {
+  font-size: 11px; text-transform: uppercase; letter-spacing: 1.1px;
+  color: var(--muted); display: inline-flex; align-items: center; gap: 8px;
+}
+.app-footer strong { color: var(--accent); font-weight: 700; letter-spacing: 1.1px; }
+.app-footer .sep { color: var(--line); }
+.app-footer .paw { letter-spacing: 0; }
 .pill {
   display: inline-flex; align-items: center; gap: 5px;
   font-size: 11px; padding: 5px 10px; border-radius: 999px; font-weight: 600;

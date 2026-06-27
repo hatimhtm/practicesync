@@ -39,7 +39,6 @@
         <div class="pill pill-safe">🔒 No patient data leaves this Mac</div>
         <button class="btn" id="sidebarUpdateBtn" style="width:100%;margin-top:10px;font-size:12.5px">Check for updates</button>
         <div class="foot-meta" id="appVersion">v—</div>
-        <div class="foot-hope">🐾 named for Hope</div>
       </div>
     </aside>
 
@@ -100,7 +99,7 @@
           each falls under, then books each one in SimplePractice with that doctor’s codes and saves it. <strong>You watch
           the whole thing happen</strong> in Chrome: the cursor moves, types, and clicks, step by step.
         </div>
-        <div style="margin-top:18px"><button class="link" id="replayTutorial">Replay the setup tutorial →</button></div>
+        <div style="margin-top:18px"><button class="link" id="openConnFromHome">Set up your logins →</button></div>
       </section>
 
       <!-- DOCTORS & CODES -->
@@ -182,6 +181,12 @@
             <div id="syncLog" class="hidden" style="margin-top:10px;max-height:220px;overflow-y:auto;font:12px ui-monospace,Menlo,monospace;background:var(--panel-2);border:1px solid var(--line);border-radius:10px;padding:10px"></div>
           </div>
 
+          <div class="card">
+            <div class="card-k">First-time setup · Capture the booking fields</div>
+            <p class="muted" style="font-size:13px;line-height:1.5">A few SimplePractice boxes — <strong>Units</strong>, the <strong>GP/GO/GN</strong> and <strong>59</strong> modifiers — only appear on your real account. Run this <strong>once</strong>: it opens SimplePractice, you pick any client + service, then <strong>point at each box it names</strong> (skip any you don’t use). It saves a folder to your <strong>Desktop</strong> — send it over and it’s locked in for good.</p>
+            <div class="row"><button class="btn btn-primary" id="captureFieldsBtn">Capture the booking fields</button><span class="pill pill-todo" id="captureStatus" style="display:none"></span></div>
+          </div>
+
           <details class="card advanced" style="margin-top:4px">
             <summary>Advanced — re-teach the screens (rarely needed)</summary>
             <p class="muted" style="font-size:12.5px;line-height:1.5;margin-top:10px">Hope Assistant already knows your Practice Fusion and SimplePractice screens. Only re-teach if a site changes and a field stops being found — open Chrome, sign in if asked, click <strong>“Point at a field”</strong>, and click the field it names.</p>
@@ -235,16 +240,25 @@
       <section class="view hidden" data-view="schedule">
         <header class="view-head">
           <h1>Schedule</h1>
-          <p class="muted">How often Hope Assistant runs on its own — in the background, for the patient names you've saved.</p>
+          <p class="muted">Hope Assistant can run on its own each morning, booking the days ahead so the SimplePractice calendar always matches Practice Fusion.</p>
         </header>
         <div class="card">
           <div class="card-k">How often to run</div>
           <div class="seg" id="scheduleSeg" style="margin-top:8px">
             <button data-val="off">Off</button>
             <button data-val="6h">Every 6 hours</button>
-            <button data-val="daily">Daily</button>
+            <button data-val="daily">Daily (each morning)</button>
           </div>
-          <p class="muted" id="scheduleNote" style="font-size:12.5px;margin:0">Off — Hope Assistant runs only when you press <strong>Sync now</strong>.</p>
+          <p class="muted" id="scheduleNote" style="font-size:12.5px;margin:0 0 4px">Off — Hope Assistant runs only when you press <strong>Sync now</strong>.</p>
+        </div>
+
+        <div class="card">
+          <div class="card-k">How many days ahead to book</div>
+          <div class="row" style="margin-top:4px">
+            <input type="number" id="syncDaysAhead" min="1" max="31" step="1" style="width:84px" />
+            <span class="muted" style="font-size:13px">days — each run covers <strong>today</strong> through this many days out.</span>
+          </div>
+          <p class="muted" style="font-size:12px;margin:8px 0 0">Every run re-checks the upcoming days, so appointments added later are picked up automatically — and already-booked ones are skipped.</p>
         </div>
 
         <div class="grid grid-2">
@@ -343,6 +357,12 @@
           <div class="live-log" id="recReplayLog"></div>
         </div>
       </section>
+
+      <footer class="app-footer">
+        <span class="rule"></span>
+        <span class="ded">In honor of <strong>Hope</strong><span class="sep">·</span>Chief Canine Officer <span class="paw">🐾</span></span>
+        <span class="rule"></span>
+      </footer>
     </main>
   </div>
 

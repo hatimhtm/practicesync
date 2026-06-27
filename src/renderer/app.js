@@ -101,6 +101,7 @@ async function refresh() {
   // Schedule
   const sched = settings.schedule || 'off';
   $$('#scheduleSeg button').forEach((b) => b.classList.toggle('active', b.dataset.val === sched));
+  if ($('#syncDaysAhead') && document.activeElement !== $('#syncDaysAhead')) $('#syncDaysAhead').value = settings.syncDaysAhead || 7;
   renderSchedule(sched, r);
 }
 
@@ -386,6 +387,21 @@ async function runSyncFlow(save, btn) {
 if ($('#syncDryBtn')) $('#syncDryBtn').addEventListener('click', (e) => runSyncFlow(false, e.target));
 if ($('#syncBookBtn')) $('#syncBookBtn').addEventListener('click', (e) => runSyncFlow(true, e.target));
 
+if ($('#captureFieldsBtn')) $('#captureFieldsBtn').addEventListener('click', async (e) => {
+  const btn = e.target; const old = btn.textContent;
+  btn.disabled = true; btn.textContent = 'Opening SimplePractice…';
+  if ($('#syncLog')) $('#syncLog').innerHTML = '';
+  const r = await window.api.captureFields();
+  btn.disabled = false; btn.textContent = old;
+  const pill = $('#captureStatus');
+  if (pill) {
+    pill.style.display = '';
+    pill.textContent = r && r.ok ? `Saved “${r.folder}” to your Desktop ✓` : (r && r.error ? r.error : 'Capture stopped');
+    pill.className = 'pill ' + (r && r.ok ? 'pill-good' : 'pill-todo');
+  }
+  if (r && r.ok) toast(`Saved to your Desktop — send me the “${r.folder}” folder.`);
+});
+
 /* ------------------------------- AI engine ------------------------------ */
 const PROVIDER_LABEL = { auto: 'Smart (auto)', apple: 'Apple Intelligence', ollama: 'Local Gemma', none: 'Built-in' };
 function renderAIState() {
@@ -431,6 +447,12 @@ $$('#scheduleSeg button').forEach((b) => b.addEventListener('click', async () =>
   await refresh();
   toast('Schedule updated.');
 }));
+if ($('#syncDaysAhead')) $('#syncDaysAhead').addEventListener('change', async (e) => {
+  const n = Math.max(1, Math.min(31, parseInt(e.target.value, 10) || 7));
+  e.target.value = n;
+  await window.api.saveSettings({ syncDaysAhead: n });
+  toast(`Will sync the next ${n} day${n === 1 ? '' : 's'} on each run.`);
+});
 
 /* ------------------------------ test drive ------------------------------ */
 let demoRunning = false;
@@ -682,7 +704,7 @@ $('#obVerifyBtn').addEventListener('click', async () => {
   obShow(obStep);
 });
 
-$('#replayTutorial').addEventListener('click', () => openOnboarding());
+if ($('#openConnFromHome')) $('#openConnFromHome').addEventListener('click', () => showView('connect'));
 
 /* ------------------------------- updates -------------------------------- */
 // Updates live entirely in the sidebar button + the auto banner (no duplicate
@@ -773,10 +795,6 @@ window.api.onRunStatus((s) => { if (s && s.phase === 'running') $('#statusIcon')
 (async () => {
   await refresh();
   renderWorkflowList();
-  // Force the full setup on first run AND after an update (version bump), and
-  // whenever the screens aren't taught — so the app can never run on wrong data.
-  const needsSetup = !settings.setupComplete
-    || (settings.setupVersion || 0) < SETUP_VERSION
-    || !settings.pfSelectors || !settings.spSelectors;
-  if (needsSetup) openOnboarding();
+  // The step-by-step tutorial is retired: the screens are already built in, so
+  // first-run setup is just "enter your logins" on the Connection page.
 })();

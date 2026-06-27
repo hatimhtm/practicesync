@@ -9,6 +9,8 @@ const { parseRoster, appleIntelligenceAvailable, detectEngines, appleHelperPath 
 const { DEMO_MAIN_DOCTORS, DEMO_PROVIDERS, makeProvider, makeMainDoctor } = require('./model');
 const { teach, runSiteDemo } = require('./liveEngine');
 const { runFullSync, expandDates } = require('./sync');
+const presets = require('./presets');
+const { loginSimplePractice } = require('./login');
 const { startSheetServer } = require('./demoSheet');
 const recorder = require('./recorder');
 const { Scheduler } = require('./scheduler');
@@ -117,6 +119,43 @@ async function performSync(trigger = 'manual', overrides = {}) {
     try { store.save({ lastRun: result.at, lastResult: result }); refreshTray(); } catch {}
     sendToRenderer('run-finished', result); // null-safe (window may be gone)
     return result;
+  }
+}
+
+/**
+ * The real automatic/manual sync: a ROLLING WINDOW of the next N days
+ * (today … today+N-1, N = syncDaysAhead, default 7). Each run re-checks the
+ * future days, so appointments added later get picked up; the SimplePractice
+ * calendar de-dup means nothing is ever booked twice.
+ */
+function mdy(d) { return `${String(d.getMonth() + 1).padStart(2, '0')}/${String(d.getDate()).padStart(2, '0')}/${d.getFullYear()}`; }
+async function performWindowSync(trigger = 'manual') {
+  try {
+    const s = store.load();
+    const creds = store.getCreds();
+    if (!creds.practiceFusion.password || !creds.simplePractice.password) {
+      const r = { ok: false, error: 'Add your Practice Fusion and SimplePractice logins on the Connection screen first.', at: nowISO() };
+      sendToRenderer('run-finished', r); return r;
+    }
+    const n = Math.max(1, Math.min(31, Number(s.syncDaysAhead) || 7));
+    const today = new Date(); today.setHours(0, 0, 0, 0);
+    const dates = [];
+    for (let i = 0; i < n; i++) { const d = new Date(today); d.setDate(d.getDate() + i); dates.push(mdy(d)); }
+    sendToRenderer('live-step', { text: `${trigger === 'schedule' ? 'Morning auto-sync' : 'Sync'} — checking the next ${n} day(s): ${dates[0]} → ${dates[dates.length - 1]}…`, at: nowISO(), reset: true });
+    const onStep = (text) => sendToRenderer('live-step', { text, at: nowISO() });
+    const providers = (s.providers && s.providers.length) ? s.providers : DEMO_PROVIDERS;
+    const mainDoctors = (s.mainDoctors && s.mainDoctors.length) ? s.mainDoctors : DEMO_MAIN_DOCTORS;
+    const res = await runFullSync({ secrets: creds, dates, providers, mainDoctors, save: true, overrides: s.spFieldOverrides, onStep });
+    res.at = nowISO();
+    store.save({ lastRun: res.at, lastResult: { ok: res.ok, at: res.at, mode: 'live', trigger, created: res.booked || 0, skipped: res.skipped || 0, failed: res.failed || 0, unmatched: res.unmatched || 0, error: res.error } });
+    refreshTray();
+    sendToRenderer('run-finished', res);
+    if (res.ok) notify(`Synced the next ${n} days — booked ${res.booked || 0}, ${res.skipped || 0} already there${res.failed ? `, ${res.failed} need attention` : ''} ✓`);
+    else notify('Sync needs attention — open Hope Assistant to see why.');
+    return res;
+  } catch (err) {
+    const r = { ok: false, error: 'Something went wrong during the sync. Please try again.', at: nowISO() };
+    sendToRenderer('run-finished', r); return r;
   }
 }
 
@@ -304,6 +343,43 @@ function registerIpc() {
   ipcMain.handle('run:now', async () => scheduler.runNow('manual'));
 
   // --- Demo-account sync (Practice Fusion → SimplePractice), wired to the engine ---
+  // First-run helper: open SimplePractice's booking form and let the user POINT
+  // at the fields that aren't in the demo (units + the GP/GO/GN and 59 modifier
+  // boxes, etc.). Saves a folder to the Desktop (HTML + screenshots + the
+  // selectors found) and applies them — non-blocking, his mouse stays free.
+  ipcMain.handle('capture:fields', async () => {
+    const s = store.load();
+    const creds = store.getCreds();
+    if (!creds.simplePractice || !creds.simplePractice.password) return { ok: false, error: 'Add your SimplePractice login on the Connection screen first.' };
+    const stamp = nowISO().replace(/[:.]/g, '-');
+    const dir = path.join(app.getPath('desktop'), `Hope Assistant Setup ${stamp}`);
+    const onStep = (t) => sendToRenderer('live-step', { text: t, at: nowISO() });
+    sendToRenderer('live-step', { text: 'Opening SimplePractice to capture the booking fields…', at: nowISO(), reset: true });
+    const steps = [
+      { key: 'unitsField', label: 'The UNITS box (how many units a service line is)' },
+      { key: 'modifierField', label: 'The first MODIFIER box — where GP / GO / GN goes' },
+      { key: 'modifier2Field', label: 'The SECOND modifier box — where “59” goes (Skip if you don’t use it)', optional: true },
+      { key: 'clinicianPick', label: 'The CLINICIAN field — to pick the main doctor (Skip if it’s already set)', optional: true },
+      { key: 'locationPick', label: 'The LOCATION field (Skip if it’s already correct)', optional: true },
+    ];
+    try {
+      const res = await teach({
+        userDataDir: s.chromeUserDataDir, profileDir: s.chromeProfileDir,
+        url: presets.SP.newApptUrl, steps, capturesDir: dir, savePageHtml: true,
+        loginFirst: (page) => loginSimplePractice(page, creds.simplePractice, { onStep, visual: false }),
+        gate: { text: '🩺 <b>Open a new appointment and pick any client + a service</b>, so the Units and Modifier boxes appear. Then click below and point at each box I name.', btn: 'I have a client + service showing — Start pointing ▶' },
+      });
+      if (!res.ok) return res;
+      // Save what we found so booking can use it (merged over the built-ins).
+      const overrides = { ...(s.spFieldOverrides || {}) };
+      const map = { unitsField: 'unitsField', modifierField: 'modifierInputs', modifier2Field: 'modifier2', clinicianPick: 'clinicianOpen', locationPick: 'locationTrigger' };
+      for (const [k, v] of Object.entries(res.selectors || {})) if (v) overrides[map[k] || k] = v;
+      store.save({ spFieldOverrides: overrides });
+      try { shell.openPath(res.capturesDir); } catch {}
+      onStep(`Saved to your Desktop → “${path.basename(dir)}”. Send me that folder and I’ll lock it in.`);
+      return { ok: true, capturesDir: res.capturesDir, captureCount: res.captureCount, folder: path.basename(dir) };
+    } catch (e) { return { ok: false, error: 'The capture could not run. Make sure Google Chrome is installed.' }; }
+  });
   ipcMain.handle('creds:status', () => store.credsStatus());
   ipcMain.handle('creds:save', (_e, creds) => {
     try { store.setCreds(creds || {}); return { ok: true, status: store.credsStatus() }; }
@@ -323,7 +399,7 @@ function registerIpc() {
     const mainDoctors = (s.mainDoctors && s.mainDoctors.length) ? s.mainDoctors : DEMO_MAIN_DOCTORS;
     sendToRenderer('live-step', { text: `Starting sync for ${dates.join(', ')}…`, at: nowISO(), reset: true });
     const onStep = (text) => sendToRenderer('live-step', { text, at: nowISO() });
-    const res = await runFullSync({ secrets: creds, dates, providers, mainDoctors, save: !!opts.save, onStep });
+    const res = await runFullSync({ secrets: creds, dates, providers, mainDoctors, save: !!opts.save, overrides: s.spFieldOverrides, onStep });
     res.at = nowISO();
     sendToRenderer('run-finished', res);
     if (res.ok) notify(opts.save ? `Booked ${res.booked} · skipped ${res.skipped}${res.failed ? ' · ' + res.failed + ' failed' : ''}` : `Dry run: ${res.planned.length} would book`);
@@ -435,7 +511,7 @@ app.whenReady().then(() => {
   dequarantineHelper();
   registerIpc();
   scheduler.configure({
-    task: (trigger) => performSync(trigger === 'schedule' ? 'schedule' : 'manual'),
+    task: (trigger) => performWindowSync(trigger === 'schedule' ? 'schedule' : 'manual'),
     onStatus: (s) => sendToRenderer('run-status', s),
   });
   const settings = store.load();

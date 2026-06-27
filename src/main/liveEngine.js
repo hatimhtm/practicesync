@@ -95,17 +95,28 @@ async function openAutomationContext(opts = {}) {
       '--restore-last-session=false',
     ],
   };
+  // Keep the window tidy: one working tab, no leftover/blank restored tabs.
+  const tidy = async (ctx) => {
+    try {
+      const pages = ctx.pages();
+      if (!pages.length) await ctx.newPage();
+      // Close every extra/blank tab, keep a single page to work in.
+      for (const p of ctx.pages().slice(1)) { try { await p.close(); } catch {} }
+      // If the one remaining tab is a restored blank, leave it for openPage to use.
+    } catch {}
+    return ctx;
+  };
   const launch = () => pw.chromium.launchPersistentContext(userDataDir, { channel: 'chrome', ...launchOpts })
     .catch(() => pw.chromium.launchPersistentContext(userDataDir, { executablePath: CHROME_BIN, ...launchOpts }));
   try {
-    return { context: await launch() };
+    return { context: await tidy(await launch()) };
   } catch (e) {
     const s = String((e && e.message) || e);
     // The only thing that can lock OUR profile is a previous Hope Assistant window
     // that's still open (or crashed). Clear the lock and retry once.
     if (/ProcessSingleton|cannot create|in use|locked|SingletonLock/i.test(s)) {
       clearStaleLocks(userDataDir);
-      try { return { context: await launch() }; }
+      try { return { context: await tidy(await launch()) }; }
       catch (e2) { return { error: fail('A Hope Assistant browser window is already open — close it and click again.', String((e2 && e2.message) || e2)) }; }
     }
     return { error: fail('Could not open Chrome. Make sure Google Chrome is installed, then try again.', s) };
@@ -532,18 +543,21 @@ async function createAppointmentLive({ userDataDir, profileDir, url, selectors, 
  * `steps` = [{ key, label, relativeTo?, allowDefault?, optional? }].
  * Returns { ok, selectors, capturesDir, captureCount }.
  */
-async function teach({ userDataDir, profileDir, url, steps, headless = false, capturesDir = null, infer = null }) {
+async function teach({ userDataDir, profileDir, url, steps, headless = false, capturesDir = null, infer = null, loginFirst = null, gate = null, savePageHtml = false }) {
   return withBrowser({ userDataDir, profileDir, headless }, async (context) => {
     const page = await openPage(context, url);
     // If the link didn't open on its own, prompt the user to type it and wait —
     // never start highlighting fields on a blank page.
     await waitForRealPage(page);
 
+    // Optional: sign in automatically (e.g. SimplePractice) before the gate.
+    if (typeof loginFirst === 'function') { try { await loginFirst(page); } catch {} }
+
     // FREE-ROAM phase: let the user sign in, enter a 2-factor code, and navigate
     // to the page they want WITHOUT the app intercepting their clicks. Field
     // teaching (which blocks clicks to "select") only begins once they say
     // they're ready. This is what lets them actually log in.
-    await waitForReady(page);
+    await waitForReady(page, gate);
 
     const manifest = [];
     if (capturesDir) { try { fs.mkdirSync(capturesDir, { recursive: true }); } catch {} }
@@ -603,6 +617,12 @@ async function teach({ userDataDir, profileDir, url, steps, headless = false, ca
     }
 
     if (capturesDir && manifest.length) { try { writeGallery(capturesDir, manifest); } catch {} }
+    // For first-run capture: also drop the full page HTML + the selectors found,
+    // so the exact markup can be reviewed / locked in later.
+    if (capturesDir && savePageHtml) {
+      try { fs.writeFileSync(path.join(capturesDir, 'page.html'), await page.content()); } catch {}
+      try { fs.writeFileSync(path.join(capturesDir, 'fields-found.json'), JSON.stringify(selectors, null, 2)); } catch {}
+    }
     return { ok: true, selectors, capturesDir: capturesDir || null, captureCount: manifest.length, inference };
   });
 }
@@ -620,14 +640,14 @@ function readyGateSource() {
       const ui = document.createElement('div'); ui.id = '__ps_gate';
 
       const bar = document.createElement('div');
-      bar.innerHTML = '<span style="font-size:17px;vertical-align:-2px">👋</span> <b>First, sign in and open the page you want to teach.</b> Do anything you need — log in, enter a verification code, navigate. Nothing here is saved.';
+      bar.innerHTML = cfg.text || '<span style="font-size:17px;vertical-align:-2px">👋</span> <b>First, sign in and open the page you want to teach.</b> Do anything you need — log in, enter a verification code, navigate. Nothing here is saved.';
       Object.assign(bar.style, { position: 'fixed', top: '0', left: '0', right: '0', zIndex: '2147483646', background: 'rgba(17,24,40,.97)', color: '#eaf0fb', font: '600 14px/1.45 -apple-system,system-ui,sans-serif', padding: '13px 18px', textAlign: 'center', boxShadow: '0 3px 14px rgba(0,0,0,.4)', pointerEvents: 'none' });
       ui.appendChild(bar);
 
       const wrap = document.createElement('div');
       Object.assign(wrap.style, { position: 'fixed', bottom: '22px', left: '50%', transform: 'translateX(-50%)', zIndex: '2147483647', pointerEvents: 'auto' });
       const btn = document.createElement('button');
-      btn.textContent = "I'm on the right page — Start teaching ▶";
+      btn.textContent = cfg.btn || "I'm on the right page — Start teaching ▶";
       Object.assign(btn.style, { font: '700 14px -apple-system,system-ui,sans-serif', border: '0', borderRadius: '12px', padding: '13px 22px', cursor: 'pointer', color: '#04240f', background: '#34d399', boxShadow: '0 10px 28px rgba(0,0,0,.45)' });
       btn.addEventListener('click', (e) => { e.preventDefault(); e.stopPropagation(); try { if (window[cfg.binding]) window[cfg.binding](); } catch {} }, true);
       wrap.appendChild(btn); ui.appendChild(wrap);
@@ -639,12 +659,12 @@ function readyGateSource() {
 
 /** Wait (non-blocking) until the user has signed in / navigated and clicks
  *  "Start teaching". Survives page navigation. */
-async function waitForReady(page) {
+async function waitForReady(page, gate = null) {
   const binding = '__psGate_' + Math.floor(Math.random() * 1e6);
   let resolve; let settled = false;
   const done = new Promise((r) => { resolve = r; });
   try { await page.exposeFunction(binding, () => { if (!settled) { settled = true; resolve(); } }); } catch {}
-  const inject = `(${readyGateSource().toString()})(${JSON.stringify({ binding })})`;
+  const inject = `(${readyGateSource().toString()})(${JSON.stringify({ binding, text: (gate && gate.text) || null, btn: (gate && gate.btn) || null })})`;
   const reinject = () => { page.evaluate(inject).catch(() => {}); };
   reinject();
   const onNav = (frame) => { if (frame === page.mainFrame()) setTimeout(reinject, 300); };

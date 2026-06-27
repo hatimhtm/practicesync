@@ -28,6 +28,8 @@ const DEFAULTS = {
   chromeUserDataDir: '',    // blank → liveEngine uses its own dedicated automation profile (runs alongside the user's Chrome; no force-quit)
   patientNames: [],         // legacy search model only: patients looked up by NAME
   runDate: '',              // the day to read off the Practice Fusion schedule (YYYY-MM-DD)
+  syncDaysAhead: 7,         // automatic runs sync a rolling window: today … today+N-1
+  spFieldOverrides: null,   // first-run capture: SimplePractice field selectors not present in the demo
   bookedKeys: [],           // visit keys already booked, so live runs never double-book
   workflows: [],            // recorded workflows: [{ id, name, steps:[...], createdAt }]
   schedule: 'off',          // 'off' | '6h' | 'daily'

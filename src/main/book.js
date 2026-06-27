@@ -78,8 +78,10 @@ async function typeaheadSelect(page, triggerSel, value, onStep, label, searchSel
  * @param appointment { patientName, date, mainDoctor, services:[{code,units,modifiers[]}] }
  * @param opts { onStep, dryRun=true } — dryRun fills but does not click Save.
  */
-async function bookAppointment(page, appointment, { onStep, dryRun = true } = {}) {
-  const S = presets.SP.selectors;
+async function bookAppointment(page, appointment, { onStep, dryRun = true, overrides = null } = {}) {
+  // First-run captured selectors (units / modifier boxes / clinician / location)
+  // take precedence over the built-in ones when present.
+  const S = { ...presets.SP.selectors, ...(overrides || {}) };
   // Open a fresh new-appointment dialog.
   await page.goto(presets.SP.newApptUrl, { waitUntil: 'domcontentloaded' }).catch(() => {});
   await dismissPopups(page);

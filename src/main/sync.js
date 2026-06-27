@@ -71,7 +71,7 @@ async function pfNavigateToDate(page, target, onStep) {
  * @param {boolean} opts.save     true = actually book; false = dry run (fill only)
  * @param {function} opts.onStep
  */
-async function runFullSync({ secrets, dates, providers, mainDoctors, save = false, onStep, context: existing } = {}) {
+async function runFullSync({ secrets, dates, providers, mainDoctors, save = false, onStep, overrides = null, context: existing } = {}) {
   const result = { ok: true, planned: [], booked: 0, skipped: 0, failed: 0, unmatched: 0, dryRun: !save };
   const own = !existing;
   let context = existing;
@@ -127,7 +127,7 @@ async function runFullSync({ secrets, dates, providers, mainDoctors, save = fals
       for (const appt of group) {
         const k = norm(appt.patientName);
         if ((accounted[k] || 0) >= want[k]) { result.skipped += 1; say(onStep, `Skip ${appt.patientName} on ${date} — already booked`); continue; }
-        const r = await book.bookAppointment(page, appt, { onStep, dryRun: !save });
+        const r = await book.bookAppointment(page, appt, { onStep, dryRun: !save, overrides });
         if (r.ok) { result.booked += 1; accounted[k] = (accounted[k] || 0) + 1; }
         else { result.failed += 1; say(onStep, `Could not book ${appt.patientName}: ${r.error}`); }
       }
