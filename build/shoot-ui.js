@@ -64,6 +64,9 @@ const API_STUB = `
     teach: async () => ({ ok: true }),
     onRunStatus: () => {}, onRunFinished: () => {}, onLiveStep: () => {},
     checkForUpdates: async () => {}, installUpdate: async () => {}, onUpdateStatus: () => {},
+    credsStatus: async () => ({ pf: true, sp: true, pfUsername: 'clinic@practice.com', spEmail: 'clinic@practice.com' }),
+    saveCreds: async () => ({ ok: true }),
+    syncRun: async () => ({ ok: true, booked: 6, skipped: 1, failed: 0, unmatched: 0, planned: [] }),
   };
 `;
 

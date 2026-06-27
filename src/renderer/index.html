@@ -12,7 +12,15 @@
   <div class="app">
     <aside class="sidebar">
       <div class="logo">
-        <div class="logo-mark">H</div>
+        <div class="logo-mark" aria-label="Hope">
+          <svg viewBox="0 0 24 24" width="23" height="23" fill="currentColor" aria-hidden="true">
+            <ellipse cx="12" cy="16" rx="4.3" ry="3.4"/>
+            <ellipse cx="6.4" cy="11.2" rx="1.85" ry="2.4"/>
+            <ellipse cx="9.9" cy="8" rx="1.85" ry="2.4"/>
+            <ellipse cx="14.1" cy="8" rx="1.85" ry="2.4"/>
+            <ellipse cx="17.6" cy="11.2" rx="1.85" ry="2.4"/>
+          </svg>
+        </div>
         <div>
           <div class="logo-name">Hope Assistant</div>
           <div class="logo-sub">Practice Fusion → SimplePractice</div>
@@ -30,7 +38,8 @@
       <div class="sidebar-foot">
         <div class="pill pill-safe">🔒 No patient data leaves this Mac</div>
         <button class="btn" id="sidebarUpdateBtn" style="width:100%;margin-top:10px;font-size:12.5px">Check for updates</button>
-        <div class="muted" id="appVersion" style="font-size:10.5px;margin-top:6px;text-align:center">v—</div>
+        <div class="foot-meta" id="appVersion">v—</div>
+        <div class="foot-hope">🐾 named for Hope</div>
       </div>
     </aside>
 
@@ -139,37 +148,13 @@
       <section class="view hidden" data-view="connect">
         <header class="view-head">
           <h1>Connection</h1>
-          <p class="muted">Hope Assistant opens its <strong>own</strong> Chrome window — your everyday Chrome can stay open. Sign in to each site once in that window and it stays signed in next time.</p>
+          <p class="muted">Enter your two logins once, pick a date, and Hope Assistant reads Practice Fusion and books each appointment in SimplePractice — in its own Chrome window, while you watch.</p>
         </header>
 
         <div id="liveSetup">
           <div class="card">
-            <div class="card-k">Step 1 · Teach the screens</div>
-            <p class="muted" style="font-size:13px;line-height:1.5"><strong>“Teaching”</strong> just means showing the app where each field is. When Chrome opens, <strong>sign in first if asked</strong> (logins are remembered after the first time), then click <strong>“Start teaching.”</strong> You then <strong>navigate the site normally</strong> and just hover + <strong>Mark</strong> the few things the app needs — it never blocks your clicks. Re-teach anytime in seconds.</p>
-            <label class="field">
-              <span>Practice Fusion home / search page address</span>
-              <input type="text" id="pfUrl" placeholder="https://static.practicefusion.com/..." />
-            </label>
-            <div class="row"><button class="btn btn-primary" id="teachPf">Teach the Practice Fusion screen</button><span class="pill pill-todo" id="pfTaught">needs setup</span></div>
-            <label class="field" style="margin-top:16px">
-              <span>SimplePractice appointment page address</span>
-              <input type="text" id="spUrl" placeholder="https://secure.simplepractice.com/..." />
-            </label>
-            <div class="row"><button class="btn btn-primary" id="teachSp">Teach the SimplePractice screen</button><span class="pill pill-todo" id="spTaught">needs setup</span></div>
-          </div>
-
-          <div class="card">
-            <div class="card-k">Step 2 · SimplePractice type</div>
-            <div class="seg" id="spModeSeg">
-              <button data-val="standard">Standard (automate the screen)</button>
-              <button data-val="enterprise">Enterprise (API)</button>
-            </div>
-            <p class="muted" style="font-size:12.5px">Keep <strong>Standard</strong> selected — it fills the appointment form on screen. Enterprise (API) becomes available once a practice has API access; everything else stays the same.</p>
-          </div>
-
-          <div class="card">
             <div class="card-k">Step 1 · Your logins</div>
-            <p class="muted" style="font-size:13px;line-height:1.5">Saved <strong>encrypted in your Mac’s Keychain</strong> — never uploaded. Hope Assistant signs in for you (and pauses for the Practice Fusion phone code when needed).</p>
+            <p class="muted" style="font-size:13px;line-height:1.5">Stored <strong>encrypted in this Mac’s Keychain</strong> — they never leave the computer and are never put in the app’s code. Each machine uses its own. Hope Assistant signs in for you, and <strong>pauses for the Practice Fusion phone code</strong> when it’s asked, then continues.</p>
             <div class="row" style="gap:10px">
               <label class="field" style="flex:1"><span>Practice Fusion email/username</span><input type="text" id="pfUser" placeholder="you@example.com" /></label>
               <label class="field" style="flex:1"><span>Practice Fusion password</span><input type="password" id="pfPass" placeholder="••••••••" /></label>
@@ -178,12 +163,12 @@
               <label class="field" style="flex:1"><span>SimplePractice email</span><input type="text" id="spUser" placeholder="you@example.com" /></label>
               <label class="field" style="flex:1"><span>SimplePractice password</span><input type="password" id="spPass" placeholder="••••••••" /></label>
             </div>
-            <div class="row"><button class="btn" id="saveCredsBtn">Save logins</button><span class="pill pill-todo" id="credsPf">PF needs login</span><span class="pill pill-todo" id="credsSp">SP needs login</span></div>
+            <div class="row"><button class="btn btn-primary" id="saveCredsBtn">Save logins</button><span class="pill pill-todo" id="credsPf">PF — needs login</span><span class="pill pill-todo" id="credsSp">SP — needs login</span></div>
           </div>
 
           <div class="card">
             <div class="card-k">Step 2 · Sync a date (or range)</div>
-            <p class="muted" style="font-size:13px;line-height:1.5">Hope Assistant reads every Practice Fusion appointment on these days and books each one in SimplePractice under the right doctor — skipping any already on the calendar. <strong>Watch it work</strong> in the Chrome window.</p>
+            <p class="muted" style="font-size:13px;line-height:1.5">Reads every Practice Fusion appointment on these days and books each in SimplePractice under the right doctor — <strong>skipping any already on the calendar</strong>, so re-running is safe.</p>
             <div class="row" style="gap:10px">
               <label class="field" style="flex:1"><span>From date</span><input type="date" id="syncStart" /></label>
               <label class="field" style="flex:1"><span>To date (optional)</span><input type="date" id="syncEnd" /></label>
@@ -192,10 +177,31 @@
               <button class="btn" id="syncDryBtn">Dry run (read only)</button>
               <button class="btn btn-primary" id="syncBookBtn">Sync &amp; book</button>
             </div>
-            <p class="muted" style="font-size:12px;margin:8px 0 0">Dry run fills the forms without saving, so you can check it first. “Sync &amp; book” saves the appointments.</p>
+            <p class="muted" style="font-size:12px;margin:8px 0 0"><strong>Dry run</strong> fills the forms without saving, so you can check it first. <strong>Sync &amp; book</strong> saves the appointments.</p>
             <div id="syncResult" class="hidden"></div>
-            <div id="syncLog" class="hidden" style="margin-top:10px;max-height:220px;overflow-y:auto;font:12px ui-monospace,Menlo,monospace;background:rgba(255,255,255,.04);border-radius:10px;padding:10px"></div>
+            <div id="syncLog" class="hidden" style="margin-top:10px;max-height:220px;overflow-y:auto;font:12px ui-monospace,Menlo,monospace;background:var(--panel-2);border:1px solid var(--line);border-radius:10px;padding:10px"></div>
           </div>
+
+          <details class="card advanced" style="margin-top:4px">
+            <summary>Advanced — re-teach the screens (rarely needed)</summary>
+            <p class="muted" style="font-size:12.5px;line-height:1.5;margin-top:10px">Hope Assistant already knows your Practice Fusion and SimplePractice screens. Only re-teach if a site changes and a field stops being found — open Chrome, sign in if asked, click <strong>“Point at a field”</strong>, and click the field it names.</p>
+            <label class="field" style="margin-top:10px">
+              <span>Practice Fusion page address</span>
+              <input type="text" id="pfUrl" placeholder="https://static.practicefusion.com/..." />
+            </label>
+            <div class="row"><button class="btn" id="teachPf">Re-teach Practice Fusion</button><span class="pill pill-todo" id="pfTaught">needs setup</span></div>
+            <label class="field" style="margin-top:16px">
+              <span>SimplePractice page address</span>
+              <input type="text" id="spUrl" placeholder="https://secure.simplepractice.com/..." />
+            </label>
+            <div class="row"><button class="btn" id="teachSp">Re-teach SimplePractice</button><span class="pill pill-todo" id="spTaught">needs setup</span></div>
+            <div class="card-k" style="margin-top:18px">SimplePractice type</div>
+            <div class="seg" id="spModeSeg">
+              <button data-val="standard">Standard (automate the screen)</button>
+              <button data-val="enterprise">Enterprise (API)</button>
+            </div>
+            <p class="muted" style="font-size:12.5px">Keep <strong>Standard</strong> — it fills the appointment form on screen. Enterprise (API) is for practices with API access.</p>
+          </details>
         </div>
       </section>
 
