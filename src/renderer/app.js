@@ -50,6 +50,7 @@ const SCHEDULE_LABEL = { off: 'Off', '6h': 'Every 6 hours', daily: 'Daily' };
 /* ------------------------------ load state ------------------------------ */
 async function refresh() {
   settings = await window.api.getSettings();
+  if (typeof refreshCreds === 'function') refreshCreds();
   const providers = settings.providers || [];
 
   // Version (so a screenshot always shows which build is running)
@@ -331,19 +332,59 @@ async function teachScreen(target, urlSel) {
 }
 $('#teachPf').addEventListener('click', () => teachScreen('pf', '#pfUrl'));
 $('#teachSp').addEventListener('click', () => teachScreen('sp', '#spUrl'));
-$('#demoPullBtn').addEventListener('click', async () => {
-  // Legacy search model (a search box was taught) still reads by name.
-  const legacy = settings.pfSelectors && settings.pfSelectors.searchBox;
-  const date = ($('#pfDate') && $('#pfDate').value) || '';
-  if (!legacy && !date) { toast('Pick the date to read first.'); return; }
-  await window.api.saveSettings({ runDate: date }); // remember for scheduled / Sync-now runs
-  $('#demoPullBtn').disabled = true;
-  $('#demoPullBtn').textContent = 'Reading…';
-  const res = await window.api.runSync({ mode: 'live', count: demoCount, dryRun: true, date });
-  $('#demoPullBtn').disabled = false;
-  $('#demoPullBtn').textContent = 'Read this day (read only)';
-  renderSyncResult($('#demoResult'), res);
+/* ---- Demo-account sync: logins (Keychain) + date-range run with live log ---- */
+async function refreshCreds() {
+  try {
+    const st = await window.api.credsStatus();
+    if ($('#pfUser') && !$('#pfUser').value) $('#pfUser').value = st.pfUsername || '';
+    if ($('#spUser') && !$('#spUser').value) $('#spUser').value = st.spEmail || '';
+    setCredPill($('#credsPf'), st.pf, 'PF login saved', 'PF needs login');
+    setCredPill($('#credsSp'), st.sp, 'SP login saved', 'SP needs login');
+  } catch {}
+}
+function setCredPill(el, ok, goodText, todoText) {
+  if (!el) return;
+  el.textContent = ok ? goodText : todoText;
+  el.className = 'pill ' + (ok ? 'pill-good' : 'pill-todo');
+}
+if ($('#saveCredsBtn')) $('#saveCredsBtn').addEventListener('click', async () => {
+  const creds = {
+    practiceFusion: { username: $('#pfUser').value.trim(), password: $('#pfPass').value },
+    simplePractice: { email: $('#spUser').value.trim(), password: $('#spPass').value },
+  };
+  const r = await window.api.saveCreds(creds);
+  if (r && r.ok) { $('#pfPass').value = ''; $('#spPass').value = ''; toast('Logins saved (encrypted) ✓'); refreshCreds(); }
+  else toast(r && r.error ? r.error : 'Could not save logins.');
 });
+
+function appendSyncLog(text) {
+  const log = $('#syncLog'); if (!log) return;
+  log.classList.remove('hidden');
+  const line = document.createElement('div'); line.textContent = text;
+  log.appendChild(line); log.scrollTop = log.scrollHeight;
+}
+if (window.api.onLiveStep) window.api.onLiveStep((s) => { if (s && s.reset) $('#syncLog') && ($('#syncLog').innerHTML = ''); if (s && s.text) appendSyncLog(s.text); });
+
+async function runSyncFlow(save, btn) {
+  const start = $('#syncStart') && $('#syncStart').value;
+  const end = $('#syncEnd') && $('#syncEnd').value;
+  if (!start) { toast('Pick a From date first.'); return; }
+  const buttons = [$('#syncDryBtn'), $('#syncBookBtn')];
+  buttons.forEach((b) => b && (b.disabled = true));
+  const label = btn.textContent; btn.textContent = save ? 'Booking…' : 'Reading…';
+  if ($('#syncLog')) $('#syncLog').innerHTML = '';
+  const res = await window.api.syncRun({ start, end: end || start, save });
+  buttons.forEach((b) => b && (b.disabled = false));
+  btn.textContent = label;
+  if ($('#syncResult')) {
+    $('#syncResult').classList.remove('hidden');
+    $('#syncResult').innerHTML = res && res.ok
+      ? `<div class="ob-result">${save ? `Booked <b>${res.booked}</b>` : `Would book <b>${res.planned ? res.planned.length : 0}</b>`} · skipped ${res.skipped || 0}${res.failed ? ` · <b>${res.failed} failed</b>` : ''}${res.unmatched ? ` · ${res.unmatched} unrecognized` : ''}</div>`
+      : `<div class="ob-note">${(res && res.error) || 'Sync failed.'}</div>`;
+  }
+}
+if ($('#syncDryBtn')) $('#syncDryBtn').addEventListener('click', (e) => runSyncFlow(false, e.target));
+if ($('#syncBookBtn')) $('#syncBookBtn').addEventListener('click', (e) => runSyncFlow(true, e.target));
 
 /* ------------------------------- AI engine ------------------------------ */
 const PROVIDER_LABEL = { auto: 'Smart (auto)', apple: 'Apple Intelligence', ollama: 'Local Gemma', none: 'Built-in' };

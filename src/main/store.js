@@ -42,6 +42,9 @@ function settingsPath() {
 function aiKeyPath() {
   return path.join(app.getPath('userData'), 'ai-key.bin');
 }
+function credsPath() {
+  return path.join(app.getPath('userData'), 'creds.bin');
+}
 
 function load() {
   try {
@@ -77,4 +80,37 @@ function hasAIKey() {
   try { return fs.statSync(aiKeyPath()).size > 0; } catch { return false; }
 }
 
-module.exports = { load, save, setAIKey, getAIKey, hasAIKey, DEFAULTS };
+/**
+ * Site logins, encrypted at rest via the macOS Keychain (safeStorage). Stored as
+ * one JSON blob: { practiceFusion:{username,password}, simplePractice:{email,password} }.
+ * Only the engine ever reads the plaintext; the UI only learns whether each is set.
+ */
+function setCreds(obj) {
+  const cur = getCreds();
+  const next = {
+    practiceFusion: { ...cur.practiceFusion, ...(obj.practiceFusion || {}) },
+    simplePractice: { ...cur.simplePractice, ...(obj.simplePractice || {}) },
+  };
+  if (!safeStorage.isEncryptionAvailable()) throw new Error('Secure storage unavailable.');
+  fs.writeFileSync(credsPath(), safeStorage.encryptString(JSON.stringify(next)), { mode: 0o600 });
+  return next;
+}
+function getCreds() {
+  try {
+    const buf = fs.readFileSync(credsPath());
+    const obj = JSON.parse(safeStorage.isEncryptionAvailable() ? safeStorage.decryptString(buf) : '{}');
+    return { practiceFusion: obj.practiceFusion || {}, simplePractice: obj.simplePractice || {} };
+  } catch { return { practiceFusion: {}, simplePractice: {} }; }
+}
+/** What the UI is allowed to know: which logins are filled (never the secrets). */
+function credsStatus() {
+  const c = getCreds();
+  return {
+    pf: !!(c.practiceFusion.username && c.practiceFusion.password),
+    sp: !!(c.simplePractice.email && c.simplePractice.password),
+    pfUsername: c.practiceFusion.username || '',
+    spEmail: c.simplePractice.email || '',
+  };
+}
+
+module.exports = { load, save, setAIKey, getAIKey, hasAIKey, setCreds, getCreds, credsStatus, DEFAULTS };

@@ -168,20 +168,33 @@
           </div>
 
           <div class="card">
-            <div class="card-k">Step 3 · Try it on real data</div>
-            <p class="muted" style="font-size:13px;line-height:1.5">Pick a <strong>date</strong>. Open Practice Fusion’s <strong>Schedule</strong> (under Home) to that day in the controlled window, then read it — Hope Assistant pulls <em>every</em> appointment on that date (patient + provider). This only <em>reads</em>; it doesn’t book anything.</p>
-            <label class="field">
-              <span>Date to read</span>
-              <input type="date" id="pfDate" />
-            </label>
-            <p class="muted" style="font-size:12px;margin:0 0 8px">Most appointments to read:</p>
-            <div class="seg" id="demoCountSeg">
-              <button data-val="10" class="active">10</button>
-              <button data-val="25">25</button>
-              <button data-val="50">50</button>
+            <div class="card-k">Step 1 · Your logins</div>
+            <p class="muted" style="font-size:13px;line-height:1.5">Saved <strong>encrypted in your Mac’s Keychain</strong> — never uploaded. Hope Assistant signs in for you (and pauses for the Practice Fusion phone code when needed).</p>
+            <div class="row" style="gap:10px">
+              <label class="field" style="flex:1"><span>Practice Fusion email/username</span><input type="text" id="pfUser" placeholder="you@example.com" /></label>
+              <label class="field" style="flex:1"><span>Practice Fusion password</span><input type="password" id="pfPass" placeholder="••••••••" /></label>
             </div>
-            <button class="btn btn-primary" id="demoPullBtn">Read this day (read only)</button>
-            <div id="demoResult" class="hidden"></div>
+            <div class="row" style="gap:10px">
+              <label class="field" style="flex:1"><span>SimplePractice email</span><input type="text" id="spUser" placeholder="you@example.com" /></label>
+              <label class="field" style="flex:1"><span>SimplePractice password</span><input type="password" id="spPass" placeholder="••••••••" /></label>
+            </div>
+            <div class="row"><button class="btn" id="saveCredsBtn">Save logins</button><span class="pill pill-todo" id="credsPf">PF needs login</span><span class="pill pill-todo" id="credsSp">SP needs login</span></div>
+          </div>
+
+          <div class="card">
+            <div class="card-k">Step 2 · Sync a date (or range)</div>
+            <p class="muted" style="font-size:13px;line-height:1.5">Hope Assistant reads every Practice Fusion appointment on these days and books each one in SimplePractice under the right doctor — skipping any already on the calendar. <strong>Watch it work</strong> in the Chrome window.</p>
+            <div class="row" style="gap:10px">
+              <label class="field" style="flex:1"><span>From date</span><input type="date" id="syncStart" /></label>
+              <label class="field" style="flex:1"><span>To date (optional)</span><input type="date" id="syncEnd" /></label>
+            </div>
+            <div class="row" style="gap:10px;margin-top:6px">
+              <button class="btn" id="syncDryBtn">Dry run (read only)</button>
+              <button class="btn btn-primary" id="syncBookBtn">Sync &amp; book</button>
+            </div>
+            <p class="muted" style="font-size:12px;margin:8px 0 0">Dry run fills the forms without saving, so you can check it first. “Sync &amp; book” saves the appointments.</p>
+            <div id="syncResult" class="hidden"></div>
+            <div id="syncLog" class="hidden" style="margin-top:10px;max-height:220px;overflow-y:auto;font:12px ui-monospace,Menlo,monospace;background:rgba(255,255,255,.04);border-radius:10px;padding:10px"></div>
           </div>
         </div>
       </section>

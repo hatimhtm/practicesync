@@ -8,6 +8,7 @@ const { runSync } = require('./automation');
 const { parseRoster, appleIntelligenceAvailable, detectEngines, appleHelperPath } = require('./ai');
 const { DEMO_MAIN_DOCTORS, DEMO_PROVIDERS, makeProvider, makeMainDoctor } = require('./model');
 const { teach, runSiteDemo } = require('./liveEngine');
+const { runFullSync, expandDates } = require('./sync');
 const { startSheetServer } = require('./demoSheet');
 const recorder = require('./recorder');
 const { Scheduler } = require('./scheduler');
@@ -301,6 +302,33 @@ function registerIpc() {
 
   ipcMain.handle('run:sync', async (_e, opts) => performSync('manual', opts || {}));
   ipcMain.handle('run:now', async () => scheduler.runNow('manual'));
+
+  // --- Demo-account sync (Practice Fusion → SimplePractice), wired to the engine ---
+  ipcMain.handle('creds:status', () => store.credsStatus());
+  ipcMain.handle('creds:save', (_e, creds) => {
+    try { store.setCreds(creds || {}); return { ok: true, status: store.credsStatus() }; }
+    catch (e) { return { ok: false, error: String((e && e.message) || e) }; }
+  });
+  // Run the full Practice Fusion → SimplePractice sync over a date (or range).
+  // save=false fills the forms without saving (a safe dry run).
+  ipcMain.handle('sync:run', async (_e, opts = {}) => {
+    const s = store.load();
+    const creds = store.getCreds();
+    if (!creds.practiceFusion.password || !creds.simplePractice.password) {
+      return { ok: false, error: 'Add your Practice Fusion and SimplePractice logins first.' };
+    }
+    const dates = expandDates(opts.start, opts.end || opts.start);
+    if (!dates.length) return { ok: false, error: 'Pick a date (or a start–end range) first.' };
+    const providers = (s.providers && s.providers.length) ? s.providers : DEMO_PROVIDERS;
+    const mainDoctors = (s.mainDoctors && s.mainDoctors.length) ? s.mainDoctors : DEMO_MAIN_DOCTORS;
+    sendToRenderer('live-step', { text: `Starting sync for ${dates.join(', ')}…`, at: nowISO(), reset: true });
+    const onStep = (text) => sendToRenderer('live-step', { text, at: nowISO() });
+    const res = await runFullSync({ secrets: creds, dates, providers, mainDoctors, save: !!opts.save, onStep });
+    res.at = nowISO();
+    sendToRenderer('run-finished', res);
+    if (res.ok) notify(opts.save ? `Booked ${res.booked} · skipped ${res.skipped}${res.failed ? ' · ' + res.failed + ' failed' : ''}` : `Dry run: ${res.planned.length} would book`);
+    return res;
+  });
 
   // Manual update via GitHub Releases (works unsigned): check, then open the
   // new .dmg for the user to install.
