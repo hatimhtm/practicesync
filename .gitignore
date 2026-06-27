@@ -7,3 +7,5 @@ build/bin/
 # never commit local app state / secrets
 settings.json
 ai-key.bin
+secrets.local.json
+inspect-output/
