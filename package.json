@@ -14,6 +14,7 @@
     "demo": "node demo/run-demo.js",
     "demo:site": "node demo/site-demo.js",
     "inspect": "node scripts/inspect-dom.js",
+    "accounts": "node scripts/run-demo-accounts.js",
     "test": "node test/extract.test.js && node test/parser.test.js && node test/demo-e2e.test.js && node test/recorder.test.js && node test/teach.test.js && node test/real-accounts.test.js",
     "make-icon": "node build/make-icon.js && npm run icon",
     "icon": "cd build && rm -rf icon.iconset && mkdir icon.iconset && for s in 16 32 128 256 512; do dd=$((s*2)); sips -z $s $s icon-1024.png --out icon.iconset/icon_${s}x${s}.png; sips -z $dd $dd icon-1024.png --out icon.iconset/icon_${s}x${s}@2x.png; done && sips -z 1024 1024 icon-1024.png --out icon.iconset/icon_512x512@2x.png && iconutil -c icns icon.iconset -o icon.icns",
