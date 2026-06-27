@@ -39,13 +39,23 @@ const SAMPLE = {
     const res = await loginSimplePractice(page, secrets.simplePractice, { onStep: step });
     if (!res.ok) { console.error('SP login failed:', res.error); await context.close(); process.exit(1); }
 
-    step('Filling a sample appointment (DRY RUN — nothing will be saved)…');
-    const r = await bookAppointment(page, SAMPLE, { onStep: step, dryRun: true });
+    const SAVE = process.argv[2] !== '--dry'; // default: actually save (demo account)
+    step(`Booking a sample appointment (${SAVE ? 'SAVING for real' : 'dry run'})…`);
+    const r = await bookAppointment(page, SAMPLE, { onStep: step, dryRun: !SAVE });
     await dismissPopups(page);
     try { await page.screenshot({ path: 'inspect-output/book-01-filled.png' }); step('📸 inspect-output/book-01-filled.png'); } catch {}
     step(`Result: ${JSON.stringify(r)}`);
-    step('Leaving the window open 12s so you can see the filled form…');
-    await sleep(12000);
+
+    if (SAVE && r.ok) {
+      // Confirm it landed on the calendar for the date.
+      await page.goto(presets.SP.calendarUrl, { waitUntil: 'domcontentloaded' }).catch(() => {});
+      await dismissPopups(page); await sleep(2500);
+      const onCal = await page.evaluate((name) => document.body.innerText.includes(name), SAMPLE.patientName).catch(() => false);
+      try { await page.screenshot({ path: 'inspect-output/book-02-calendar.png' }); step('📸 inspect-output/book-02-calendar.png'); } catch {}
+      step(onCal ? `✓ ${SAMPLE.patientName} now appears on the SimplePractice calendar` : `(could not confirm ${SAMPLE.patientName} on the calendar view — check the screenshot)`);
+    }
+    step('Leaving the window open 10s…');
+    await sleep(10000);
   } catch (e) {
     console.error('Book demo error:', (e && e.stack) || e);
   } finally {

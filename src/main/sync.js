@@ -1,0 +1,144 @@
+'use strict';
+
+/*
+ * The full sync orchestrator: Practice Fusion (read) → SimplePractice (book).
+ *
+ *   1. Log in to Practice Fusion (pausing for the phone code if asked).
+ *   2. For each date in the range, navigate the Schedule there and read every
+ *      appointment, planning each against the roster (main doctor + codes).
+ *   3. Log in to SimplePractice.
+ *   4. For each date, read the clients already on that day's calendar (de-dup),
+ *      then book only the MISSING ones — the number booked for a patient equals
+ *      the number Practice Fusion shows for them that day (so two real visits
+ *      both get booked, but a re-run never duplicates).
+ *
+ * `save:false` fills the form without saving (a safe dry run). Everything is
+ * driven with the visible cursor + HUD.
+ */
+
+const { JSDOM } = require('jsdom');
+const presets = require('./presets');
+const liveEngine = require('./liveEngine');
+const login = require('./login');
+const book = require('./book');
+const { extractVisits } = require('./extract');
+const { planAppointments } = require('./automation');
+
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+const norm = (s) => String(s || '').trim().toLowerCase().replace(/\s+/g, ' ');
+const say = (onStep, m) => { try { if (typeof onStep === 'function') onStep(m); } catch {} };
+
+function parseHeadingDay(s) { const d = new Date(String(s || '').replace(/^[A-Za-z]+,\s*/, '')); return isNaN(d) ? null : new Date(d.getFullYear(), d.getMonth(), d.getDate()); }
+function parseTargetDay(s) {
+  let m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(s); if (m) return new Date(+m[1], +m[2] - 1, +m[3]);
+  m = /^(\d{1,2})\/(\d{1,2})\/(\d{4})$/.exec(s); if (m) return new Date(+m[3], +m[1] - 1, +m[2]);
+  const d = new Date(s); return isNaN(d) ? null : new Date(d.getFullYear(), d.getMonth(), d.getDate());
+}
+const fmtMDY = (d) => `${String(d.getMonth() + 1).padStart(2, '0')}/${String(d.getDate()).padStart(2, '0')}/${d.getFullYear()}`;
+
+/** Expand a start (+optional end) into a list of MM/DD/YYYY day strings. */
+function expandDates(start, end) {
+  const s = parseTargetDay(start); if (!s) return [];
+  const e = end ? parseTargetDay(end) : s;
+  if (!e || e < s) return [fmtMDY(s)];
+  const out = []; const d = new Date(s);
+  while (d <= e && out.length < 60) { out.push(fmtMDY(new Date(d))); d.setDate(d.getDate() + 1); }
+  return out;
+}
+
+/** Walk the Practice Fusion day arrows (visible cursor) until the heading matches. */
+async function pfNavigateToDate(page, target, onStep) {
+  const want = parseTargetDay(target); if (!want) return false;
+  for (let i = 0; i < 200; i++) {
+    const el = await page.$(presets.PF.nav.dateHeading);
+    const cur = parseHeadingDay(el ? await el.textContent() : '');
+    if (!cur) { await sleep(400); continue; }
+    if (Math.round((want - cur) / 86400000) === 0) return true;
+    const btn = want > cur ? presets.PF.nav.nextDay : presets.PF.nav.prevDay;
+    await liveEngine.stage(page, 'moveTo', btn).catch(() => {});
+    await page.click(btn).catch(() => {});
+    await sleep(550); await login.dismissPopups(page);
+  }
+  return false;
+}
+
+/**
+ * @param {object} opts
+ * @param {object} opts.secrets   { practiceFusion:{username,password}, simplePractice:{email,password} }
+ * @param {string[]} opts.dates   MM/DD/YYYY days to sync (use expandDates for a range)
+ * @param {Array}  opts.providers roster
+ * @param {Array}  opts.mainDoctors
+ * @param {boolean} opts.save     true = actually book; false = dry run (fill only)
+ * @param {function} opts.onStep
+ */
+async function runFullSync({ secrets, dates, providers, mainDoctors, save = false, onStep, context: existing } = {}) {
+  const result = { ok: true, planned: [], booked: 0, skipped: 0, failed: 0, unmatched: 0, dryRun: !save };
+  const own = !existing;
+  let context = existing;
+  if (!context) {
+    const r = await liveEngine.openAutomationContext({ headless: false });
+    if (r.error) return { ok: false, error: r.error.error || r.error };
+    context = r.context;
+  }
+  const page = context.pages()[0] || (await context.newPage());
+  try {
+    // 1) Practice Fusion login (may pause for 2FA).
+    const pf = await login.loginPracticeFusion(page, secrets.practiceFusion, { onStep });
+    if (!pf.ok) return { ok: false, error: pf.error };
+
+    // 2) Read + plan each date.
+    const all = [];
+    for (const date of dates) {
+      say(onStep, `Reading Practice Fusion for ${date}…`);
+      await page.goto(presets.PF.scheduleUrl, { waitUntil: 'domcontentloaded' }).catch(() => {});
+      await login.dismissPopups(page);
+      await liveEngine.ensureStage(page).catch(() => {});
+      await pfNavigateToDate(page, date, onStep);
+      try { await page.waitForSelector(presets.PF.selectors.rowSelector, { timeout: 15000 }); } catch {}
+      await sleep(1000); await login.dismissPopups(page);
+      const doc = new JSDOM(await page.content()).window.document;
+      const visits = extractVisits(doc, presets.PF.selectors, 300)
+        .map((v) => ({ ...v, patientName: (v.patientName || '').trim(), doctorName: (v.doctorName || '').trim(), date }));
+      const planned = planAppointments(visits, providers, mainDoctors);
+      const matched = planned.filter((p) => p.matched);
+      result.unmatched += planned.length - matched.length;
+      matched.forEach((p) => { p.date = date; all.push(p); });
+      say(onStep, `  ${date}: ${matched.length} matched, ${planned.length - matched.length} unrecognized`);
+    }
+    result.planned = all;
+    if (!all.length) { say(onStep, 'No matched appointments to book.'); return result; }
+
+    // 3) SimplePractice login.
+    const sp = await login.loginSimplePractice(page, secrets.simplePractice, { onStep });
+    if (!sp.ok) return { ok: false, error: sp.error };
+
+    // 4) Book per date, skipping clients already on that day's calendar.
+    const byDate = {};
+    for (const p of all) (byDate[p.date] = byDate[p.date] || []).push(p);
+    for (const date of Object.keys(byDate)) {
+      await book.spNavigateToDate(page, date, onStep);
+      const existingClients = await book.spClientsOnDate(page);
+      const accounted = {};
+      existingClients.forEach((n) => { accounted[norm(n)] = (accounted[norm(n)] || 0) + 1; });
+      const group = byDate[date];
+      const want = {};
+      group.forEach((p) => { want[norm(p.patientName)] = (want[norm(p.patientName)] || 0) + 1; });
+
+      for (const appt of group) {
+        const k = norm(appt.patientName);
+        if ((accounted[k] || 0) >= want[k]) { result.skipped += 1; say(onStep, `Skip ${appt.patientName} on ${date} — already booked`); continue; }
+        const r = await book.bookAppointment(page, appt, { onStep, dryRun: !save });
+        if (r.ok) { result.booked += 1; accounted[k] = (accounted[k] || 0) + 1; }
+        else { result.failed += 1; say(onStep, `Could not book ${appt.patientName}: ${r.error}`); }
+      }
+    }
+    say(onStep, `Done — ${result.booked} booked, ${result.skipped} already there, ${result.failed} failed, ${result.unmatched} unrecognized.`);
+    return result;
+  } catch (e) {
+    return { ok: false, error: (e && e.message) || String(e), ...result };
+  } finally {
+    if (own) { try { await context.close(); } catch {} }
+  }
+}
+
+module.exports = { runFullSync, expandDates, pfNavigateToDate };

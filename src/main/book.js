@@ -146,15 +146,62 @@ async function bookAppointment(page, appointment, { onStep, dryRun = true } = {}
 
   if (dryRun) { say(onStep, 'Filled (dry run — not saved).'); return { ok: true, dryRun: true }; }
 
-  // SAVE (verified) — the button enables once required fields are valid.
+  // SAVE — the button enables once required fields are valid.
   const save = await page.$(S.saveButton);
   if (!save) return { ok: false, error: 'Save button not found.' };
   await liveEngine.stage(page, 'moveTo', S.saveButton);
-  if (await save.isDisabled().catch(() => false)) return { ok: false, error: 'Save is disabled — a required field did not fill (likely client/clinician). Needs verification on the full account.' };
+  if (await save.isDisabled().catch(() => false)) return { ok: false, error: 'Save is disabled — a required field did not fill (client/clinician/service). Re-check on this account.' };
+  say(onStep, `Saving ${appointment.patientName}…`);
   await save.click().catch(() => {});
   await liveEngine.stage(page, 'press');
-  await sleep(1200);
+  await sleep(2200);
+  // Success = the dialog closed (the client field is gone). If it's still up, a
+  // field was rejected and SimplePractice kept the form open.
+  const stillOpen = await page.$(S.clientTrigger);
+  if (stillOpen) return { ok: false, error: 'Clicked Save but the dialog stayed open — a field was likely rejected.' };
+  say(onStep, `Booked ${appointment.patientName} ✓`);
   return { ok: true };
 }
 
-module.exports = { bookAppointment };
+// Parse the FullCalendar title ("Sat, Jun 27, 2026") to a day.
+function parseCalTitle(s) {
+  const d = new Date(String(s || '').replace(/^[A-Za-z]+,\s*/, ''));
+  return isNaN(d) ? null : new Date(d.getFullYear(), d.getMonth(), d.getDate());
+}
+function targetDay(s) {
+  const mdy = toMDY(s); const m = /^(\d{2})\/(\d{2})\/(\d{4})$/.exec(mdy);
+  return m ? new Date(+m[3], +m[1] - 1, +m[2]) : null;
+}
+
+/** Move the SimplePractice calendar to a date (MM/DD/YYYY or any parseable form). */
+async function spNavigateToDate(page, date, onStep) {
+  const C = presets.SP.calendar;
+  const want = targetDay(date);
+  if (!want) return false;
+  await page.goto(presets.SP.calendarUrl, { waitUntil: 'domcontentloaded' }).catch(() => {});
+  await dismissPopups(page);
+  await sleep(1500);
+  for (let i = 0; i < 200; i++) {
+    const el = await page.$(C.title);
+    const cur = parseCalTitle(el ? await el.textContent() : '');
+    if (!cur) { await sleep(400); continue; }
+    const diff = Math.round((want - cur) / 86400000);
+    if (diff === 0) { say(onStep, `SimplePractice calendar on ${toMDY(date)} ✓`); return true; }
+    const btn = diff > 0 ? C.nextDay : C.prevDay;
+    await liveEngine.stage(page, 'moveTo', btn).catch(() => {});
+    await page.click(btn).catch(() => {});
+    await sleep(500);
+    await dismissPopups(page);
+  }
+  return false;
+}
+
+/** Read the client names already booked on the currently-shown calendar day. */
+async function spClientsOnDate(page) {
+  try {
+    return await page.evaluate((sel) => [...document.querySelectorAll(sel)]
+      .map((e) => (e.getAttribute('data-appt-title') || '').trim()).filter(Boolean), presets.SP.calendar.apptTitle);
+  } catch { return []; }
+}
+
+module.exports = { bookAppointment, spNavigateToDate, spClientsOnDate };

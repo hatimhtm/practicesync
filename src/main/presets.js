@@ -61,6 +61,16 @@ const SP = {
   },
   // The default location for the real practice (not selectable in the demo).
   defaultLocation: 'High Quality Home Therapy LLC',
+  // The calendar is FullCalendar; each appointment block carries the client name
+  // in data-appt-title — used to navigate days and to de-dup (skip clients
+  // already booked on a date).
+  calendar: {
+    title: '.fc-toolbar-title',       // e.g. "Sat, Jun 27, 2026"
+    prevDay: '.fc-prev-button',
+    nextDay: '.fc-next-button',
+    today: '.fc-today-button',
+    apptTitle: '[data-appt-title]',   // attribute value = client name
+  },
   selectors: {
     // Client is a typeahead: click the trigger, type into the input that appears,
     // then click the matching option. Scoped by its validation path so it isn't
