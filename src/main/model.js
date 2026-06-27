@@ -114,9 +114,12 @@ function mainCodeFor(mainDoctorName, mainDoctors) {
  * @returns {{provider:object|null, confidence:number, reason?:string}}
  */
 /** Does a roster-name token appear in the Practice Fusion name (allowing
- *  first-name/nickname prefixes, e.g. "sam" ⊂ "samantha")? */
+ *  first-name/nickname prefixes, e.g. "sam" ⊂ "samantha")? Practice Fusion shows
+ *  a surname INITIAL ("Shanina s", "Sally S"); a 1–2 char token must match
+ *  EXACTLY, never by prefix, or the initial "s" would match Sally/Sam/Shanina
+ *  alike and make every single-name provider look ambiguous. */
 function tokenIn(rosterTok, pfTokens) {
-  return pfTokens.some((pt) => pt === rosterTok || (rosterTok.length >= 3 && (pt.startsWith(rosterTok) || rosterTok.startsWith(pt))));
+  return pfTokens.some((pt) => pt === rosterTok || (rosterTok.length >= 3 && pt.length >= 3 && (pt.startsWith(rosterTok) || rosterTok.startsWith(pt))));
 }
 
 function matchProvider(doctorName, providers) {
