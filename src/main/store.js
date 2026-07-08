@@ -30,6 +30,7 @@ const DEFAULTS = {
   runDate: '',              // the day to read off the Practice Fusion schedule (YYYY-MM-DD)
   syncDaysAhead: 7,         // automatic runs sync a rolling window: today … today+N-1
   spFieldOverrides: null,   // first-run capture: SimplePractice field selectors not present in the demo
+  rosterSeeded: false,      // whether the built-in doctor roster was pre-loaded on first run
   bookedKeys: [],           // visit keys already booked, so live runs never double-book
   workflows: [],            // recorded workflows: [{ id, name, steps:[...], createdAt }]
   schedule: 'off',          // 'off' | '6h' | 'daily'

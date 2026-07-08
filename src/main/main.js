@@ -515,6 +515,12 @@ app.whenReady().then(() => {
     onStatus: (s) => sendToRenderer('run-status', s),
   });
   const settings = store.load();
+  // First run for this practice: pre-load the doctor roster so Doctors & Codes
+  // shows the doctors (they're exactly what the sync already uses). Seeded once —
+  // never re-added if the user later edits or clears it.
+  if (!settings.rosterSeeded && !(settings.providers && settings.providers.length)) {
+    try { store.save({ providers: DEMO_PROVIDERS, mainDoctors: DEMO_MAIN_DOCTORS, rosterSeeded: true }); } catch {}
+  }
   scheduler.setMode(settings.schedule || 'off');
   applyLoginItem(settings.schedule || 'off');
 
