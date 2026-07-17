@@ -60,6 +60,22 @@ async function clickOptionMatching(page, value) {
   return false;
 }
 
+// Fill a React-controlled box and CONFIRM the value stuck. SimplePractice inputs
+// sometimes ignore a fast programmatic fill(), so if the value didn't register we
+// re-enter it with real keystrokes. Prevents the "sometimes forgets the units or
+// the letters" misses.
+async function fillReliable(handle, value) {
+  const want = String(value);
+  try {
+    await handle.fill(want, { timeout: 3000 }).catch(() => {});
+    if ((await handle.inputValue().catch(() => '')) === want) return true;
+    await handle.click({ timeout: 1500 }).catch(() => {});
+    await handle.fill('', { timeout: 1500 }).catch(() => {});
+    await handle.type(want, { delay: 20 }).catch(() => {});
+    return (await handle.inputValue().catch(() => '')) === want;
+  } catch { return false; }
+}
+
 /**
  * Open a typeahead trigger, type the value into its search box, and select the
  * matching option — robustly. `searchSel` is the input the trigger reveals.
@@ -166,11 +182,13 @@ async function bookAppointment(page, appointment, { onStep, dryRun = true, overr
     await typeaheadSelect(page, S.locationTrigger, presets.SP.defaultLocation, onStep, 'Location', S.locationSearchInput);
   }
 
-  // SERVICES — one line per code (native <select>, verified). Units + modifiers
-  // are TODO(real): filled when those inputs exist (absent in the demo dialog).
+  // SERVICES — one line per code (native <select>, verified). Add EVERY line and
+  // select its code first, then fill units + modifiers scoped to each line's own
+  // boxes. (Filling per-line inline mis-indexed the shared modifier inputs, so a
+  // later line's modifiers overwrote the first line's boxes and the later line was
+  // left blank — the "sometimes forgets / wrong box" bug.)
   const services = appointment.services || [];
   for (let i = 0; i < services.length; i++) {
-    const svc = services[i];
     if (i > 0) {
       const addBtn = await page.$(S.addService);
       // Bounded click + JS fallback so a momentarily-unclickable "Add service" can
@@ -182,19 +200,26 @@ async function bookAppointment(page, appointment, { onStep, dryRun = true, overr
     const codeSelects = await page.$$(S.codeSelect);
     const sel = codeSelects[i] || codeSelects[codeSelects.length - 1];
     if (sel) {
-      await sel.selectOption({ value: svc.code }, { timeout: 4000 }).catch(async () => { await sel.selectOption({ label: new RegExp('^' + svc.code) }, { timeout: 4000 }).catch(() => {}); });
-      say(onStep, `Service: ${svc.code}`);
+      await sel.selectOption({ value: services[i].code }, { timeout: 4000 }).catch(async () => { await sel.selectOption({ label: new RegExp('^' + services[i].code) }, { timeout: 4000 }).catch(() => {}); });
+      say(onStep, `Service: ${services[i].code}`);
     }
-    // TODO(real): units input + the four modifier boxes for this line.
-    const unitInputs = await page.$$(S.unitsField);
-    if (unitInputs[i]) { await unitInputs[i].fill(String(svc.units || 1)).catch(() => {}); }
-    // Fill each modifier box SEQUENTIALLY and awaited — a fire-and-forget forEach
-    // would race Save and leave modifiers blank on the real account.
-    const modInputs = await page.$$(S.modifierInputs);
+  }
+  // Units + modifiers, now that every line exists. The modifier boxes are shared
+  // across lines (name^="modifier", four per line), so map each line to ITS OWN
+  // block of boxes. Each value is written once and confirmed (fillReliable), so a
+  // box is never skipped and a modifier is never duplicated into another line.
+  const allUnits = await page.$$(S.unitsField);
+  const allMods = await page.$$(S.modifierInputs);
+  const perLine = services.length && allMods.length % services.length === 0 ? allMods.length / services.length : 4;
+  for (let i = 0; i < services.length; i++) {
+    const svc = services[i];
+    if (allUnits[i]) await fillReliable(allUnits[i], String(svc.units || 1));
     const mods = svc.modifiers || [];
-    for (let mi = 0; mi < mods.length; mi++) {
-      if (modInputs[mi]) await modInputs[mi].fill(String(mods[mi])).catch(() => {});
+    for (let mi = 0; mi < mods.length && mi < perLine; mi++) {
+      const box = allMods[i * perLine + mi];
+      if (box) await fillReliable(box, String(mods[mi]));
     }
+    say(onStep, `Line ${i + 1}: ${svc.code} · units ${svc.units || 1}${mods.length ? ' · mods ' + mods.join(' ') : ''}`);
   }
 
   if (dryRun) {

@@ -3,6 +3,18 @@
 const { matchProvider, mainCodeFor } = require('./model');
 const liveEngine = require('./liveEngine');
 
+/** Trim + drop blanks + drop case-insensitive duplicates, keeping first seen. */
+function dedupeMods(list) {
+  const seen = new Set(); const out = [];
+  for (const m of list) {
+    const v = String(m == null ? '' : m).trim();
+    const k = v.toUpperCase();
+    if (!v || seen.has(k)) continue;
+    seen.add(k); out.push(v);
+  }
+  return out;
+}
+
 /**
  * The automation engine: read REAL visits from Practice Fusion (the user's
  * existing browser session), decide each appointment from the doctor roster,
@@ -73,7 +85,10 @@ function planAppointments(visits, providers, mainDoctors = []) {
     const services = provider ? (provider.codes || []).map((c) => ({
       code: c.code,
       units: c.units || 1,
-      modifiers: [...(mainCode ? [mainCode] : []), ...((c.modifiers) || [])],
+      // Doctor code (GP/GO/GN) first, then the code's own modifiers — but DEDUPED
+      // (case-insensitively) so a modifier the mapping repeats, or that equals the
+      // doctor code, is written to ONE box, not several.
+      modifiers: dedupeMods([...(mainCode ? [mainCode] : []), ...((c.modifiers) || [])]),
     })) : [];
     return {
       patientName: v.patientName,
