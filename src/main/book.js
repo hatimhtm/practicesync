@@ -152,7 +152,7 @@ async function bookAppointment(page, appointment, { onStep, dryRun = true, overr
   if (appointment.mainDoctor) {
     const open = await page.$(S.clinicianOpen);
     if (open) {
-      await open.click().catch(() => {});
+      await open.click({ timeout: 3000 }).catch(async () => { try { await open.evaluate((el) => el.click()); } catch {} });
       await sleep(250);
       const ok = await clickOptionMatching(page, appointment.mainDoctor.split(' ')[0]); // first name is enough
       say(onStep, `Clinician: ${appointment.mainDoctor}${ok ? ' ✓' : ' (single/locked on demo)'}`);
@@ -188,8 +188,13 @@ async function bookAppointment(page, appointment, { onStep, dryRun = true, overr
     // TODO(real): units input + the four modifier boxes for this line.
     const unitInputs = await page.$$(S.unitsField);
     if (unitInputs[i]) { await unitInputs[i].fill(String(svc.units || 1)).catch(() => {}); }
+    // Fill each modifier box SEQUENTIALLY and awaited — a fire-and-forget forEach
+    // would race Save and leave modifiers blank on the real account.
     const modInputs = await page.$$(S.modifierInputs);
-    (svc.modifiers || []).forEach(async (m, mi) => { if (modInputs[mi]) await modInputs[mi].fill(String(m)).catch(() => {}); });
+    const mods = svc.modifiers || [];
+    for (let mi = 0; mi < mods.length; mi++) {
+      if (modInputs[mi]) await modInputs[mi].fill(String(mods[mi])).catch(() => {});
+    }
   }
 
   if (dryRun) {
@@ -245,7 +250,7 @@ async function spNavigateToDate(page, date, onStep) {
     if (diff === 0) { say(onStep, `SimplePractice calendar on ${toMDY(date)} ✓`); return true; }
     const btn = diff > 0 ? C.nextDay : C.prevDay;
     await liveEngine.stage(page, 'moveTo', btn).catch(() => {});
-    await page.click(btn).catch(() => {});
+    await page.click(btn, { timeout: 4000 }).catch(() => {});
     await sleep(300);
     await dismissPopups(page);
   }

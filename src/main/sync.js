@@ -56,7 +56,7 @@ async function pfNavigateToDate(page, target, onStep) {
     if (Math.round((want - cur) / 86400000) === 0) return true;
     const btn = want > cur ? presets.PF.nav.nextDay : presets.PF.nav.prevDay;
     await liveEngine.stage(page, 'moveTo', btn).catch(() => {});
-    await page.click(btn).catch(() => {});
+    await page.click(btn, { timeout: 4000 }).catch(() => {});
     await sleep(550); await login.dismissPopups(page);
   }
   return false;
