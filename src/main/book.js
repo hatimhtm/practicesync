@@ -60,6 +60,21 @@ async function clickOptionMatching(page, value) {
   return false;
 }
 
+// From several candidate selectors for a REPEATED per-line box, return the handles
+// from whichever matches the MOST elements. A first-run capture can save a selector
+// specific to ONE box (the one the user pointed at); the general built-in then
+// matches every line so later service lines are not left unfilled.
+async function collectAll(page, candidates) {
+  let best = [];
+  const seen = new Set();
+  for (const sel of candidates) {
+    if (!sel || seen.has(sel)) continue; seen.add(sel);
+    const h = await page.$$(sel).catch(() => []);
+    if (h.length > best.length) best = h;
+  }
+  return best;
+}
+
 // Fill a React-controlled box and CONFIRM the value stuck. SimplePractice inputs
 // sometimes ignore a fast programmatic fill(), so if the value didn't register we
 // re-enter it with real keystrokes. Prevents the "sometimes forgets the units or
@@ -208,18 +223,22 @@ async function bookAppointment(page, appointment, { onStep, dryRun = true, overr
   // across lines (name^="modifier", four per line), so map each line to ITS OWN
   // block of boxes. Each value is written once and confirmed (fillReliable), so a
   // box is never skipped and a modifier is never duplicated into another line.
-  const allUnits = await page.$$(S.unitsField);
-  const allMods = await page.$$(S.modifierInputs);
-  const perLine = services.length && allMods.length % services.length === 0 ? allMods.length / services.length : 4;
+  const P = presets.SP.selectors;
+  const allUnits = await collectAll(page, [S.unitsField, P.unitsField, 'input[name="units"]']);
+  const allMods = await collectAll(page, [S.modifierInputs, P.modifierInputs, 'input[placeholder="AA"]']);
+  const perLine = services.length && allMods.length % services.length === 0 ? Math.max(1, allMods.length / services.length) : 4;
+  say(onStep, `Service boxes: ${allUnits.length} units + ${allMods.length} modifier, for ${services.length} line${services.length === 1 ? '' : 's'}`);
   for (let i = 0; i < services.length; i++) {
     const svc = services[i];
-    if (allUnits[i]) await fillReliable(allUnits[i], String(svc.units || 1));
+    const u = String(svc.units || 1);
+    if (allUnits[i]) { if (!(await fillReliable(allUnits[i], u))) say(onStep, `⚠︎ units for ${svc.code} may not have stuck`); }
+    else if (u !== '1') say(onStep, `⚠︎ no units box found for line ${i + 1} (${svc.code} needs ${u}) — capture the Units box`);
     const mods = svc.modifiers || [];
     for (let mi = 0; mi < mods.length && mi < perLine; mi++) {
       const box = allMods[i * perLine + mi];
       if (box) await fillReliable(box, String(mods[mi]));
     }
-    say(onStep, `Line ${i + 1}: ${svc.code} · units ${svc.units || 1}${mods.length ? ' · mods ' + mods.join(' ') : ''}`);
+    say(onStep, `Line ${i + 1}: ${svc.code} · units ${u}${mods.length ? ' · mods ' + mods.join(' ') : ''}`);
   }
 
   if (dryRun) {
