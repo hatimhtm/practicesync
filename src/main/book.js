@@ -39,25 +39,32 @@ function toMDY(s) {
 // capture an opened typeahead/clinician list on the real account.
 const OPTION_SELECTORS = ['.select-box__option', '[role="option"]', 'li[role="option"]', '.typeahead-option', '.select-box__options li'];
 
-// Click the option that matches `value` by NAME TOKENS, regardless of word order
-// ("Lochlann McNulty" ↔ "McNulty, Lochlann") and ignoring extra text like a DOB.
-// A robust click (scroll into view + normal click + JS-click fallback) so it can
-// never be a no-op.
-async function clickOptionMatching(page, value) {
-  const tokens = String(value || '').trim().toLowerCase().split(/[\s,]+/).filter((t) => t.length >= 2);
-  if (!tokens.length) return false;
-  for (const os of OPTION_SELECTORS) {
-    const opts = await page.$$(os).catch(() => []);
-    for (const o of opts) {
-      const t = ((await o.textContent().catch(() => '')) || '').toLowerCase();
-      if (t && tokens.every((tok) => t.includes(tok))) {
-        // Fast click, JS-click fallback — never waits out a long actionability timeout.
-        await o.click({ timeout: 1200 }).catch(async () => { try { await o.evaluate((el) => el.click()); } catch {} });
-        return true;
-      }
-    }
-  }
-  return false;
+function nameTokens(value) {
+  return String(value || '').trim().toLowerCase().split(/[\s,]+/).filter((t) => t.length >= 2);
+}
+
+// Click the best option for `value`. Word-order independent ("Lochlann McNulty" ↔
+// "McNulty, Lochlann"), ignoring extra text like a DOB.
+//   1. Prefer an option containing ALL the name's tokens (a confident match).
+//   2. Else, if allowFirst, click the FIRST option that popped up (preferring one
+//      that at least contains the last name). The practice's rule: names vary
+//      ("Ronald" in Practice Fusion vs "Ron" in SimplePractice), so take the first
+//      sensible result rather than leave the client unbooked.
+// Robust click (normal + JS-click fallback) so it is never a silent no-op.
+async function clickOptionMatching(page, value, opts = {}) {
+  const tokens = nameTokens(value);
+  let els = [];
+  for (const os of OPTION_SELECTORS) { els = await page.$$(os).catch(() => []); if (els.length) break; }
+  if (!els.length) return false;
+  const items = [];
+  for (const o of els) items.push({ o, t: ((await o.textContent().catch(() => '')) || '').trim().toLowerCase() });
+  const last = tokens[tokens.length - 1];
+  const exact = items.find((it) => it.t && tokens.length && tokens.every((tok) => it.t.includes(tok)));
+  const lastHit = last ? items.find((it) => it.t.includes(last)) : null;
+  const pick = exact || (opts.allowFirst ? (lastHit || items[0]) : null);
+  if (!pick || !pick.o) return false;
+  await pick.o.click({ timeout: 1200 }).catch(async () => { try { await pick.o.evaluate((el) => el.click()); } catch {} });
+  return true;
 }
 
 // From several candidate selectors for a REPEATED per-line box, return the handles
@@ -101,8 +108,16 @@ async function fillReliable(handle, value) {
  */
 async function typeaheadSelect(page, triggerSel, value, onStep, label, searchSel, verifySel) {
   const want = String(value || '').trim();
-  const maxAttempts = verifySel ? 3 : 1;
+  // When verifying (the client), each retry searches a DIFFERENT way so a name that
+  // isn't stored exactly still resolves: full name → last name → first name. On each
+  // we prefer an exact match, then fall back to the first result that pops up.
+  const parts = want.split(/\s+/).filter(Boolean);
+  const searchTerms = verifySel
+    ? [want, parts[parts.length - 1] || want, parts[0] || want]
+    : [want];
+  const maxAttempts = searchTerms.length;
   for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+    const term = searchTerms[attempt - 1];
     try {
       const trig = await page.waitForSelector(triggerSel, { timeout: 6000 }).catch(() => null);
       if (!trig) return false;
@@ -113,21 +128,27 @@ async function typeaheadSelect(page, triggerSel, value, onStep, label, searchSel
       // keystrokes go nowhere and the option list never appears (the "skipped" bug).
       let input = null;
       if (searchSel) input = await page.waitForSelector(searchSel, { timeout: 3000 }).catch(() => null);
-      if (input) { await input.fill('').catch(() => {}); await input.type(want, { delay: 15 }); }
-      else { await sleep(250); await page.keyboard.type(want, { delay: 15 }); }
-      // Poll for a MATCHING option and click it — up to ~4s, so a slightly slow
-      // search is never skipped, but a fast one selects immediately.
+      if (input) { await input.fill('').catch(() => {}); await input.type(term, { delay: 15 }); }
+      else { await sleep(250); await page.keyboard.type(term, { delay: 15 }); }
+      // Poll: for the first ~2.2s prefer an EXACT (all-token) match; after that accept
+      // the FIRST option that popped up (the "just take the first one" rule) so a name
+      // variant like Ronald→Ron still books instead of being skipped.
       let picked = false;
-      const deadline = Date.now() + 4000;
-      while (!picked && Date.now() < deadline) { picked = await clickOptionMatching(page, want); if (!picked) await sleep(150); }
+      const canFallback = !!verifySel; // first-result fallback only for the client
+      const softDeadline = Date.now() + 2200;
+      const hardDeadline = Date.now() + 4500;
+      while (!picked && Date.now() < hardDeadline) {
+        picked = await clickOptionMatching(page, want, { allowFirst: canFallback && Date.now() > softDeadline });
+        if (!picked) await sleep(150);
+      }
       await liveEngine.stage(page, 'press');
 
       if (verifySel) {
         // Proof the selection took: the dependent section (Services) rendered.
         const ok = await page.waitForSelector(verifySel, { timeout: 3500 }).then(() => true).catch(() => false);
-        if (ok) { say(onStep, `${label}: ${want} ✓`); return true; }
-        if (attempt < maxAttempts) { say(onStep, `${label}: not selected yet — retrying (attempt ${attempt + 1})…`); await sleep(500); continue; }
-        say(onStep, `${label}: could NOT select "${want}" — leaving it (won't book the wrong client)`);
+        if (ok) { say(onStep, `${label}: ${want}${term !== want ? ` (matched by "${term}")` : ''} ✓`); return true; }
+        if (attempt < maxAttempts) { say(onStep, `${label}: "${want}" not found — retrying by "${searchTerms[attempt]}"…`); await sleep(400); continue; }
+        say(onStep, `${label}: could NOT find "${want}" in SimplePractice — leaving it (won't book a wrong client)`);
         return false;
       }
       say(onStep, `${label}: ${want}${picked ? ' ✓' : ' (left as is)'}`);
