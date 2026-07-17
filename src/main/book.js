@@ -39,45 +39,71 @@ function toMDY(s) {
 // capture an opened typeahead/clinician list on the real account.
 const OPTION_SELECTORS = ['.select-box__option', '[role="option"]', 'li[role="option"]', '.typeahead-option', '.select-box__options li'];
 
+// Click the option that matches `value` by NAME TOKENS, regardless of word order
+// ("Lochlann McNulty" ↔ "McNulty, Lochlann") and ignoring extra text like a DOB.
+// A robust click (scroll into view + normal click + JS-click fallback) so it can
+// never be a no-op.
 async function clickOptionMatching(page, value) {
-  const want = String(value || '').trim().toLowerCase();
-  if (!want) return false;
+  const tokens = String(value || '').trim().toLowerCase().split(/[\s,]+/).filter((t) => t.length >= 2);
+  if (!tokens.length) return false;
   for (const os of OPTION_SELECTORS) {
     const opts = await page.$$(os).catch(() => []);
     for (const o of opts) {
-      const t = ((await o.textContent().catch(() => '')) || '').trim().toLowerCase();
-      if (t && (t.includes(want) || want.includes(t.split('(')[0].trim()))) { await o.click().catch(() => {}); return true; }
+      const t = ((await o.textContent().catch(() => '')) || '').toLowerCase();
+      if (t && tokens.every((tok) => t.includes(tok))) {
+        // Fast click, JS-click fallback — never waits out a long actionability timeout.
+        await o.click({ timeout: 1200 }).catch(async () => { try { await o.evaluate((el) => el.click()); } catch {} });
+        return true;
+      }
     }
   }
   return false;
 }
 
-// Click a typeahead trigger, type into its searchbox, and click the matching
-// option row (with the visible cursor). `searchSel` is the input the trigger
-// reveals; if omitted we type into whatever gains focus.
-async function typeaheadSelect(page, triggerSel, value, onStep, label, searchSel) {
-  try {
-    // Wait for the trigger (the dialog may still be rendering), but bounded so it
-    // can never hang. Real keystrokes (fast) so the typeahead actually filters.
-    const trig = await page.waitForSelector(triggerSel, { timeout: 6000 }).catch(() => null);
-    if (!trig) return false;
-    await liveEngine.ensureStage(page);
-    await liveEngine.stage(page, 'moveTo', triggerSel);
-    await trig.click({ timeout: 3000 }).catch(() => {});
-    await sleep(250);
-    if (searchSel && await page.$(searchSel)) { await page.fill(searchSel, '').catch(() => {}); await page.type(searchSel, String(value), { delay: 12 }); }
-    else { await page.keyboard.type(String(value), { delay: 12 }); }
-    // Poll for the matching option — clicks the instant it appears (fast), and
-    // keeps trying up to ~2.5s so a slightly slow search never gets skipped.
-    let picked = false;
-    for (let k = 0; k < 10 && !picked; k++) { picked = await clickOptionMatching(page, value); if (!picked) await sleep(250); }
-    // NEVER press Escape here — in SimplePractice that closes the whole
-    // appointment dialog (which is what made "Save button not found"). If there's
-    // no match we just leave the field and move on.
-    await liveEngine.stage(page, 'press');
-    say(onStep, `${label}: ${value}${picked ? ' ✓' : ' (left as is)'}`);
-    return picked;
-  } catch { return false; }
+/**
+ * Open a typeahead trigger, type the value into its search box, and select the
+ * matching option — robustly. `searchSel` is the input the trigger reveals.
+ * `verifySel` (optional) is an element that only appears AFTER a real selection
+ * (for the client, the Services <select>): if given, we CONFIRM the selection
+ * took and RETRY the whole open→type→pick up to 3× — because a missed client is
+ * unacceptable. Never presses Escape (that closes SimplePractice's dialog).
+ */
+async function typeaheadSelect(page, triggerSel, value, onStep, label, searchSel, verifySel) {
+  const want = String(value || '').trim();
+  const maxAttempts = verifySel ? 3 : 1;
+  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+    try {
+      const trig = await page.waitForSelector(triggerSel, { timeout: 6000 }).catch(() => null);
+      if (!trig) return false;
+      await liveEngine.ensureStage(page);
+      await liveEngine.stage(page, 'moveTo', triggerSel);
+      await trig.click({ timeout: 3000 }).catch(() => {});
+      // CRITICAL: wait for the search box to actually be ready before typing, or the
+      // keystrokes go nowhere and the option list never appears (the "skipped" bug).
+      let input = null;
+      if (searchSel) input = await page.waitForSelector(searchSel, { timeout: 3000 }).catch(() => null);
+      if (input) { await input.fill('').catch(() => {}); await input.type(want, { delay: 15 }); }
+      else { await sleep(250); await page.keyboard.type(want, { delay: 15 }); }
+      // Poll for a MATCHING option and click it — up to ~4s, so a slightly slow
+      // search is never skipped, but a fast one selects immediately.
+      let picked = false;
+      const deadline = Date.now() + 4000;
+      while (!picked && Date.now() < deadline) { picked = await clickOptionMatching(page, want); if (!picked) await sleep(150); }
+      await liveEngine.stage(page, 'press');
+
+      if (verifySel) {
+        // Proof the selection took: the dependent section (Services) rendered.
+        const ok = await page.waitForSelector(verifySel, { timeout: 3500 }).then(() => true).catch(() => false);
+        if (ok) { say(onStep, `${label}: ${want} ✓`); return true; }
+        if (attempt < maxAttempts) { say(onStep, `${label}: not selected yet — retrying (attempt ${attempt + 1})…`); await sleep(500); continue; }
+        say(onStep, `${label}: could NOT select "${want}" — leaving it (won't book the wrong client)`);
+        return false;
+      }
+      say(onStep, `${label}: ${want}${picked ? ' ✓' : ' (left as is)'}`);
+      return picked;
+    } catch { if (attempt >= maxAttempts) return false; await sleep(400); }
+  }
+  return false;
 }
 
 /**
@@ -94,11 +120,13 @@ async function bookAppointment(page, appointment, { onStep, dryRun = true, overr
   await liveEngine.ensureStage(page);
   await liveEngine.stage(page, 'status', `Booking ${appointment.patientName}…`);
 
-  // 1) CLIENT FIRST (verified) — the clinician + services only render afterwards.
-  if (appointment.patientName) await typeaheadSelect(page, S.clientTrigger, appointment.patientName, onStep, 'Client', S.clientSearchInput);
-  // Proceed as soon as the services section renders (form is ready) instead of a
-  // fixed pause — much faster when it appears quickly.
-  await page.waitForSelector(S.codeSelect, { timeout: 3500 }).catch(() => {});
+  // 1) CLIENT FIRST — verified + retried (the Services section only renders once a
+  // real client is selected, so it doubles as proof the selection took). A missed
+  // client is unacceptable, so if it can't be selected we abort rather than save.
+  if (appointment.patientName) {
+    const gotClient = await typeaheadSelect(page, S.clientTrigger, appointment.patientName, onStep, 'Client', S.clientSearchInput, S.codeSelect);
+    if (!gotClient) return { ok: false, error: `Could not select client "${appointment.patientName}" in SimplePractice (not found or didn't select).` };
+  }
   await sleep(200);
 
   // 2) DATE (verified) — MM/DD/YYYY, and the start TIME from Practice Fusion.
