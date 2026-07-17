@@ -46,6 +46,22 @@ function expandDates(start, end) {
   return out;
 }
 
+/**
+ * A staggered start time so a day's appointments don't all stack on the same slot.
+ * Spread evenly across 9:00 AM–5:00 PM, ~1 hour apart, compressed if there are many.
+ * Returns "9:00 AM", "10:00 AM", … (the format SimplePractice's time box accepts).
+ */
+function staggeredTime(index, total) {
+  const startMin = 9 * 60;   // 9:00 AM
+  const endMin = 17 * 60;    // 5:00 PM
+  const step = total > 1 ? Math.min(60, Math.floor((endMin - startMin) / (total - 1))) : 0;
+  const mins = Math.min(endMin, startMin + index * step);
+  const h = Math.floor(mins / 60), m = mins % 60;
+  const ampm = h >= 12 ? 'PM' : 'AM';
+  const h12 = ((h + 11) % 12) + 1;
+  return `${h12}:${String(m).padStart(2, '0')} ${ampm}`;
+}
+
 /** Walk the Practice Fusion day arrows (visible cursor) until the heading matches. */
 async function pfNavigateToDate(page, target, onStep) {
   const want = parseTargetDay(target); if (!want) return false;
@@ -121,6 +137,9 @@ async function runFullSync({ secrets, dates, providers, mainDoctors, save = fals
       const accounted = {};
       existingClients.forEach((n) => { accounted[norm(n)] = (accounted[norm(n)] || 0) + 1; });
       const group = byDate[date];
+      // Give each of the day's appointments its own time across 9am–5pm, so they
+      // don't all land on the same slot (the same-time stacking the user saw).
+      group.forEach((appt, i) => { appt.time = staggeredTime(i, group.length); });
       const want = {};
       group.forEach((p) => { want[norm(p.patientName)] = (want[norm(p.patientName)] || 0) + 1; });
 

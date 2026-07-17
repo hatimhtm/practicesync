@@ -258,13 +258,26 @@ async function bookAppointment(page, appointment, { onStep, dryRun = true, overr
   say(onStep, `Saving ${appointment.patientName}…`);
   await save.click({ timeout: 6000 }).catch(async () => { try { await save.evaluate((el) => el.click()); } catch {} });
   await liveEngine.stage(page, 'press');
-  await sleep(2200);
-  // Success = the dialog closed (the client field is gone). If it's still up, a
-  // field was rejected and SimplePractice kept the form open.
-  const stillOpen = await page.$(S.clientTrigger);
-  if (stillOpen) return { ok: false, error: 'Clicked Save but the dialog stayed open — a field was likely rejected.' };
-  say(onStep, `Booked ${appointment.patientName} ✓`);
-  return { ok: true };
+  // Wait for the outcome: the dialog CLOSES (saved ✓), OR a confirmation modal
+  // appears ("Scheduling outside availability") — proceed anyway by clicking its
+  // "Save appointment" button — OR it stays open (a field was rejected). Polling
+  // (not a fixed sleep) so success returns fast and the modal is never missed.
+  const deadline = Date.now() + 9000;
+  let confirmed = false;
+  while (Date.now() < deadline) {
+    if (!(await page.$(S.clientTrigger).catch(() => null))) { say(onStep, `Booked ${appointment.patientName} ✓`); return { ok: true }; }
+    if (!confirmed) {
+      const proceed = await page.$(S.confirmSave).catch(() => null);
+      if (proceed) {
+        confirmed = true;
+        say(onStep, 'Scheduling warning — clicking “Save appointment” to proceed…');
+        await liveEngine.stage(page, 'press');
+        await proceed.click({ timeout: 2500 }).catch(async () => { try { await proceed.evaluate((el) => el.click()); } catch {} });
+      }
+    }
+    await sleep(200);
+  }
+  return { ok: false, error: 'Clicked Save but the dialog stayed open — a field was likely rejected.' };
 }
 
 // Parse the FullCalendar title ("Sat, Jun 27, 2026") to a day.

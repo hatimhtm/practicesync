@@ -92,6 +92,10 @@ const SP = {
     clinicianOpen: '.shared-clinician-dropdown-container .non-editable-dropdown',
     addService: 'button[aria-label="add service"]',
     saveButton: 'button.submit-form',
+    // The confirm modal that can follow Save ("Scheduling outside availability"):
+    // its button reads "Save appointment" (the main Save just reads "Save"), so a
+    // text match hits only the modal and never loops on the main button.
+    confirmSave: 'button:has-text("Save appointment")',
     // VERIFIED from the real account's DevTools (client-sent Inspect screenshot):
     //   <input aria-label="Number of Units" class="number-of-units"
     //          id="number-of-units" name="numberOfUnits" type="text">
