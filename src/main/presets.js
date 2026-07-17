@@ -92,10 +92,14 @@ const SP = {
     clinicianOpen: '.shared-clinician-dropdown-container .non-editable-dropdown',
     addService: 'button[aria-label="add service"]',
     saveButton: 'button.submit-form',
-    // TODO(real): not present in the demo dialog — confirm exact names on the full
-    // account. From the real-account screenshot: a Units input and four modifier
-    // boxes per service line (first holds GP/GO/GN, another holds 59).
-    unitsField: 'input[name="units"]',
+    // VERIFIED from the real account's DevTools (client-sent Inspect screenshot):
+    //   <input aria-label="Number of Units" class="number-of-units"
+    //          id="number-of-units" name="numberOfUnits" type="text">
+    // one per service line, inside div[data-validation-path="numberOfUnits"].
+    unitsField: 'input[name="numberOfUnits"]',
+    // Four per line, shown with the "AA" placeholder (first holds GP/GO/GN,
+    // another holds 59). name^="modifier" is the primary; the AA-placeholder
+    // net in book.js covers accounts where the name differs.
     modifierInputs: 'input[name^="modifier"]',
   },
 };

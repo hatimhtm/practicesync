@@ -224,7 +224,7 @@ async function bookAppointment(page, appointment, { onStep, dryRun = true, overr
   // block of boxes. Each value is written once and confirmed (fillReliable), so a
   // box is never skipped and a modifier is never duplicated into another line.
   const P = presets.SP.selectors;
-  const allUnits = await collectAll(page, [S.unitsField, P.unitsField, 'input[name="units"]']);
+  const allUnits = await collectAll(page, [S.unitsField, P.unitsField, 'input[name="numberOfUnits"]', 'input[aria-label="Number of Units"]']);
   const allMods = await collectAll(page, [S.modifierInputs, P.modifierInputs, 'input[placeholder="AA"]']);
   const perLine = services.length && allMods.length % services.length === 0 ? Math.max(1, allMods.length / services.length) : 4;
   say(onStep, `Service boxes: ${allUnits.length} units + ${allMods.length} modifier, for ${services.length} line${services.length === 1 ? '' : 's'}`);
