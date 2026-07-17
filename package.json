@@ -1,7 +1,7 @@
 {
   "name": "practicesync",
   "productName": "Hope Assistant",
-  "version": "1.3.7",
+  "version": "1.3.8",
   "description": "Reads patient visits from Practice Fusion and creates the matching coded appointments in SimplePractice — automatically.",
   "main": "src/main/main.js",
   "author": "Hope Assistant",
