@@ -43,27 +43,55 @@ function nameTokens(value) {
   return String(value || '').trim().toLowerCase().split(/[\s,]+/).filter((t) => t.length >= 2);
 }
 
-// Click the best option for `value`. Word-order independent ("Lochlann McNulty" ↔
-// "McNulty, Lochlann"), ignoring extra text like a DOB.
-//   1. Prefer an option containing ALL the name's tokens (a confident match).
-//   2. Else, if allowFirst, click the FIRST option that popped up (preferring one
-//      that at least contains the last name). The practice's rule: names vary
-//      ("Ronald" in Practice Fusion vs "Ron" in SimplePractice), so take the first
-//      sensible result rather than leave the client unbooked.
-// Robust click (normal + JS-click fallback) so it is never a silent no-op.
-async function clickOptionMatching(page, value, opts = {}) {
+// A client record may be split by DISCIPLINE ("Jennifer OT Burgand", "Jennifer PT
+// Burgand", "Jennifer SLP Burgand"). The right one for an appointment is the one
+// whose tag matches the main doctor's unit: GP→PT, GO→OT, GN→SLP.
+const DISC_FOR_CODE = { GP: 'pt', GO: 'ot', GN: 'slp' };
+const DISC_TAG_RE = /\b(pt|ot|slp)\b/;
+
+// PURE decision (text only, unit-tested): given the option TEXTS, which index to
+// click for `value`? Returns >=0 to click, -1 for none, -2 for "wait" (the right
+// discipline variant may still be loading — don't grab the wrong one).
+//   1. If a discipline is given and the patient has discipline-tagged records, pick
+//      the one for THIS appointment's discipline (PT/OT/SLP).
+//   2. Else prefer an UNtagged exact match, then any exact (all name tokens).
+//   3. Else, if allowFirst, take the first option (name variants like Ronald→Ron),
+//      preferring one that contains the last name.
+// Word-order independent ("Lochlann McNulty" ↔ "McNulty, Lochlann"), ignores a DOB.
+function chooseOptionIndex(texts, value, { discipline = '', allowFirst = false } = {}) {
   const tokens = nameTokens(value);
+  const disc = String(discipline || '').toLowerCase(); // 'pt' | 'ot' | 'slp'
+  const items = texts.map((t) => String(t || '').trim().toLowerCase());
+  const hasAll = (t) => t && tokens.length && tokens.every((tok) => t.includes(tok));
+  const nameIdx = items.map((t, i) => ({ t, i })).filter((x) => hasAll(x.t));
+  if (disc) {
+    const dm = nameIdx.find((x) => new RegExp(`\\b${disc}\\b`).test(x.t));
+    if (dm) return dm.i;
+    if (!allowFirst && nameIdx.some((x) => DISC_TAG_RE.test(x.t))) return -2; // wait for the right variant
+  }
+  const untagged = nameIdx.find((x) => !DISC_TAG_RE.test(x.t));
+  if (untagged) return untagged.i;
+  if (nameIdx.length) return nameIdx[0].i;
+  if (allowFirst) {
+    const last = tokens[tokens.length - 1];
+    const lastHit = last ? items.findIndex((t) => t.includes(last)) : -1;
+    return lastHit >= 0 ? lastHit : (items.length ? 0 : -1);
+  }
+  return -1;
+}
+
+// Click the chosen option. Robust click (normal + JS-click fallback) so it is never
+// a silent no-op. Returns false when nothing should be clicked (none / keep waiting).
+async function clickOptionMatching(page, value, opts = {}) {
   let els = [];
   for (const os of OPTION_SELECTORS) { els = await page.$$(os).catch(() => []); if (els.length) break; }
   if (!els.length) return false;
-  const items = [];
-  for (const o of els) items.push({ o, t: ((await o.textContent().catch(() => '')) || '').trim().toLowerCase() });
-  const last = tokens[tokens.length - 1];
-  const exact = items.find((it) => it.t && tokens.length && tokens.every((tok) => it.t.includes(tok)));
-  const lastHit = last ? items.find((it) => it.t.includes(last)) : null;
-  const pick = exact || (opts.allowFirst ? (lastHit || items[0]) : null);
-  if (!pick || !pick.o) return false;
-  await pick.o.click({ timeout: 1200 }).catch(async () => { try { await pick.o.evaluate((el) => el.click()); } catch {} });
+  const texts = [];
+  for (const o of els) texts.push(((await o.textContent().catch(() => '')) || '').trim());
+  const idx = chooseOptionIndex(texts, value, opts);
+  if (idx < 0) return false;
+  const o = els[idx];
+  await o.click({ timeout: 1200 }).catch(async () => { try { await o.evaluate((el) => el.click()); } catch {} });
   return true;
 }
 
@@ -106,8 +134,9 @@ async function fillReliable(handle, value) {
  * took and RETRY the whole open→type→pick up to 3× — because a missed client is
  * unacceptable. Never presses Escape (that closes SimplePractice's dialog).
  */
-async function typeaheadSelect(page, triggerSel, value, onStep, label, searchSel, verifySel) {
+async function typeaheadSelect(page, triggerSel, value, onStep, label, searchSel, verifySel, disciplineTag) {
   const want = String(value || '').trim();
+  const disc = String(disciplineTag || '').toLowerCase(); // 'pt'|'ot'|'slp' — pick the right discipline variant
   // When verifying (the client), each retry searches a DIFFERENT way so a name that
   // isn't stored exactly still resolves: full name → last name → first name. On each
   // we prefer an exact match, then fall back to the first result that pops up.
@@ -138,7 +167,7 @@ async function typeaheadSelect(page, triggerSel, value, onStep, label, searchSel
       const softDeadline = Date.now() + 2200;
       const hardDeadline = Date.now() + 4500;
       while (!picked && Date.now() < hardDeadline) {
-        picked = await clickOptionMatching(page, want, { allowFirst: canFallback && Date.now() > softDeadline });
+        picked = await clickOptionMatching(page, want, { discipline: disc, allowFirst: canFallback && Date.now() > softDeadline });
         if (!picked) await sleep(150);
       }
       await liveEngine.stage(page, 'press');
@@ -146,7 +175,7 @@ async function typeaheadSelect(page, triggerSel, value, onStep, label, searchSel
       if (verifySel) {
         // Proof the selection took: the dependent section (Services) rendered.
         const ok = await page.waitForSelector(verifySel, { timeout: 3500 }).then(() => true).catch(() => false);
-        if (ok) { say(onStep, `${label}: ${want}${term !== want ? ` (matched by "${term}")` : ''} ✓`); return true; }
+        if (ok) { say(onStep, `${label}: ${want}${disc ? ` [${disc.toUpperCase()}]` : ''}${term !== want ? ` (matched by "${term}")` : ''} ✓`); return true; }
         if (attempt < maxAttempts) { say(onStep, `${label}: "${want}" not found — retrying by "${searchTerms[attempt]}"…`); await sleep(400); continue; }
         say(onStep, `${label}: could NOT find "${want}" in SimplePractice — leaving it (won't book a wrong client)`);
         return false;
@@ -175,8 +204,11 @@ async function bookAppointment(page, appointment, { onStep, dryRun = true, overr
   // 1) CLIENT FIRST — verified + retried (the Services section only renders once a
   // real client is selected, so it doubles as proof the selection took). A missed
   // client is unacceptable, so if it can't be selected we abort rather than save.
+  // The discipline (from the main doctor's GP/GO/GN) picks the right record when a
+  // patient is split into OT/PT/SLP variants (e.g. "Jennifer PT Burgand").
   if (appointment.patientName) {
-    const gotClient = await typeaheadSelect(page, S.clientTrigger, appointment.patientName, onStep, 'Client', S.clientSearchInput, S.codeSelect);
+    const discTag = DISC_FOR_CODE[String(appointment.mainCode || '').toUpperCase()] || '';
+    const gotClient = await typeaheadSelect(page, S.clientTrigger, appointment.patientName, onStep, 'Client', S.clientSearchInput, S.codeSelect, discTag);
     if (!gotClient) return { ok: false, error: `Could not select client "${appointment.patientName}" in SimplePractice (not found or didn't select).` };
   }
   await sleep(200);
@@ -343,4 +375,4 @@ async function spClientsOnDate(page) {
   } catch { return []; }
 }
 
-module.exports = { bookAppointment, spNavigateToDate, spClientsOnDate };
+module.exports = { bookAppointment, spNavigateToDate, spClientsOnDate, chooseOptionIndex };

@@ -104,6 +104,19 @@ const SP_HTML = `<!doctype html><html><body>
   check('"Agnes" does not trigger the agency rule', !isNonPatient('Agnes Miller'));
 })();
 
+(function testDisciplinePick() {
+  console.log('# Client picker chooses the OT/PT/SLP variant by the appointment discipline');
+  const { chooseOptionIndex } = require(path.join(__dirname, '..', 'src', 'main', 'book'));
+  const J = ['Jennifer OT Burgand', 'Jennifer PT Burgand', 'Jennifer SLP Burgand'];
+  check('GP/PT → Jennifer PT Burgand', chooseOptionIndex(J, 'Jennifer Burgand', { discipline: 'pt' }) === 1);
+  check('GO/OT → Jennifer OT Burgand', chooseOptionIndex(J, 'Jennifer Burgand', { discipline: 'ot' }) === 0);
+  check('GN/SLP → Jennifer SLP Burgand', chooseOptionIndex(J, 'Jennifer Burgand', { discipline: 'slp' }) === 2);
+  check('right variant not loaded yet → WAIT (-2), never the wrong one', chooseOptionIndex(['Jennifer OT Burgand'], 'Jennifer Burgand', { discipline: 'pt' }) === -2);
+  check('no variants → picks the single record fast', chooseOptionIndex(['Colin LaMura'], 'Colin LaMura', { discipline: 'pt' }) === 0);
+  check('name variant Ronald→Ron still falls back to first', chooseOptionIndex(['Ron Bruder'], 'Ronald Bruder', { discipline: 'pt', allowFirst: true }) === 0);
+  check('untagged record preferred over a mismatched tag', chooseOptionIndex(['Jane OT Doe', 'Jane Doe'], 'Jane Doe', { discipline: 'pt', allowFirst: true }) === 1);
+})();
+
 (function testSpSelectors() {
   console.log('# SimplePractice — the booking fields resolve on the real dialog structure');
   const doc = new JSDOM(SP_HTML).window.document;
