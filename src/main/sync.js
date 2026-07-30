@@ -23,6 +23,7 @@ const login = require('./login');
 const book = require('./book');
 const { extractVisits } = require('./extract');
 const { planAppointments } = require('./automation');
+const { isNonPatient } = require('./model');
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const norm = (s) => String(s || '').trim().toLowerCase().replace(/\s+/g, ' ');
@@ -113,8 +114,14 @@ async function runFullSync({ secrets, dates, providers, mainDoctors, save = fals
       try { await page.waitForSelector(presets.PF.selectors.rowSelector, { timeout: 15000 }); } catch {}
       await sleep(1000); await login.dismissPopups(page);
       const doc = new JSDOM(await page.content()).window.document;
-      const visits = extractVisits(doc, presets.PF.selectors, 300)
+      const allRows = extractVisits(doc, presets.PF.selectors, 300)
         .map((v) => ({ ...v, patientName: (v.patientName || '').trim(), doctorName: (v.doctorName || '').trim(), date }));
+      // Drop organization rows (e.g. "…Contract Agency") — they aren't patients and
+      // have no SimplePractice client, so they must never be booked.
+      const visits = allRows.filter((v) => {
+        if (isNonPatient(v.patientName)) { result.skipped += 1; say(onStep, `Skip ${v.patientName} — not a patient (agency/contract entry)`); return false; }
+        return true;
+      });
       const planned = planAppointments(visits, providers, mainDoctors);
       const matched = planned.filter((p) => p.matched);
       result.unmatched += planned.length - matched.length;
@@ -151,7 +158,7 @@ async function runFullSync({ secrets, dates, providers, mainDoctors, save = fals
         else { result.failed += 1; say(onStep, `Could not book ${appt.patientName}: ${r.error}`); }
       }
     }
-    say(onStep, `Done — ${result.booked} booked, ${result.skipped} already there, ${result.failed} failed, ${result.unmatched} unrecognized.`);
+    say(onStep, `Done — ${result.booked} booked, ${result.skipped} skipped (already there / not a patient), ${result.failed} failed, ${result.unmatched} unrecognized.`);
     return result;
   } catch (e) {
     return { ok: false, error: (e && e.message) || String(e), ...result };

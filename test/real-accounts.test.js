@@ -95,6 +95,15 @@ const SP_HTML = `<!doctype html><html><body>
   check('Sam Comrie → Samantha Comrie / Karine (GN), 2 services', sam.mainDoctor === 'Karine Rocha de Benedicto' && sam.services.length === 2 && sam.services.every((s) => s.modifiers.includes('GN')));
 })();
 
+(function testNonPatientSkip() {
+  console.log('# Non-patient rows (agencies) are skipped, real patients are not');
+  const { isNonPatient } = require(path.join(__dirname, '..', 'src', 'main', 'model'));
+  check('"All Pointe HomeCare Contract Agency" is skipped', isNonPatient('All Pointe HomeCare Contract Agency'));
+  check('a generic agency is skipped', isNonPatient('Sunrise Home Care Agency'));
+  check('a real patient is kept', !isNonPatient('Ronald Bruder') && !isNonPatient('Colin LaMura'));
+  check('"Agnes" does not trigger the agency rule', !isNonPatient('Agnes Miller'));
+})();
+
 (function testSpSelectors() {
   console.log('# SimplePractice — the booking fields resolve on the real dialog structure');
   const doc = new JSDOM(SP_HTML).window.document;

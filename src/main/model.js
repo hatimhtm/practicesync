@@ -96,6 +96,15 @@ function makeProvider({ name, mainDoctor, codes, discipline }) {
   };
 }
 
+// Some Practice Fusion rows are organizations, not patients — e.g. "All Pointe
+// HomeCare Contract Agency". They have no SimplePractice client record and must
+// never be booked. Matches the org markers the practice uses (chiefly "agency");
+// these words don't occur in real patient names, so it won't skip a real person.
+const NON_PATIENT_RE = /\b(agenc(y|ies)|contract agency|\bLLC\b|\bInc\b)\b/i;
+function isNonPatient(name) {
+  return NON_PATIENT_RE.test(String(name || ''));
+}
+
 /** Look up a big doctor's 2-letter modifier code from the configured list. */
 function mainCodeFor(mainDoctorName, mainDoctors) {
   const n = normalizeName(mainDoctorName);
@@ -247,6 +256,7 @@ const DEMO_PROVIDERS = [
 
 module.exports = {
   normalizeName,
+  isNonPatient,
   makeProvider,
   makeMainDoctor,
   matchProvider,
