@@ -83,11 +83,15 @@ function formatCodes(codes) {
   }).join(', ');
 }
 
-/** A roster entry maps one small (subordinate) doctor to a big doctor + codes. */
-function makeProvider({ name, mainDoctor, codes }) {
+/** A roster entry maps one small (subordinate) doctor to a big doctor + codes.
+ *  `discipline` (PT/OT/SLP/…) is a free-text label the user can see and edit; it
+ *  doesn't affect booking (the modifier comes from the big doctor), but it keeps
+ *  the roster readable and matches how the practice organizes its therapists. */
+function makeProvider({ name, mainDoctor, codes, discipline }) {
   return {
     name: String(name || '').trim(),
     mainDoctor: String(mainDoctor || '').trim(),
+    discipline: String(discipline || '').trim(),
     codes: parseCodes(codes),
   };
 }
@@ -157,23 +161,88 @@ function matchProvider(doctorName, providers) {
 // sees their own doctors/codes in Test Mode — zero live dependencies, fake
 // patients only. Big doctors carry their 2-letter modifier code.
 const DEMO_MAIN_DOCTORS = [
-  { name: 'Caryn McAllister', code: 'GP' },
-  { name: 'Heather Vines-Dubose', code: 'GO' },
-  { name: 'Karine Rocha de Benedicto', code: 'GN' },
+  { name: 'Caryn McAllister', code: 'GP' },        // Physical Therapy
+  { name: 'Heather Vines-Dubose', code: 'GO' },    // Occupational Therapy
+  { name: 'Karine Rocha de Benedicto', code: 'GN' }, // Speech
 ];
 
+// Each unit's standard billing codes. The big-doctor 2-letter code (GP/GO/GN) is
+// added to every line automatically at booking; 97530 also carries the 59 modifier.
+const UNIT_CODES = {
+  'Caryn McAllister': '97112 x2, 97530 x2 (59)',       // PT
+  'Heather Vines-Dubose': '97112 x2, 97530 x2 (59)',   // OT
+  'Karine Rocha de Benedicto': '92507 x1, 97550 x2',   // Speech
+};
+// Disciplines that actually bill their unit's therapy codes. Everyone else (nurse,
+// intern, admin, social work, massage, aide) is still listed for completeness but
+// seeded with NO codes, so they can never book a wrong service until the user sets
+// codes themselves. The user can edit any of this on the Doctors & Codes screen.
+const THERAPY_DISCIPLINE = /\b(PT|DPT|CPT|OT|COTA|SOT|SLP|SLPA|CF|Cognition)\b/i;
+function seedProvider(name, discipline, mainDoctor) {
+  const codes = THERAPY_DISCIPLINE.test(discipline) ? (UNIT_CODES[mainDoctor] || '') : '';
+  return makeProvider({ name, discipline, mainDoctor, codes });
+}
+
+// The client's real roster (from their July 2026 sheet): every therapist under one
+// of the three main doctors. Loaded via "Load full roster" on Doctors & Codes.
+const C = 'Caryn McAllister', H = 'Heather Vines-Dubose', K = 'Karine Rocha de Benedicto';
 const DEMO_PROVIDERS = [
-  makeProvider({ name: 'Jess', mainDoctor: 'Heather Vines-Dubose', codes: '97112 x2, 97530 x2 (59)' }),
-  makeProvider({ name: 'Shanina', mainDoctor: 'Heather Vines-Dubose', codes: '97112 x2, 97530 x2 (59)' }),
-  makeProvider({ name: 'Sam Comrie', mainDoctor: 'Karine Rocha de Benedicto', codes: '92523 x1, 92507 x1, 97550 x2' }),
-  makeProvider({ name: 'Gianna', mainDoctor: 'Caryn McAllister', codes: '97112 x2, 97530 x2 (59)' }),
-  makeProvider({ name: 'Sally', mainDoctor: 'Karine Rocha de Benedicto', codes: '92507 x1, 97550 x2' }),
-  makeProvider({ name: 'Eleni', mainDoctor: 'Heather Vines-Dubose', codes: '97112 x2, 97530 x2' }),
-  makeProvider({ name: 'Joanne Paulino', mainDoctor: 'Caryn McAllister', codes: '97112 x2, 97530 x2' }),
-  makeProvider({ name: 'Leah Santalis', mainDoctor: 'Karine Rocha de Benedicto', codes: '92523 x1, 92507 x1, 97550 x2' }),
-  makeProvider({ name: 'Yamela Cando', mainDoctor: 'Karine Rocha de Benedicto', codes: '92523 x1, 92507 x1' }),
-  makeProvider({ name: 'Nicki Mancusi', mainDoctor: 'Heather Vines-Dubose', codes: '97112 x1, 97530 x3' }),
-  makeProvider({ name: 'Olivia Misiak', mainDoctor: 'Caryn McAllister', codes: '97112 x2, 97530 x2' }),
+  // — Caryn McAllister · Physical Therapy —
+  seedProvider('Abby Ramage', 'PT', C),
+  seedProvider('Caryn McAllister', 'PT', C),
+  seedProvider('Dave Quirante', 'PT', C),
+  seedProvider('Delicatina Osipow', 'CPT', C),
+  seedProvider('Erica Cutler', 'PT', C),
+  seedProvider('Ernie Bojorquez', 'CPT', C),
+  seedProvider('Francesca Fidaleo', 'Nurse', C),
+  seedProvider('Gianna Hernandez', 'PT', C),
+  seedProvider('Gloria Lombardi', 'Intern', C),
+  seedProvider('Heather Meehan', 'Nurse', C),
+  seedProvider('Jade Lee MeeSook', 'LMT', C),
+  seedProvider('Jennifer Barstrom', 'PT', C),
+  seedProvider('John Pender', 'Flexologist', C),
+  seedProvider('JR Meehan', 'PT', C),
+  seedProvider('Kempton Brisport', 'MSW', C),
+  seedProvider('Lindsay Richard', 'PT', C),
+  seedProvider('Mayra Recine', 'DPT', C),
+  seedProvider('Michael Goldsmith', 'PT', C),
+  seedProvider('Michelle Minnocci', 'PT', C),
+  seedProvider('Michelle Broggi', 'PT', C),
+  seedProvider('Monica Jain', 'PT', C),
+  seedProvider('Nathalia (Lesly) Fajardo', 'LCSW/LMT', C),
+  seedProvider('Nicole Nelson', 'Nurse', C),
+  seedProvider('Norma Dray', 'LMT', C),
+  seedProvider('Olga Vera', 'Psychologist', C),
+  seedProvider('Rebecca Passante', 'PT', C),
+  seedProvider('Regis Saget', 'LMT', C),
+  seedProvider('Ron Hylton', 'LMT/CPT', C),
+  seedProvider('Sarah Zahner', 'PT', C),
+  seedProvider('Thayly Santos Ponce', 'Intern/PT Aide', C),
+  // — Heather Vines-Dubose · Occupational Therapy —
+  seedProvider('Alexis Parker', 'COTA', H),
+  seedProvider('Amanda Meyer', 'OT', H),
+  seedProvider('Danielle Reichert', 'COTA', H),
+  seedProvider('Hayley Brooks-Wallin', 'OT', H),
+  seedProvider('Heather Vines-Dubose', 'OT', H),
+  seedProvider('Jessica Trujillo', 'OT', H),
+  seedProvider('Nicki Mancusi', 'COTA', H),
+  seedProvider('Nicole Lee-Williams', 'OT', H),
+  seedProvider('Raquel Godoi', 'SOT', H),
+  seedProvider('Samantha Impellizeri (Scavo)', 'OT', H),
+  seedProvider('Sara Florio', 'OT', H),
+  seedProvider('Shanina Smith', 'COTA', H),
+  // — Karine Rocha de Benedicto · Speech —
+  seedProvider('Carolyn Finch-Hulme', 'SLP', K),
+  seedProvider('Colleen Kopchik', 'SLPA', K),
+  seedProvider('Joan Black', 'SLP', K),
+  seedProvider('Kaitlyn Van Heusden', 'Rehab Aide', K),
+  seedProvider('Karine Rocha de Benedicto', 'SLP', K),
+  seedProvider('Laurits (Mikel) Bensend', 'LMT', K),
+  seedProvider('Paul Bertuglia', 'SLPA', K),
+  seedProvider('Sally Connolly', 'SLP', K),
+  seedProvider('Samantha Comrie', 'SLP CF', K),
+  seedProvider('Shandley McMurray-Brown', 'Cognition Specialist', K),
+  seedProvider('Yamela Cando', 'SLP', K),
 ];
 
 module.exports = {

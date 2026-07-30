@@ -80,7 +80,7 @@ async function refresh() {
   $('#rosterText').value = settings.rosterText || '';
   if (!draftMains.length) draftMains = (settings.mainDoctors || []).map(normMain);
   if (!draftProviders.length && providers.length) {
-    draftProviders = providers.map((p) => ({ name: p.name, mainDoctor: p.mainDoctor, codes: formatCodes(p.codes) }));
+    draftProviders = providers.map((p) => ({ name: p.name, discipline: p.discipline || '', mainDoctor: p.mainDoctor, codes: formatCodes(p.codes) }));
   }
   renderMains();
   renderProviders();
@@ -168,6 +168,7 @@ function renderProviders() {
     const opts = ['', ...mains].map((m) => `<option value="${escapeHtml(m)}"${m === p.mainDoctor ? ' selected' : ''}>${escapeHtml(m || '— choose —')}</option>`).join('');
     row.innerHTML = `
       <input class="prov-name" data-i="${i}" value="${escapeHtml(p.name)}" placeholder="e.g. Dr. Alan Patel" />
+      <input class="prov-disc" data-i="${i}" value="${escapeHtml(p.discipline || '')}" placeholder="PT / OT / SLP" />
       <select class="prov-main" data-i="${i}">${opts}</select>
       <input class="prov-codes" data-i="${i}" value="${escapeHtml(formatCodes(p.codes))}" placeholder="97112 x2, 97530 x2 (59)" />
       <button class="btn prov-del" data-i="${i}" title="Remove this doctor">✕</button>`;
@@ -175,12 +176,13 @@ function renderProviders() {
   });
 
   $$('.prov-name').forEach((el) => el.addEventListener('input', () => { draftProviders[+el.dataset.i].name = el.value; }));
+  $$('.prov-disc').forEach((el) => el.addEventListener('input', () => { draftProviders[+el.dataset.i].discipline = el.value; }));
   $$('.prov-main').forEach((el) => el.addEventListener('change', () => { draftProviders[+el.dataset.i].mainDoctor = el.value; }));
   $$('.prov-codes').forEach((el) => el.addEventListener('input', () => { draftProviders[+el.dataset.i].codes = el.value; }));
   $$('.prov-del').forEach((el) => el.addEventListener('click', () => { draftProviders.splice(+el.dataset.i, 1); renderProviders(); }));
 }
 
-$('#addDoctorBtn').addEventListener('click', () => { draftProviders.push({ name: '', mainDoctor: '', codes: '' }); renderProviders(); });
+$('#addDoctorBtn').addEventListener('click', () => { draftProviders.push({ name: '', discipline: '', mainDoctor: '', codes: '' }); renderProviders(); });
 
 $('#interpretBtn').addEventListener('click', async () => {
   const text = $('#rosterText').value.trim();
@@ -190,7 +192,7 @@ $('#interpretBtn').addEventListener('click', async () => {
   const res = await window.api.parseRoster(text);
   $('#interpretBtn').disabled = false;
   $('#interpretBtn').textContent = 'Interpret with AI';
-  draftProviders = (res.providers || []).map((p) => ({ name: p.name, mainDoctor: p.mainDoctor, codes: formatCodes(p.codes) }));
+  draftProviders = (res.providers || []).map((p) => ({ name: p.name, discipline: p.discipline || '', mainDoctor: p.mainDoctor, codes: formatCodes(p.codes) }));
   // Fold in any detected big-doctor 2-letter codes (e.g. "under Heather - GO").
   if (res.mainCodeHints) {
     for (const [name, code] of Object.entries(res.mainCodeHints)) {
@@ -205,13 +207,15 @@ $('#interpretBtn').addEventListener('click', async () => {
   toast(`Found ${draftProviders.length} doctor(s) — review and save.`);
 });
 
-$('#loadDemoBtn').addEventListener('click', async () => {
+async function loadFullRoster() {
   await window.api.loadDemo();
   draftProviders = [];
   draftMains = [];
   await refresh();
-  toast('Demo doctors loaded.');
-});
+  toast('Full roster loaded — review and press Save doctors.');
+}
+$('#loadDemoBtn').addEventListener('click', loadFullRoster);
+$('#loadRosterBtn').addEventListener('click', loadFullRoster);
 
 $('#saveRosterBtn').addEventListener('click', async () => {
   const mains = draftMains.filter((m) => m.name.trim());

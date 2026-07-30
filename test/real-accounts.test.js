@@ -72,7 +72,8 @@ const SP_HTML = `<!doctype html><html><body>
 
 (function testMatcherSingleNames() {
   console.log('# Doctor matcher — single first names + Practice Fusion surname initials');
-  for (const [pf, want] of [['Shanina s', 'Shanina'], ['Sally S', 'Sally'], ['Gianna G', 'Gianna'], ['Sam Comrie', 'Sam Comrie'], ['Leah Santalis', 'Leah Santalis']]) {
+  // Real roster: full names, Practice Fusion shows a surname initial or a nickname.
+  for (const [pf, want] of [['Shanina s', 'Shanina Smith'], ['Sally S', 'Sally Connolly'], ['Gianna G', 'Gianna Hernandez'], ['Sam Comrie', 'Samantha Comrie'], ['Yamela Cando', 'Yamela Cando']]) {
     const r = matchProvider(pf, DEMO_PROVIDERS);
     check(`"${pf}" → ${want}`, !!r.provider && r.provider.name === want);
   }
@@ -91,7 +92,7 @@ const SP_HTML = `<!doctype html><html><body>
   const gi = planned.find((p) => p.doctorName === 'Gianna G');
   check('Gianna → Caryn (GP)', gi.mainDoctor === 'Caryn McAllister' && gi.services[0].modifiers.includes('GP'));
   const sam = planned.find((p) => p.doctorName === 'Sam Comrie');
-  check('Sam Comrie → Karine (GN), 3 services', sam.mainDoctor === 'Karine Rocha de Benedicto' && sam.services.length === 3 && sam.services.every((s) => s.modifiers.includes('GN')));
+  check('Sam Comrie → Samantha Comrie / Karine (GN), 2 services', sam.mainDoctor === 'Karine Rocha de Benedicto' && sam.services.length === 2 && sam.services.every((s) => s.modifiers.includes('GN')));
 })();
 
 (function testSpSelectors() {

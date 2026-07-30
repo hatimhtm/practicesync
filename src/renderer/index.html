@@ -119,15 +119,17 @@
 
         <div class="card">
           <div class="card-k">Your doctors</div>
-          <p class="muted" style="font-size:13px;margin:2px 0 12px">Fill one row per doctor: their name, the main doctor they work under, and their code(s). A doctor can have several codes. (The visit date is read automatically from Practice Fusion — you don't enter it here.)</p>
+          <p class="muted" style="font-size:13px;margin:2px 0 12px">One row per doctor: their name, their discipline (PT / OT / SLP…), the main doctor they work under, and their code(s). Add, edit, or remove any of them freely — customise it however you like. (The visit date is read automatically from Practice Fusion — you don't enter it here.)</p>
           <div class="roster-head hidden" id="rosterGridHead">
-            <div>Doctor</div><div>Main doctor</div><div>Billing codes (CPT)</div><div></div>
+            <div>Doctor</div><div>Discipline</div><div>Main doctor</div><div>Billing codes (CPT)</div><div></div>
           </div>
           <div id="providerList"></div>
           <div class="row" style="margin-top:10px">
             <button class="btn" id="addDoctorBtn">+ Add a doctor</button>
+            <button class="btn" id="loadRosterBtn">Load full roster</button>
             <button class="btn btn-primary hidden" id="saveRosterBtn">Save doctors</button>
           </div>
+          <p class="muted" style="font-size:12px;margin:8px 0 0"><strong>Load full roster</strong> fills the grid with every therapist under Caryn, Heather and Karine, ready for you to review and Save. <strong>+ Add a doctor</strong> adds a blank row — enter the name and pick their main doctor.</p>
         </div>
 
         <details class="advanced">
@@ -136,7 +138,7 @@
             <textarea id="rosterText" rows="5" placeholder="One doctor per line, for example:&#10;Dr. Alan Patel, Dr. Reed, 97110, 97530&#10;Sara Nguyen under Reed: 97161&#10;&#10;…or group them:&#10;Under Dr. Okafor:&#10;Marcus Cohen 97165 97535&#10;Rita Okonkwo 92507"></textarea>
             <div class="row" style="margin-top:8px">
               <button class="btn btn-primary" id="interpretBtn">Interpret with AI</button>
-              <button class="btn" id="loadDemoBtn">Load demo doctors</button>
+              <button class="btn" id="loadDemoBtn">Load full roster</button>
             </div>
             <div class="muted" id="parseEngine" style="font-size:11.5px;margin-top:8px"></div>
           </div>
