@@ -104,6 +104,15 @@ const SP_HTML = `<!doctype html><html><body>
   check('"Agnes" does not trigger the agency rule', !isNonPatient('Agnes Miller'));
 })();
 
+(function testSameNameDedup() {
+  console.log('# sameName — word-order/format-independent match, used to dedupe already-booked patients');
+  const { sameName } = require(path.join(__dirname, '..', 'src', 'main', 'model'));
+  check('"Jane Doe" == "Doe, Jane"', sameName('Jane Doe', 'Doe, Jane'));
+  check('extra spacing/case still matches', sameName('  jane   doe ', 'JANE DOE'));
+  check('different patients do not match', !sameName('Jane Doe', 'John Doe'));
+  check('a subset of tokens does not match', !sameName('Jane Doe', 'Jane'));
+})();
+
 (function testDisciplinePick() {
   console.log('# Client picker chooses the OT/PT/SLP variant by the appointment discipline');
   const { chooseOptionIndex } = require(path.join(__dirname, '..', 'src', 'main', 'book'));

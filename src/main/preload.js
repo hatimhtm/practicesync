@@ -32,4 +32,7 @@ contextBridge.exposeInMainWorld('api', {
   checkForUpdates: () => ipcRenderer.invoke('update:check'),
   installUpdate: () => ipcRenderer.invoke('update:install'),
   onUpdateStatus: (cb) => ipcRenderer.on('update-status', (_e, s) => cb(s)),
+  alertsList: () => ipcRenderer.invoke('alerts:list'),
+  alertsClear: () => ipcRenderer.invoke('alerts:clear'),
+  onAlertAdded: (cb) => ipcRenderer.on('alert-added', (_e, a) => cb(a)),
 });

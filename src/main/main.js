@@ -31,10 +31,19 @@ function notify(body) {
 
 /** One alert per missing patient, gated by the "Alert on missing patient"
  *  setting. Never fires for agency/org rows — those are dropped before
- *  booking is even attempted (isNonPatient), so this is patients only. */
-function notifyMissingPatient(name) {
+ *  booking is even attempted (isNonPatient), so this is patients only.
+ *  Persisted to the Alerts screen (a desktop notification alone is easy to
+ *  miss if no one's looking at the moment it fires) AND shown as a native
+ *  notification. Capped at the most recent 200 so the file never grows
+ *  unbounded. */
+const MAX_ALERTS = 200;
+function notifyMissingPatient(name, date) {
   const settings = store.load();
   if (settings.alertOnMissingPatient === false) return;
+  const entry = { id: 'al_' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6), patientName: name, date: date || '', at: nowISO() };
+  const alerts = [entry, ...(settings.alerts || [])].slice(0, MAX_ALERTS);
+  store.save({ alerts });
+  sendToRenderer('alert-added', entry);
   notify(`Patient not found in SimplePractice: "${name}" — sync skipped booking them.`);
 }
 
@@ -347,6 +356,10 @@ function registerIpc() {
     sendToRenderer('record-event', { type: 'replay', text: res.ok ? 'Replay finished ✓' : (res.error || 'Replay stopped.'), done: true });
     return res;
   });
+
+  // Alerts screen: patients the SimplePractice search couldn't find while booking.
+  ipcMain.handle('alerts:list', () => store.load().alerts || []);
+  ipcMain.handle('alerts:clear', () => { store.save({ alerts: [] }); return []; });
 
   ipcMain.handle('run:sync', async (_e, opts) => performSync('manual', opts || {}));
   ipcMain.handle('run:now', async () => scheduler.runNow('manual'));

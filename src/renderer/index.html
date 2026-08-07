@@ -32,6 +32,7 @@
         <button class="nav-item" data-view="connect"><span class="dot"></span> Connection</button>
         <button class="nav-item" data-view="ai"><span class="dot"></span> AI Engine</button>
         <button class="nav-item" data-view="schedule"><span class="dot"></span> Schedule</button>
+        <button class="nav-item" data-view="alerts"><span class="dot"></span> Alerts <span class="nav-badge hidden" id="alertsBadge">0</span></button>
         <button class="nav-item" data-view="test"><span class="dot"></span> Test drive</button>
         <button class="nav-item" data-view="record"><span class="dot"></span> Record a workflow</button>
       </nav>
@@ -282,11 +283,27 @@
             <button data-val="on">On</button>
             <button data-val="off">Off</button>
           </div>
-          <p class="muted" style="font-size:12px;margin:8px 0 0">A desktop notification fires whenever a patient's name can't be found in SimplePractice's search while booking. Agency/organization rows (e.g. "…Contract Agency") are never patients and never trigger this.</p>
+          <p class="muted" style="font-size:12px;margin:8px 0 0">Fires whenever a patient's name can't be found in SimplePractice's search while booking — as a desktop notification AND logged on the <button class="link" data-goto="alerts">Alerts</button> screen, so it's never missed. Agency/organization rows (e.g. "…Contract Agency") are never patients and never trigger this.</p>
         </div>
 
         <div class="callout small">
           <strong>Safe to leave on:</strong> each run only books visits it hasn't booked before, so nothing is ever double-entered. You'll get a notification when a run finishes.
+        </div>
+      </section>
+
+      <!-- ALERTS -->
+      <section class="view hidden" data-view="alerts">
+        <header class="view-head">
+          <h1>Alerts</h1>
+          <p class="muted">Patients the SimplePractice search couldn't find while booking — nothing was booked for them, so they need a manual look. Agency/organization rows are never patients and never show up here.</p>
+        </header>
+
+        <div class="card">
+          <div class="row" style="justify-content:space-between;align-items:center">
+            <div class="card-k" style="margin:0">Missing patients</div>
+            <button class="btn" id="alertsClearBtn">Clear all</button>
+          </div>
+          <div id="alertsList" style="margin-top:10px"></div>
         </div>
       </section>
 

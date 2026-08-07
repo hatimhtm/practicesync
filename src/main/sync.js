@@ -23,10 +23,9 @@ const login = require('./login');
 const book = require('./book');
 const { extractVisits } = require('./extract');
 const { planAppointments } = require('./automation');
-const { isNonPatient } = require('./model');
+const { isNonPatient, sameName } = require('./model');
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
-const norm = (s) => String(s || '').trim().toLowerCase().replace(/\s+/g, ' ');
 const say = (onStep, m) => { try { if (typeof onStep === 'function') onStep(m); } catch {} };
 
 function parseHeadingDay(s) { const d = new Date(String(s || '').replace(/^[A-Za-z]+,\s*/, '')); return isNaN(d) ? null : new Date(d.getFullYear(), d.getMonth(), d.getDate()); }
@@ -143,27 +142,34 @@ async function runFullSync({ secrets, dates, providers, mainDoctors, save = fals
     for (const date of Object.keys(byDate)) {
       await book.spNavigateToDate(page, date, onStep);
       const existingClients = await book.spClientsOnDate(page);
-      const accounted = {};
-      existingClients.forEach((n) => { accounted[norm(n)] = (accounted[norm(n)] || 0) + 1; });
+      // A mutable pool of the names already on today's calendar: each entry can
+      // only account for ONE of this patient's visits, and is matched word-order/
+      // format independent (sameName — "Doe, Jane" on the calendar still matches
+      // a "Jane Doe" visit from Practice Fusion) so a formatting difference never
+      // causes the same visit to be re-booked as a duplicate.
+      const existingPool = existingClients.slice();
+      const takeExisting = (name) => {
+        const idx = existingPool.findIndex((n) => sameName(n, name));
+        if (idx === -1) return false;
+        existingPool.splice(idx, 1);
+        return true;
+      };
       const group = byDate[date];
       // Give each of the day's appointments its own time across 9am–5pm, so they
       // don't all land on the same slot (the same-time stacking the user saw).
       group.forEach((appt, i) => { appt.time = staggeredTime(i, group.length); });
-      const want = {};
-      group.forEach((p) => { want[norm(p.patientName)] = (want[norm(p.patientName)] || 0) + 1; });
 
       for (const appt of group) {
-        const k = norm(appt.patientName);
-        if ((accounted[k] || 0) >= want[k]) { result.skipped += 1; say(onStep, `Skip ${appt.patientName} on ${date} — already booked`); continue; }
+        if (takeExisting(appt.patientName)) { result.skipped += 1; say(onStep, `Skip ${appt.patientName} on ${date} — already booked`); continue; }
         const r = await book.bookAppointment(page, appt, { onStep, dryRun: !save, overrides });
-        if (r.ok) { result.booked += 1; accounted[k] = (accounted[k] || 0) + 1; }
+        if (r.ok) { result.booked += 1; }
         else {
           result.failed += 1;
           say(onStep, `Could not book ${appt.patientName}: ${r.error}`);
           if (r.reason === 'client_not_found') {
             result.missingPatients.push(appt.patientName);
             say(onStep, `Alert: patient "${appt.patientName}" not found in SimplePractice search.`);
-            if (typeof onMissingPatient === 'function') { try { onMissingPatient(appt.patientName); } catch {} }
+            if (typeof onMissingPatient === 'function') { try { onMissingPatient(appt.patientName, appt.date); } catch {} }
           }
         }
       }

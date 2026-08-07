@@ -38,6 +38,7 @@ const DEFAULTS = {
   lastResult: null,
   setupComplete: false,
   alertOnMissingPatient: true, // desktop notification when a patient can't be found in SimplePractice (agency/org rows never trigger this)
+  alerts: [],               // persisted log of missing-patient alerts: [{ id, patientName, date, at }], newest first
 };
 
 function settingsPath() {

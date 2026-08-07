@@ -590,6 +590,35 @@ async function renderWorkflowList() {
   $$('.wf-del').forEach((b) => b.addEventListener('click', async () => { await window.api.recordDelete(b.dataset.id); renderWorkflowList(); }));
 }
 
+/* ------------------------------ alerts ------------------------------ */
+function renderAlertRows(alerts) {
+  const list = $('#alertsList');
+  const badge = $('#alertsBadge');
+  if (badge) {
+    badge.textContent = String(alerts.length);
+    badge.classList.toggle('hidden', alerts.length === 0);
+  }
+  if (!list) return;
+  if (!alerts.length) { list.innerHTML = '<p class="muted" style="font-size:13px;margin:6px 0 0">No alerts — every patient searched for has been found in SimplePractice.</p>'; return; }
+  list.innerHTML = '';
+  alerts.forEach((a) => {
+    const row = document.createElement('div');
+    row.className = 'wf-row';
+    row.innerHTML = `<div class="wf-meta"><b>${escapeHtml(a.patientName || '(unnamed)')}</b><span class="muted"> · not found${a.date ? ' for ' + escapeHtml(a.date) : ''} · ${fmtTime(a.at)}</span></div>`;
+    list.appendChild(row);
+  });
+}
+async function loadAlerts() {
+  const alerts = (await window.api.alertsList()) || [];
+  renderAlertRows(alerts);
+}
+if ($('#alertsClearBtn')) $('#alertsClearBtn').addEventListener('click', async () => {
+  await window.api.alertsClear();
+  loadAlerts();
+  toast('Alerts cleared.');
+});
+window.api.onAlertAdded(async () => { await loadAlerts(); toast('⚠️ A patient wasn\'t found in SimplePractice — see Alerts.'); });
+
 window.api.onRecordEvent((s) => {
   if (!s) return;
   if (s.type === 'replay') {
@@ -829,6 +858,7 @@ window.api.onRunStatus((s) => { if (s && s.phase === 'running') $('#statusIcon')
 (async () => {
   await refresh();
   renderWorkflowList();
+  loadAlerts();
   // The step-by-step tutorial is retired: the screens are already built in, so
   // first-run setup is just "enter your logins" on the Connection page.
 })();

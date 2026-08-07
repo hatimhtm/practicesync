@@ -96,6 +96,16 @@ function makeProvider({ name, mainDoctor, codes, discipline }) {
   };
 }
 
+/** Word-order-independent name equality ("Doe, Jane" ↔ "Jane Doe" ↔ "jane  doe"),
+ *  so a name shown differently on the SimplePractice calendar than on the
+ *  Practice Fusion visit is still recognized as the same patient (used to
+ *  detect an existing appointment and avoid double-booking it). */
+function sameName(a, b) {
+  const ta = normalizeName(a).split(' ').filter(Boolean).sort();
+  const tb = normalizeName(b).split(' ').filter(Boolean).sort();
+  return ta.length > 0 && ta.join(' ') === tb.join(' ');
+}
+
 // Some Practice Fusion rows are organizations, not patients — e.g. "All Pointe
 // HomeCare Contract Agency". They have no SimplePractice client record and must
 // never be booked. Matches the org markers the practice uses (chiefly "agency");
@@ -256,6 +266,7 @@ const DEMO_PROVIDERS = [
 
 module.exports = {
   normalizeName,
+  sameName,
   isNonPatient,
   makeProvider,
   makeMainDoctor,
