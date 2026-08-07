@@ -115,6 +115,8 @@ const SP_HTML = `<!doctype html><html><body>
   check('no variants → picks the single record fast', chooseOptionIndex(['Colin LaMura'], 'Colin LaMura', { discipline: 'pt' }) === 0);
   check('name variant Ronald→Ron still falls back to first', chooseOptionIndex(['Ron Bruder'], 'Ronald Bruder', { discipline: 'pt', allowFirst: true }) === 0);
   check('untagged record preferred over a mismatched tag', chooseOptionIndex(['Jane OT Doe', 'Jane Doe'], 'Jane Doe', { discipline: 'pt', allowFirst: true }) === 1);
+  check('completely different name → -1, never guess a wrong client', chooseOptionIndex(['Unrelated Person'], 'Jamie Rivera', { discipline: 'pt', allowFirst: true }) === -1);
+  check('no options at all → -1, not a blind pick', chooseOptionIndex([], 'Jamie Rivera', { discipline: 'pt', allowFirst: true }) === -1);
 })();
 
 (function testSpSelectors() {

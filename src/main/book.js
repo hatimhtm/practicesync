@@ -55,8 +55,11 @@ const DISC_TAG_RE = /\b(pt|ot|slp)\b/;
 //   1. If a discipline is given and the patient has discipline-tagged records, pick
 //      the one for THIS appointment's discipline (PT/OT/SLP).
 //   2. Else prefer an UNtagged exact match, then any exact (all name tokens).
-//   3. Else, if allowFirst, take the first option (name variants like Ronald→Ron),
-//      preferring one that contains the last name.
+//   3. Else, if allowFirst, take the option whose LAST NAME matches (name variants
+//      like Ronald→Ron) — never a name with no overlap at all. A dropdown result
+//      that shares nothing with the searched name is a DIFFERENT patient, not a
+//      variant, so it's rejected here and the caller reports "not found" instead
+//      of silently booking whoever happened to be first in the list.
 // Word-order independent ("Lochlann McNulty" ↔ "McNulty, Lochlann"), ignores a DOB.
 function chooseOptionIndex(texts, value, { discipline = '', allowFirst = false } = {}) {
   const tokens = nameTokens(value);
@@ -73,9 +76,11 @@ function chooseOptionIndex(texts, value, { discipline = '', allowFirst = false }
   if (untagged) return untagged.i;
   if (nameIdx.length) return nameIdx[0].i;
   if (allowFirst) {
+    // Require at least the LAST NAME to appear — that's the bar for "still the
+    // same person, just a nickname/typo on the first name". No last-name overlap
+    // at all means -1 (reject), never a blind guess at the first dropdown result.
     const last = tokens[tokens.length - 1];
-    const lastHit = last ? items.findIndex((t) => t.includes(last)) : -1;
-    return lastHit >= 0 ? lastHit : (items.length ? 0 : -1);
+    return last ? items.findIndex((t) => t.includes(last)) : -1;
   }
   return -1;
 }
@@ -160,10 +165,11 @@ async function typeaheadSelect(page, triggerSel, value, onStep, label, searchSel
       if (input) { await input.fill('').catch(() => {}); await input.type(term, { delay: 15 }); }
       else { await sleep(250); await page.keyboard.type(term, { delay: 15 }); }
       // Poll: for the first ~2.2s prefer an EXACT (all-token) match; after that accept
-      // the FIRST option that popped up (the "just take the first one" rule) so a name
-      // variant like Ronald→Ron still books instead of being skipped.
+      // a result that at least shares the LAST NAME (so a variant like Ronald→Ron
+      // still books) — never an option with no name overlap at all, which is a
+      // different patient, not a variant.
       let picked = false;
-      const canFallback = !!verifySel; // first-result fallback only for the client
+      const canFallback = !!verifySel; // last-name fallback only for the client
       const softDeadline = Date.now() + 2200;
       const hardDeadline = Date.now() + 4500;
       while (!picked && Date.now() < hardDeadline) {
