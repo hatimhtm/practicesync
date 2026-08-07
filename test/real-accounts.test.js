@@ -142,6 +142,16 @@ const SP_HTML = `<!doctype html><html><body>
   check('extra spacing/case still matches', sameName('  jane   doe ', 'JANE DOE'));
   check('different patients do not match', !sameName('Jane Doe', 'John Doe'));
   check('a subset of tokens does not match', !sameName('Jane Doe', 'Jane'));
+  // A discipline-split SimplePractice client carries the PT/OT/SLP tag in their
+  // OWN name (book.js DISC_TAG_RE), but the Practice Fusion visit never does —
+  // without stripping the tag, dedup could never recognize the calendar's
+  // existing "Luke PT/OT Bousseau" as the same visit as PF's "Luke Bousseau",
+  // and would re-book it fresh (at the sync's start time) on every run — the
+  // exact same-time-slot duplicates seen on the real calendar.
+  check('discipline tag "PT/OT" is ignored', sameName('Luke PT/OT Bousseau', 'Luke Bousseau'));
+  check('discipline tag "SLP" is ignored', sameName('Nicolas SLP Bousseau', 'Nicolas Bousseau'));
+  check('discipline tag "PT/OT" ignored, reversed order', sameName('Jennifer OT Burgand', 'Burgand, Jennifer'));
+  check('a real "PT"/"OT" as an actual surname would still be stripped (accepted risk — same convention as book.js)', sameName('Sam OT', 'Sam'));
 })();
 
 (function testDisciplinePick() {

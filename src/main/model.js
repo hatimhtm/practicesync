@@ -96,13 +96,23 @@ function makeProvider({ name, mainDoctor, codes, discipline }) {
   };
 }
 
+// A client split by discipline is stored in SimplePractice with the tag baked
+// into their own name ("Luke PT/OT Bousseau" — see book.js DISC_TAG_RE/
+// chooseOptionIndex), so the calendar's existing-appointment title carries it
+// too. The Practice Fusion visit never does (it's just "Luke Bousseau") — so
+// dedup must ignore these tokens or it can NEVER recognize the two as the same
+// patient, and re-books them fresh (at the sync's starting time slot) on every
+// run. Same token set book.js already treats as non-name discipline tags.
+const DISC_TAG_TOKENS = new Set(['pt', 'ot', 'slp']);
+
 /** Word-order-independent name equality ("Doe, Jane" ↔ "Jane Doe" ↔ "jane  doe"),
- *  so a name shown differently on the SimplePractice calendar than on the
- *  Practice Fusion visit is still recognized as the same patient (used to
- *  detect an existing appointment and avoid double-booking it). */
+ *  ignoring any PT/OT/SLP discipline tag baked into a SimplePractice client's
+ *  display name, so a name shown differently — or tagged — on the calendar is
+ *  still recognized as the same patient (used to detect an existing
+ *  appointment and avoid double-booking it). */
 function sameName(a, b) {
-  const ta = normalizeName(a).split(' ').filter(Boolean).sort();
-  const tb = normalizeName(b).split(' ').filter(Boolean).sort();
+  const strip = (s) => normalizeName(s).split(' ').filter((t) => t && !DISC_TAG_TOKENS.has(t)).sort();
+  const ta = strip(a), tb = strip(b);
   return ta.length > 0 && ta.join(' ') === tb.join(' ');
 }
 
