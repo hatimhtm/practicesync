@@ -140,9 +140,20 @@ function mainCodeFor(mainDoctorName, mainDoctors) {
  *  first-name/nickname prefixes, e.g. "sam" ⊂ "samantha")? Practice Fusion shows
  *  a surname INITIAL ("Shanina s", "Sally S"); a 1–2 char token must match
  *  EXACTLY, never by prefix, or the initial "s" would match Sally/Sam/Shanina
- *  alike and make every single-name provider look ambiguous. */
-function tokenIn(rosterTok, pfTokens) {
-  return pfTokens.some((pt) => pt === rosterTok || (rosterTok.length >= 3 && pt.length >= 3 && (pt.startsWith(rosterTok) || rosterTok.startsWith(pt))));
+ *  alike and make every single-name provider look ambiguous.
+ *  `allowInitial` lets a bare one-letter PF token confirm a roster token by
+ *  matching its first letter — e.g. "v" confirms "vines" in "Heather Vines
+ *  Dubose" — but the CALLER only ever passes it for a surname token once the
+ *  roster's FIRST name has already matched. An initial checked on its own is
+ *  near-meaningless (any of ~26 surnames could start with it), so allowing it
+ *  unconditionally let a bare "s" confirm a totally unrelated person's surname
+ *  (e.g. "Sally S" scoring "Regis Saget" a tie via "Saget" alone) — the exact
+ *  class of collision this function exists to prevent, just moved one token
+ *  over. Gating it on the first name already having matched keeps it safe. */
+function tokenIn(rosterTok, pfTokens, allowInitial = false) {
+  return pfTokens.some((pt) => pt === rosterTok
+    || (rosterTok.length >= 3 && pt.length >= 3 && (pt.startsWith(rosterTok) || rosterTok.startsWith(pt)))
+    || (allowInitial && pt.length === 1 && rosterTok[0] === pt));
 }
 
 function matchProvider(doctorName, providers) {
@@ -160,8 +171,20 @@ function matchProvider(doctorName, providers) {
   const scored = providers.map((p) => {
     const rt = normalizeName(p.name).split(' ').filter(Boolean);
     if (!rt.length) return { p, score: 0 };
-    const found = rt.filter((t) => tokenIn(t, pfTokens)).length;
-    return { p, score: found / rt.length };
+    // The surname-initial credit (see tokenIn) only ever applies once the
+    // FIRST name itself matched — never as standalone evidence.
+    const firstNameMatches = tokenIn(rt[0], pfTokens);
+    const found = rt.filter((t, idx) => (idx === 0 ? firstNameMatches : tokenIn(t, pfTokens, firstNameMatches))).length;
+    // Score against how many roster tokens COULD possibly be confirmed by the
+    // given PF tokens (never more than pfTokens.length), not the roster name's
+    // full length. Otherwise a compound/hyphenated surname (more tokens) always
+    // scores WORSE than a same-first-name provider with a one-word surname for
+    // identical evidence — e.g. a bare "Heather" penalized "Heather Vines
+    // Dubose" (1/3) less than an unrelated "Heather Meehan" (1/2), so the
+    // shorter name won by arithmetic alone. Capping the denominator makes a
+    // bare first name tie (correctly ambiguous) instead of picking whichever
+    // roster entry happens to have the shortest name.
+    return { p, score: found / Math.min(rt.length, pfTokens.length) };
   });
 
   const full = scored.filter((s) => s.score >= 0.99); // every roster token found

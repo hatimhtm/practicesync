@@ -79,6 +79,37 @@ const SP_HTML = `<!doctype html><html><body>
   }
 })();
 
+(function testMatcherNoWrongMainDoctor() {
+  console.log('# Doctor matcher — a compound/hyphenated surname must never lose to a same-first-name provider under a DIFFERENT main doctor');
+  // These three collided in the real roster: the correct person has a two-word
+  // surname, and an unrelated same-first-name person with a one-word surname
+  // used to win by arithmetic alone (see model.js matchProvider comments).
+  for (const [pf, want, wantMain] of [
+    ['Heather V', 'Heather Vines-Dubose', 'Heather Vines-Dubose'],
+    ['Heather', null, null], // bare first name, no surname info at all — must refuse, not guess
+    ['Nicole L', 'Nicole Lee-Williams', 'Heather Vines-Dubose'],
+    ['Samantha S', 'Samantha Impellizeri (Scavo)', 'Heather Vines-Dubose'],
+  ]) {
+    const r = matchProvider(pf, DEMO_PROVIDERS);
+    if (want === null) check(`"${pf}" → refused (ambiguous), never guessed`, r.provider === null);
+    else check(`"${pf}" → ${want} (${wantMain})`, !!r.provider && r.provider.name === want && r.provider.mainDoctor === wantMain);
+  }
+  // Full sweep: for every real provider, a "FirstName SurnameInitial" or bare
+  // first-name PF format must never confidently resolve to a DIFFERENT provider
+  // under a DIFFERENT main doctor (booking under the wrong main doctor is the
+  // one outcome this matcher exists to prevent — refusing as ambiguous is fine).
+  let wrongMainDoctor = 0;
+  for (const p of DEMO_PROVIDERS) {
+    const tokens = p.name.replace(/[()]/g, '').split(/\s+/).filter(Boolean);
+    if (!tokens.length) continue;
+    for (const variant of [p.name, `${tokens[0]} ${tokens[tokens.length - 1][0]}`, tokens[0]]) {
+      const r = matchProvider(variant, DEMO_PROVIDERS);
+      if (r.provider && r.provider.mainDoctor !== p.mainDoctor) wrongMainDoctor++;
+    }
+  }
+  check('no PF-name variant of any real provider resolves to a different main doctor', wrongMainDoctor === 0);
+})();
+
 (function testPlan() {
   console.log('# Read → plan with the roster (main doctor + codes + GP/GO/GN + 59)');
   const doc = new JSDOM(PF_HTML).window.document;
