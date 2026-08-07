@@ -37,6 +37,7 @@ const DEFAULTS = {
   lastRun: null,
   lastResult: null,
   setupComplete: false,
+  alertOnMissingPatient: true, // desktop notification when a patient can't be found in SimplePractice (agency/org rows never trigger this)
 };
 
 function settingsPath() {

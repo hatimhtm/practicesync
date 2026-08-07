@@ -102,6 +102,8 @@ async function refresh() {
   const sched = settings.schedule || 'off';
   $$('#scheduleSeg button').forEach((b) => b.classList.toggle('active', b.dataset.val === sched));
   if ($('#syncDaysAhead') && document.activeElement !== $('#syncDaysAhead')) $('#syncDaysAhead').value = settings.syncDaysAhead || 7;
+  const alertMissing = settings.alertOnMissingPatient !== false ? 'on' : 'off';
+  $$('#alertMissingSeg button').forEach((b) => b.classList.toggle('active', b.dataset.val === alertMissing));
   renderSchedule(sched, r);
 }
 
@@ -457,6 +459,11 @@ if ($('#syncDaysAhead')) $('#syncDaysAhead').addEventListener('change', async (e
   await window.api.saveSettings({ syncDaysAhead: n });
   toast(`Will sync the next ${n} day${n === 1 ? '' : 's'} on each run.`);
 });
+$$('#alertMissingSeg button').forEach((b) => b.addEventListener('click', async () => {
+  await window.api.saveSettings({ alertOnMissingPatient: b.dataset.val === 'on' });
+  await refresh();
+  toast(b.dataset.val === 'on' ? 'Alert enabled — you\'ll be notified when a patient isn\'t found.' : 'Alert disabled.');
+}));
 
 /* ------------------------------ test drive ------------------------------ */
 let demoRunning = false;

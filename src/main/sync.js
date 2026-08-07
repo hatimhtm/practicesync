@@ -87,9 +87,11 @@ async function pfNavigateToDate(page, target, onStep) {
  * @param {Array}  opts.mainDoctors
  * @param {boolean} opts.save     true = actually book; false = dry run (fill only)
  * @param {function} opts.onStep
+ * @param {function} opts.onMissingPatient  called with a patient name the SimplePractice
+ *   search couldn't find (never called for agency/org rows — those are dropped earlier)
  */
-async function runFullSync({ secrets, dates, providers, mainDoctors, save = false, onStep, overrides = null, context: existing } = {}) {
-  const result = { ok: true, planned: [], booked: 0, skipped: 0, failed: 0, unmatched: 0, dryRun: !save };
+async function runFullSync({ secrets, dates, providers, mainDoctors, save = false, onStep, onMissingPatient, overrides = null, context: existing } = {}) {
+  const result = { ok: true, planned: [], booked: 0, skipped: 0, failed: 0, unmatched: 0, missingPatients: [], dryRun: !save };
   const own = !existing;
   let context = existing;
   if (!context) {
@@ -155,7 +157,15 @@ async function runFullSync({ secrets, dates, providers, mainDoctors, save = fals
         if ((accounted[k] || 0) >= want[k]) { result.skipped += 1; say(onStep, `Skip ${appt.patientName} on ${date} — already booked`); continue; }
         const r = await book.bookAppointment(page, appt, { onStep, dryRun: !save, overrides });
         if (r.ok) { result.booked += 1; accounted[k] = (accounted[k] || 0) + 1; }
-        else { result.failed += 1; say(onStep, `Could not book ${appt.patientName}: ${r.error}`); }
+        else {
+          result.failed += 1;
+          say(onStep, `Could not book ${appt.patientName}: ${r.error}`);
+          if (r.reason === 'client_not_found') {
+            result.missingPatients.push(appt.patientName);
+            say(onStep, `Alert: patient "${appt.patientName}" not found in SimplePractice search.`);
+            if (typeof onMissingPatient === 'function') { try { onMissingPatient(appt.patientName); } catch {} }
+          }
+        }
       }
     }
     say(onStep, `Done — ${result.booked} booked, ${result.skipped} skipped (already there / not a patient), ${result.failed} failed, ${result.unmatched} unrecognized.`);

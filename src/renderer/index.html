@@ -276,6 +276,15 @@
           </div>
         </div>
 
+        <div class="card">
+          <div class="card-k">Alert when a patient isn't found</div>
+          <div class="seg" id="alertMissingSeg" style="margin-top:8px">
+            <button data-val="on">On</button>
+            <button data-val="off">Off</button>
+          </div>
+          <p class="muted" style="font-size:12px;margin:8px 0 0">A desktop notification fires whenever a patient's name can't be found in SimplePractice's search while booking. Agency/organization rows (e.g. "…Contract Agency") are never patients and never trigger this.</p>
+        </div>
+
         <div class="callout small">
           <strong>Safe to leave on:</strong> each run only books visits it hasn't booked before, so nothing is ever double-entered. You'll get a notification when a run finishes.
         </div>

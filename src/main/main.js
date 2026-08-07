@@ -29,6 +29,15 @@ function notify(body) {
   try { if (Notification.isSupported()) new Notification({ title: 'Hope Assistant', body }).show(); } catch {}
 }
 
+/** One alert per missing patient, gated by the "Alert on missing patient"
+ *  setting. Never fires for agency/org rows — those are dropped before
+ *  booking is even attempted (isNonPatient), so this is patients only. */
+function notifyMissingPatient(name) {
+  const settings = store.load();
+  if (settings.alertOnMissingPatient === false) return;
+  notify(`Patient not found in SimplePractice: "${name}" — sync skipped booking them.`);
+}
+
 /** Safely send to the renderer (no-op if the window is gone/destroyed). */
 function sendToRenderer(channel, payload) {
   if (mainWindow && !mainWindow.isDestroyed() && mainWindow.webContents && !mainWindow.webContents.isDestroyed()) {
@@ -145,7 +154,7 @@ async function performWindowSync(trigger = 'manual') {
     const onStep = (text) => sendToRenderer('live-step', { text, at: nowISO() });
     const providers = (s.providers && s.providers.length) ? s.providers : DEMO_PROVIDERS;
     const mainDoctors = (s.mainDoctors && s.mainDoctors.length) ? s.mainDoctors : DEMO_MAIN_DOCTORS;
-    const res = await runFullSync({ secrets: creds, dates, providers, mainDoctors, save: true, overrides: s.spFieldOverrides, onStep });
+    const res = await runFullSync({ secrets: creds, dates, providers, mainDoctors, save: true, overrides: s.spFieldOverrides, onStep, onMissingPatient: notifyMissingPatient });
     res.at = nowISO();
     store.save({ lastRun: res.at, lastResult: { ok: res.ok, at: res.at, mode: 'live', trigger, created: res.booked || 0, skipped: res.skipped || 0, failed: res.failed || 0, unmatched: res.unmatched || 0, error: res.error } });
     refreshTray();
@@ -399,7 +408,7 @@ function registerIpc() {
     const mainDoctors = (s.mainDoctors && s.mainDoctors.length) ? s.mainDoctors : DEMO_MAIN_DOCTORS;
     sendToRenderer('live-step', { text: `Starting sync for ${dates.join(', ')}…`, at: nowISO(), reset: true });
     const onStep = (text) => sendToRenderer('live-step', { text, at: nowISO() });
-    const res = await runFullSync({ secrets: creds, dates, providers, mainDoctors, save: !!opts.save, overrides: s.spFieldOverrides, onStep });
+    const res = await runFullSync({ secrets: creds, dates, providers, mainDoctors, save: !!opts.save, overrides: s.spFieldOverrides, onStep, onMissingPatient: notifyMissingPatient });
     res.at = nowISO();
     sendToRenderer('run-finished', res);
     if (res.ok) notify(opts.save ? `Booked ${res.booked} · skipped ${res.skipped}${res.failed ? ' · ' + res.failed + ' failed' : ''}` : `Dry run: ${res.planned.length} would book`);

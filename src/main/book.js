@@ -209,7 +209,7 @@ async function bookAppointment(page, appointment, { onStep, dryRun = true, overr
   if (appointment.patientName) {
     const discTag = DISC_FOR_CODE[String(appointment.mainCode || '').toUpperCase()] || '';
     const gotClient = await typeaheadSelect(page, S.clientTrigger, appointment.patientName, onStep, 'Client', S.clientSearchInput, S.codeSelect, discTag);
-    if (!gotClient) return { ok: false, error: `Could not select client "${appointment.patientName}" in SimplePractice (not found or didn't select).` };
+    if (!gotClient) return { ok: false, reason: 'client_not_found', error: `Could not select client "${appointment.patientName}" in SimplePractice (not found or didn't select).` };
   }
   await sleep(200);
 
