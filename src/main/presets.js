@@ -45,6 +45,7 @@ const PF = {
     patientSelector: 'a[data-element="cell-name"]',
     doctorSelector: 'td[data-element^="cell-provider-name-"]',
     timeSelector: '[data-element="start-time"]', // per-row appointment time, e.g. "12:00 PM"
+    typeSelector: 'td[data-element^="cell-appointment-type-"]', // "Physical Therapy" / "Follow-Up Visit" — self-pay vs insurance
     dateSelector: '[data-element="scheduler-selected-date"]',
   },
 };

@@ -48,6 +48,7 @@ function nameTokens(value) {
 // whose tag matches the main doctor's unit: GP→PT, GO→OT, GN→SLP.
 const DISC_FOR_CODE = { GP: 'pt', GO: 'ot', GN: 'slp' };
 const DISC_TAG_RE = /\b(pt|ot|slp)\b/;
+const SELF_PAY_RE = /\bself[\s-]?pay\b/;
 
 // PURE decision (text only, unit-tested): given the option TEXTS, which index to
 // click for `value`? Returns >=0 to click, -1 for none, -2 for "wait" (the right
@@ -61,18 +62,23 @@ const DISC_TAG_RE = /\b(pt|ot|slp)\b/;
 //      variant, so it's rejected here and the caller reports "not found" instead
 //      of silently booking whoever happened to be first in the list.
 // Word-order independent ("Lochlann McNulty" ↔ "McNulty, Lochlann"), ignores a DOB.
-function chooseOptionIndex(texts, value, { discipline = '', allowFirst = false } = {}) {
+function chooseOptionIndex(texts, value, { discipline = '', selfPay = false, allowFirst = false } = {}) {
   const tokens = nameTokens(value);
   const disc = String(discipline || '').toLowerCase(); // 'pt' | 'ot' | 'slp'
   const items = texts.map((t) => String(t || '').trim().toLowerCase());
   const hasAll = (t) => t && tokens.length && tokens.every((tok) => t.includes(tok));
   const nameIdx = items.map((t, i) => ({ t, i })).filter((x) => hasAll(x.t));
-  if (disc) {
+  if (selfPay) {
+    // Private pay → the "… Self Pay …" record (not the OT/PT/SLP insurance ones).
+    const sp = nameIdx.find((x) => SELF_PAY_RE.test(x.t));
+    if (sp) return sp.i;
+    if (!allowFirst && nameIdx.some((x) => DISC_TAG_RE.test(x.t) || SELF_PAY_RE.test(x.t))) return -2; // wait for the self-pay record
+  } else if (disc) {
     const dm = nameIdx.find((x) => new RegExp(`\\b${disc}\\b`).test(x.t));
     if (dm) return dm.i;
     if (!allowFirst && nameIdx.some((x) => DISC_TAG_RE.test(x.t))) return -2; // wait for the right variant
   }
-  const untagged = nameIdx.find((x) => !DISC_TAG_RE.test(x.t));
+  const untagged = nameIdx.find((x) => !DISC_TAG_RE.test(x.t) && !SELF_PAY_RE.test(x.t));
   if (untagged) return untagged.i;
   if (nameIdx.length) return nameIdx[0].i;
   if (allowFirst) {
@@ -139,7 +145,7 @@ async function fillReliable(handle, value) {
  * took and RETRY the whole open→type→pick up to 3× — because a missed client is
  * unacceptable. Never presses Escape (that closes SimplePractice's dialog).
  */
-async function typeaheadSelect(page, triggerSel, value, onStep, label, searchSel, verifySel, disciplineTag) {
+async function typeaheadSelect(page, triggerSel, value, onStep, label, searchSel, verifySel, disciplineTag, selfPay) {
   const want = String(value || '').trim();
   const disc = String(disciplineTag || '').toLowerCase(); // 'pt'|'ot'|'slp' — pick the right discipline variant
   // When verifying (the client), each retry searches a DIFFERENT way so a name that
@@ -173,7 +179,7 @@ async function typeaheadSelect(page, triggerSel, value, onStep, label, searchSel
       const softDeadline = Date.now() + 2200;
       const hardDeadline = Date.now() + 4500;
       while (!picked && Date.now() < hardDeadline) {
-        picked = await clickOptionMatching(page, want, { discipline: disc, allowFirst: canFallback && Date.now() > softDeadline });
+        picked = await clickOptionMatching(page, want, { discipline: disc, selfPay: !!selfPay, allowFirst: canFallback && Date.now() > softDeadline });
         if (!picked) await sleep(150);
       }
       await liveEngine.stage(page, 'press');
@@ -181,7 +187,8 @@ async function typeaheadSelect(page, triggerSel, value, onStep, label, searchSel
       if (verifySel) {
         // Proof the selection took: the dependent section (Services) rendered.
         const ok = await page.waitForSelector(verifySel, { timeout: 3500 }).then(() => true).catch(() => false);
-        if (ok) { say(onStep, `${label}: ${want}${disc ? ` [${disc.toUpperCase()}]` : ''}${term !== want ? ` (matched by "${term}")` : ''} ✓`); return true; }
+        const tag = selfPay ? ' [Self Pay]' : (disc ? ` [${disc.toUpperCase()}]` : '');
+        if (ok) { say(onStep, `${label}: ${want}${tag}${term !== want ? ` (matched by "${term}")` : ''} ✓`); return true; }
         if (attempt < maxAttempts) { say(onStep, `${label}: "${want}" not found — retrying by "${searchTerms[attempt]}"…`); await sleep(400); continue; }
         say(onStep, `${label}: could NOT find "${want}" in SimplePractice — leaving it (won't book a wrong client)`);
         return false;
@@ -213,8 +220,9 @@ async function bookAppointment(page, appointment, { onStep, dryRun = true, overr
   // The discipline (from the main doctor's GP/GO/GN) picks the right record when a
   // patient is split into OT/PT/SLP variants (e.g. "Jennifer PT Burgand").
   if (appointment.patientName) {
-    const discTag = DISC_FOR_CODE[String(appointment.mainCode || '').toUpperCase()] || '';
-    const gotClient = await typeaheadSelect(page, S.clientTrigger, appointment.patientName, onStep, 'Client', S.clientSearchInput, S.codeSelect, discTag);
+    // Self-pay → the "… Self Pay …" record; otherwise the discipline (GP/GO/GN → PT/OT/SLP) variant.
+    const discTag = appointment.selfPay ? '' : (DISC_FOR_CODE[String(appointment.mainCode || '').toUpperCase()] || '');
+    const gotClient = await typeaheadSelect(page, S.clientTrigger, appointment.patientName, onStep, 'Client', S.clientSearchInput, S.codeSelect, discTag, appointment.selfPay);
     if (!gotClient) return { ok: false, reason: 'client_not_found', error: `Could not select client "${appointment.patientName}" in SimplePractice (not found or didn't select).` };
   }
   await sleep(200);
@@ -256,6 +264,12 @@ async function bookAppointment(page, appointment, { onStep, dryRun = true, overr
     await typeaheadSelect(page, S.locationTrigger, presets.SP.defaultLocation, onStep, 'Location', S.locationSearchInput);
   }
 
+  // SELF-PAY: the service ("Home Visit" etc.) and fee are PRESET on the client's
+  // record in SimplePractice, so we add NO CPT codes — just save. Insurance
+  // appointments fill the coded service lines below.
+  if (appointment.selfPay) {
+    say(onStep, 'Self-pay — service & fee are preset on this client; not adding codes.');
+  } else {
   // SERVICES — one line per code (native <select>, verified). Add EVERY line and
   // select its code first, then fill units + modifiers scoped to each line's own
   // boxes. (Filling per-line inline mis-indexed the shared modifier inputs, so a
@@ -299,6 +313,7 @@ async function bookAppointment(page, appointment, { onStep, dryRun = true, overr
     }
     say(onStep, `Line ${i + 1}: ${svc.code} · units ${u}${mods.length ? ' · mods ' + mods.join(' ') : ''}`);
   }
+  } // end insurance service lines
 
   if (dryRun) {
     const sv = await page.$(S.saveButton);

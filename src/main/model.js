@@ -125,6 +125,13 @@ function isNonPatient(name) {
   return NON_PATIENT_RE.test(String(name || ''));
 }
 
+// The practice's self-pay (private-pay) rule: when the Practice Fusion appointment
+// TYPE is one of these, it's private pay — booked against the patient's "Self Pay"
+// record with a preset service + fee, NOT insurance CPT codes. Everything else
+// (New Patient Visit, Follow-Up Visit, Re-evaluation, …) is insurance.
+const SELF_PAY_TYPES = /\b(physical|occupational|speech)\s+therapy\b|\b(home|office)\s+visit\b/i;
+function isSelfPay(type) { return SELF_PAY_TYPES.test(String(type || '')); }
+
 /** Look up a big doctor's 2-letter modifier code from the configured list. */
 function mainCodeFor(mainDoctorName, mainDoctors) {
   const n = normalizeName(mainDoctorName);
@@ -301,6 +308,7 @@ module.exports = {
   normalizeName,
   sameName,
   isNonPatient,
+  isSelfPay,
   makeProvider,
   makeMainDoctor,
   matchProvider,
