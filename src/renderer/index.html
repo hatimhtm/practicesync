@@ -133,6 +133,15 @@
           <p class="muted" style="font-size:12px;margin:8px 0 0"><strong>Load full roster</strong> fills the grid with every therapist under Caryn, Heather and Karine, ready for you to review and Save. <strong>+ Add a doctor</strong> adds a blank row — enter the name and pick their main doctor.</p>
         </div>
 
+        <div class="card">
+          <div class="card-k">Always self-pay clients</div>
+          <p class="muted" style="font-size:13px;margin:2px 0 12px">Private-pay visits are normally detected automatically from the Practice Fusion appointment type — you don't need to list anyone here. Add a client <strong>only</strong> if they should <strong>always</strong> be booked as self-pay, no matter the visit type. One name per line, exactly as it appears in Practice Fusion.</p>
+          <textarea id="selfPayList" rows="4" placeholder="Jane Doe&#10;John Smith"></textarea>
+          <div class="row" style="margin-top:10px">
+            <button class="btn btn-primary" id="saveSelfPayBtn">Save self-pay clients</button>
+          </div>
+        </div>
+
         <details class="advanced">
           <summary>Paste a list instead (the AI fills the grid for you)</summary>
           <div style="margin-top:12px">

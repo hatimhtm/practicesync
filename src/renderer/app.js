@@ -78,6 +78,7 @@ async function refresh() {
 
   // Doctors & Codes
   $('#rosterText').value = settings.rosterText || '';
+  if ($('#selfPayList')) $('#selfPayList').value = (settings.selfPayClients || []).join('\n');
   if (!draftMains.length) draftMains = (settings.mainDoctors || []).map(normMain);
   if (!draftProviders.length && providers.length) {
     draftProviders = providers.map((p) => ({ name: p.name, discipline: p.discipline || '', mainDoctor: p.mainDoctor, codes: formatCodes(p.codes) }));
@@ -218,6 +219,13 @@ async function loadFullRoster() {
 }
 $('#loadDemoBtn').addEventListener('click', loadFullRoster);
 $('#loadRosterBtn').addEventListener('click', loadFullRoster);
+
+$('#saveSelfPayBtn').addEventListener('click', async () => {
+  const names = $('#selfPayList').value.split('\n').map((s) => s.trim()).filter(Boolean);
+  await window.api.saveSettings({ selfPayClients: names });
+  await refresh();
+  toast(names.length ? `Saved ${names.length} always-self-pay client${names.length === 1 ? '' : 's'}.` : 'Self-pay list cleared.');
+});
 
 $('#saveRosterBtn').addEventListener('click', async () => {
   const mains = draftMains.filter((m) => m.name.trim());

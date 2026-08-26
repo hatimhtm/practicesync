@@ -186,6 +186,16 @@ const SP_HTML = `<!doctype html><html><body>
   check('self-pay → picks the Self Pay record', chooseOptionIndex(recs, 'Shelby Morton', { selfPay: true }) === 2);
   check('self-pay waits if only insurance records loaded', chooseOptionIndex(['Shelby PT Morton'], 'Shelby Morton', { selfPay: true }) === -2);
   check('self-pay picks a plain record when there is no tagged variant', chooseOptionIndex(['Celia Solorvano'], 'Celia Solorvano', { selfPay: true }) === 0);
+  // Override list: a client marked "always self-pay" wins even when the appointment
+  // type looks like insurance (Follow-Up Visit).
+  const doc2 = new JSDOM(`<!doctype html><html><body><table class="data-table"><tbody>
+    ${PF_ROW(0, 'Shelby Morton', 'Gianna G', 'Follow-Up Visit')}
+  </tbody></table><div data-element="scheduler-selected-date">Mon, Jun 29, 2026</div></body></html>`).window.document;
+  const v2 = extractVisits(doc2, presets.PF.selectors, 50).map((x) => ({ ...x, patientName: x.patientName.trim(), doctorName: x.doctorName.trim() }));
+  const off = planAppointments(v2, DEMO_PROVIDERS, DEMO_MAIN_DOCTORS, [])[0];
+  const on = planAppointments(v2, DEMO_PROVIDERS, DEMO_MAIN_DOCTORS, ['Shelby Morton'])[0];
+  check('insurance-type client is NOT self-pay without the override', off.selfPay === false && off.services.length > 0);
+  check('override list forces self-pay + drops CPT even on an insurance type', on.selfPay === true && on.services.length === 0);
 })();
 
 (function testDisciplinePick() {

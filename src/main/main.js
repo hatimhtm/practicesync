@@ -163,7 +163,7 @@ async function performWindowSync(trigger = 'manual') {
     const onStep = (text) => sendToRenderer('live-step', { text, at: nowISO() });
     const providers = (s.providers && s.providers.length) ? s.providers : DEMO_PROVIDERS;
     const mainDoctors = (s.mainDoctors && s.mainDoctors.length) ? s.mainDoctors : DEMO_MAIN_DOCTORS;
-    const res = await runFullSync({ secrets: creds, dates, providers, mainDoctors, save: true, overrides: s.spFieldOverrides, onStep, onMissingPatient: notifyMissingPatient });
+    const res = await runFullSync({ secrets: creds, dates, providers, mainDoctors, selfPayClients: s.selfPayClients || [], save: true, overrides: s.spFieldOverrides, onStep, onMissingPatient: notifyMissingPatient });
     res.at = nowISO();
     store.save({ lastRun: res.at, lastResult: { ok: res.ok, at: res.at, mode: 'live', trigger, created: res.booked || 0, skipped: res.skipped || 0, failed: res.failed || 0, unmatched: res.unmatched || 0, error: res.error } });
     refreshTray();
@@ -421,7 +421,7 @@ function registerIpc() {
     const mainDoctors = (s.mainDoctors && s.mainDoctors.length) ? s.mainDoctors : DEMO_MAIN_DOCTORS;
     sendToRenderer('live-step', { text: `Starting sync for ${dates.join(', ')}…`, at: nowISO(), reset: true });
     const onStep = (text) => sendToRenderer('live-step', { text, at: nowISO() });
-    const res = await runFullSync({ secrets: creds, dates, providers, mainDoctors, save: !!opts.save, overrides: s.spFieldOverrides, onStep, onMissingPatient: notifyMissingPatient });
+    const res = await runFullSync({ secrets: creds, dates, providers, mainDoctors, selfPayClients: s.selfPayClients || [], save: !!opts.save, overrides: s.spFieldOverrides, onStep, onMissingPatient: notifyMissingPatient });
     res.at = nowISO();
     sendToRenderer('run-finished', res);
     if (res.ok) notify(opts.save ? `Booked ${res.booked} · skipped ${res.skipped}${res.failed ? ' · ' + res.failed + ' failed' : ''}` : `Dry run: ${res.planned.length} would book`);
