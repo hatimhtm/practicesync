@@ -89,6 +89,12 @@ const SP_HTML = `<!doctype html><html><body>
     ['Heather', null, null], // bare first name, no surname info at all — must refuse, not guess
     ['Nicole L', 'Nicole Lee-Williams', 'Heather Vines-Dubose'],
     ['Samantha S', 'Samantha Impellizeri (Scavo)', 'Heather Vines-Dubose'],
+    // Reported live (Aug 10): both were mis-booked under Caryn on an old version.
+    // Dani = Danielle (COTA → Heather); Paul Bertuglia (SLPA → Karine).
+    ['Dani Reichert', 'Danielle Reichert', 'Heather Vines-Dubose'],
+    ['Dani R', 'Danielle Reichert', 'Heather Vines-Dubose'],
+    ['Paul Bertuglia', 'Paul Bertuglia', 'Karine Rocha de Benedicto'],
+    ['Paul B', 'Paul Bertuglia', 'Karine Rocha de Benedicto'],
   ]) {
     const r = matchProvider(pf, DEMO_PROVIDERS);
     if (want === null) check(`"${pf}" → refused (ambiguous), never guessed`, r.provider === null);
