@@ -305,6 +305,31 @@
           </div>
           <div id="alertsList" style="margin-top:10px"></div>
         </div>
+
+        <div class="card">
+          <div class="card-k">Email a copy of every alert</div>
+          <p class="muted" style="font-size:13px;margin:2px 0 12px">Same approach as Hope Reminder: sends through <strong>your own mailbox</strong> (Gmail, iCloud, any SMTP) — no third-party service ever holds patient names. The app password is stored <strong>encrypted in this Mac's Keychain</strong>, same as your Practice Fusion/SimplePractice logins.</p>
+          <div class="seg" id="emailAlertsSeg" style="margin-bottom:12px">
+            <button data-val="on">On</button>
+            <button data-val="off">Off</button>
+          </div>
+          <label class="field"><span>Recipient email(s)</span><textarea id="emailRecipients" rows="2" placeholder="office@example.com, manager@example.com"></textarea></label>
+          <div class="row" style="gap:10px;margin-top:10px">
+            <label class="field" style="flex:1"><span>Sending email (your Gmail/iCloud/SMTP account)</span><input type="text" id="smtpUser" placeholder="you@gmail.com" /></label>
+            <label class="field" style="flex:1"><span>App password</span><input type="password" id="smtpPass" placeholder="••••••••" /></label>
+          </div>
+          <div class="row" style="gap:10px;margin-top:10px">
+            <label class="field" style="flex:1"><span>SMTP server</span><input type="text" id="smtpHost" placeholder="smtp.gmail.com" /></label>
+            <label class="field" style="width:120px;flex:none"><span>Port</span><input type="number" id="smtpPort" placeholder="465" /></label>
+          </div>
+          <p class="muted" style="font-size:12px;margin:8px 0 0">For Gmail: turn on 2-Step Verification, then generate an app password at <strong>myaccount.google.com/apppasswords</strong> — use that here, not your regular password.</p>
+          <div class="row" style="margin-top:12px">
+            <button class="btn btn-primary" id="saveEmailBtn">Save email settings</button>
+            <button class="btn" id="testEmailBtn">Send test email</button>
+            <span class="pill pill-todo" id="emailStatusPill">Not set up</span>
+          </div>
+          <p class="muted" id="emailStatusSub" style="font-size:12px;margin:8px 0 0"></p>
+        </div>
       </section>
 
       <!-- TEST DRIVE -->

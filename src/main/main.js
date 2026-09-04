@@ -15,6 +15,7 @@ const { startSheetServer } = require('./demoSheet');
 const recorder = require('./recorder');
 const { Scheduler } = require('./scheduler');
 const updater = require('./updater');
+const mailer = require('./mailer');
 
 let mainWindow = null;
 let tray = null;
@@ -45,6 +46,23 @@ function notifyMissingPatient(name, date) {
   store.save({ alerts });
   sendToRenderer('alert-added', entry);
   notify(`Patient not found in SimplePractice: "${name}" — sync skipped booking them.`);
+  if (settings.emailAlertsEnabled) emailMissingPatient(name, date);
+}
+
+/** Mirrors the desktop alert into an email, through the agency's own mailbox
+ *  (see mailer.js) — best-effort: a failed/unconfigured send never breaks the
+ *  sync, it just records the error for the Alerts screen to show. */
+async function emailMissingPatient(name, date) {
+  try {
+    const settings = store.load();
+    const config = mailer.configFrom(settings, store.getCreds().smtp);
+    const subject = `Hope Assistant: patient not found — ${name}`;
+    const body = `Hope Assistant could not find "${name}" in SimplePractice while booking${date ? ` (appointment date ${date})` : ''}.\n\nNothing was booked for them — check the name in SimplePractice, or add/correct it, then re-run the sync.`;
+    await mailer.send({ subject, body, config });
+    store.save({ emailLastSentAt: nowISO(), emailLastError: null, emailLastErrorAt: null });
+  } catch (e) {
+    store.save({ emailLastError: (e && e.message) || String(e), emailLastErrorAt: nowISO() });
+  }
 }
 
 /** Safely send to the renderer (no-op if the window is gone/destroyed). */
@@ -360,6 +378,26 @@ function registerIpc() {
   // Alerts screen: patients the SimplePractice search couldn't find while booking.
   ipcMain.handle('alerts:list', () => store.load().alerts || []);
   ipcMain.handle('alerts:clear', () => { store.save({ alerts: [] }); return []; });
+
+  // Email alerts (same mailbox-of-your-own approach as Hope Reminder). The
+  // Test button proves the setup works before the real thing depends on it.
+  ipcMain.handle('email:test', async () => {
+    try {
+      const settings = store.load();
+      const config = mailer.configFrom(settings, store.getCreds().smtp);
+      await mailer.send({
+        subject: 'Hope Assistant: test email',
+        body: 'This is a test message — email alerts are working.\n\nYou will get an email like this whenever a sync can\'t find a patient in SimplePractice.',
+        config,
+      });
+      store.save({ emailLastSentAt: nowISO(), emailLastError: null, emailLastErrorAt: null });
+      return { ok: true };
+    } catch (e) {
+      const error = (e && e.message) || String(e);
+      store.save({ emailLastError: error, emailLastErrorAt: nowISO() });
+      return { ok: false, error };
+    }
+  });
 
   ipcMain.handle('run:sync', async (_e, opts) => performSync('manual', opts || {}));
   ipcMain.handle('run:now', async () => scheduler.runNow('manual'));

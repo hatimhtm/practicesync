@@ -39,6 +39,17 @@ const DEFAULTS = {
   setupComplete: false,
   alertOnMissingPatient: true, // desktop notification when a patient can't be found in SimplePractice (agency/org rows never trigger this)
   alerts: [],               // persisted log of missing-patient alerts: [{ id, patientName, date, at }], newest first
+  // Email alerts — same approach as the practice's Hope Reminder app: sends
+  // through the agency's OWN mailbox (no third-party email service). The SMTP
+  // username + app password live only in creds.bin (see setCreds); everything
+  // here is non-secret.
+  emailAlertsEnabled: false,
+  alertEmailRecipients: '', // free-typed: comma/semicolon/space/newline separated
+  smtpHost: 'smtp.gmail.com',
+  smtpPort: 465,
+  emailLastSentAt: null,
+  emailLastError: null,
+  emailLastErrorAt: null,
 };
 
 function settingsPath() {
@@ -87,7 +98,11 @@ function hasAIKey() {
 
 /**
  * Site logins, encrypted at rest via the macOS Keychain (safeStorage). Stored as
- * one JSON blob: { practiceFusion:{username,password}, simplePractice:{email,password} }.
+ * one JSON blob: { practiceFusion:{username,password}, simplePractice:{email,password},
+ * smtp:{username,password} }. `smtp` is the sending mailbox for missing-patient
+ * email alerts (same approach as the practice's Hope Reminder app: the agency's
+ * own Gmail/iCloud/SMTP mailbox, app password only ever kept here — never in
+ * settings.json, never sent anywhere but that one SMTP server).
  * Only the engine ever reads the plaintext; the UI only learns whether each is set.
  */
 function setCreds(obj) {
@@ -95,6 +110,7 @@ function setCreds(obj) {
   const next = {
     practiceFusion: { ...cur.practiceFusion, ...(obj.practiceFusion || {}) },
     simplePractice: { ...cur.simplePractice, ...(obj.simplePractice || {}) },
+    smtp: { ...cur.smtp, ...(obj.smtp || {}) },
   };
   if (!safeStorage.isEncryptionAvailable()) throw new Error('Secure storage unavailable.');
   fs.writeFileSync(credsPath(), safeStorage.encryptString(JSON.stringify(next)), { mode: 0o600 });
@@ -104,8 +120,8 @@ function getCreds() {
   try {
     const buf = fs.readFileSync(credsPath());
     const obj = JSON.parse(safeStorage.isEncryptionAvailable() ? safeStorage.decryptString(buf) : '{}');
-    return { practiceFusion: obj.practiceFusion || {}, simplePractice: obj.simplePractice || {} };
-  } catch { return { practiceFusion: {}, simplePractice: {} }; }
+    return { practiceFusion: obj.practiceFusion || {}, simplePractice: obj.simplePractice || {}, smtp: obj.smtp || {} };
+  } catch { return { practiceFusion: {}, simplePractice: {}, smtp: {} }; }
 }
 /** What the UI is allowed to know: which logins are filled (never the secrets). */
 function credsStatus() {
@@ -115,6 +131,8 @@ function credsStatus() {
     sp: !!(c.simplePractice.email && c.simplePractice.password),
     pfUsername: c.practiceFusion.username || '',
     spEmail: c.simplePractice.email || '',
+    smtp: !!(c.smtp.username && c.smtp.password),
+    smtpUsername: c.smtp.username || '',
   };
 }
 

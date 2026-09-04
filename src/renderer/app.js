@@ -105,6 +105,18 @@ async function refresh() {
   const alertMissing = settings.alertOnMissingPatient !== false ? 'on' : 'off';
   $$('#alertMissingSeg button').forEach((b) => b.classList.toggle('active', b.dataset.val === alertMissing));
   renderSchedule(sched, r);
+
+  // Email alerts
+  const emailOn = settings.emailAlertsEnabled ? 'on' : 'off';
+  $$('#emailAlertsSeg button').forEach((b) => b.classList.toggle('active', b.dataset.val === emailOn));
+  if ($('#emailRecipients') && document.activeElement !== $('#emailRecipients')) $('#emailRecipients').value = settings.alertEmailRecipients || '';
+  if ($('#smtpHost') && document.activeElement !== $('#smtpHost')) $('#smtpHost').value = settings.smtpHost || 'smtp.gmail.com';
+  if ($('#smtpPort') && document.activeElement !== $('#smtpPort')) $('#smtpPort').value = settings.smtpPort || 465;
+  if ($('#emailStatusSub')) {
+    $('#emailStatusSub').textContent = settings.emailLastError
+      ? `Last error (${fmtTime(settings.emailLastErrorAt)}): ${settings.emailLastError}`
+      : (settings.emailLastSentAt ? `Last sent ${fmtTime(settings.emailLastSentAt)} ✓` : 'No email sent yet.');
+  }
 }
 
 /* schedule status cards */
@@ -347,6 +359,8 @@ async function refreshCreds() {
     if ($('#spUser') && !$('#spUser').value) $('#spUser').value = st.spEmail || '';
     setCredPill($('#credsPf'), st.pf, 'PF login saved', 'PF needs login');
     setCredPill($('#credsSp'), st.sp, 'SP login saved', 'SP needs login');
+    if ($('#smtpUser') && !$('#smtpUser').value) $('#smtpUser').value = st.smtpUsername || '';
+    setCredPill($('#emailStatusPill'), st.smtp, 'Email set up', 'Not set up');
   } catch {}
 }
 function setCredPill(el, ok, goodText, todoText) {
@@ -362,6 +376,38 @@ if ($('#saveCredsBtn')) $('#saveCredsBtn').addEventListener('click', async () =>
   const r = await window.api.saveCreds(creds);
   if (r && r.ok) { $('#pfPass').value = ''; $('#spPass').value = ''; toast('Logins saved (encrypted) ✓'); refreshCreds(); }
   else toast(r && r.error ? r.error : 'Could not save logins.');
+});
+
+/* ----------------------------- email alerts ------------------------------ */
+$$('#emailAlertsSeg button').forEach((b) => b.addEventListener('click', async () => {
+  await window.api.saveSettings({ emailAlertsEnabled: b.dataset.val === 'on' });
+  await refresh();
+  toast(b.dataset.val === 'on' ? 'Email alerts enabled.' : 'Email alerts disabled.');
+}));
+if ($('#saveEmailBtn')) $('#saveEmailBtn').addEventListener('click', async () => {
+  await window.api.saveSettings({
+    alertEmailRecipients: $('#emailRecipients').value,
+    smtpHost: $('#smtpHost').value.trim() || 'smtp.gmail.com',
+    smtpPort: parseInt($('#smtpPort').value, 10) || 465,
+  });
+  const smtpUser = $('#smtpUser').value.trim();
+  const smtpPass = $('#smtpPass').value;
+  if (smtpUser || smtpPass) {
+    const r = await window.api.saveCreds({ smtp: { username: smtpUser, password: smtpPass } });
+    if (!(r && r.ok)) { toast(r && r.error ? r.error : 'Could not save the email account.'); return; }
+    $('#smtpPass').value = '';
+  }
+  toast('Email settings saved ✓');
+  refreshCreds();
+  await refresh();
+});
+if ($('#testEmailBtn')) $('#testEmailBtn').addEventListener('click', async () => {
+  const btn = $('#testEmailBtn');
+  btn.disabled = true; btn.textContent = 'Sending…';
+  const r = await window.api.emailTest();
+  btn.disabled = false; btn.textContent = 'Send test email';
+  toast(r && r.ok ? 'Test email sent ✓ check your inbox.' : (r && r.error ? r.error : 'Could not send the test email.'));
+  await refresh();
 });
 
 function appendSyncLog(text) {

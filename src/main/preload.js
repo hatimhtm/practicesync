@@ -35,4 +35,5 @@ contextBridge.exposeInMainWorld('api', {
   alertsList: () => ipcRenderer.invoke('alerts:list'),
   alertsClear: () => ipcRenderer.invoke('alerts:clear'),
   onAlertAdded: (cb) => ipcRenderer.on('alert-added', (_e, a) => cb(a)),
+  emailTest: () => ipcRenderer.invoke('email:test'),
 });
