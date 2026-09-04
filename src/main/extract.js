@@ -127,11 +127,14 @@ function extractVisits(doc, sel, limit = 10) {
     const rowDate = text(sel.dateSelector ? row.querySelector(sel.dateSelector) : null);
     const doctorName = text(sel.doctorSelector ? row.querySelector(sel.doctorSelector) : null);
     const time = text(sel.timeSelector ? row.querySelector(sel.timeSelector) : null);
+    // Appointment TYPE (e.g. "Physical Therapy", "Follow-Up Visit") — decides
+    // self-pay vs insurance billing.
+    const type = text(sel.typeSelector ? row.querySelector(sel.typeSelector) : null);
     const patientName = rowPatient || headerName;
     const date = rowDate || headerDate;
     // Push a row when it carries its OWN patient (day schedule) or its own
     // doctor/date (patient chart) — never an empty inherited-only row.
-    if (rowPatient || doctorName || rowDate) out.push({ patientName, date, doctorName, time });
+    if (rowPatient || doctorName || rowDate) out.push({ patientName, date, doctorName, time, type });
   }
   return out;
 }

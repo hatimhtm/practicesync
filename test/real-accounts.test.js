@@ -20,7 +20,7 @@ let pass = 0; const fails = [];
 const check = (n, ok) => { console.log(`${ok ? '  ok  ' : '  FAIL'}  ${n}`); ok ? pass++ : fails.push(n); };
 
 /* A trimmed Practice Fusion Schedule → Appointments table (real attributes). */
-const PF_ROW = (i, patient, provider) => `
+const PF_ROW = (i, patient, provider, type = 'Follow-Up Visit') => `
   <tr aria-rowindex="${i + 1}" data-element="data-table-row-${i}" class="data-table__row ember-view">
     <td data-element="cell-patient-${i}" class="data-table__cell appointments-table__col--lg">
       <a data-element="cell-name" href="#/PF/charts/patients/x/summary">${patient}</a>
@@ -28,7 +28,7 @@ const PF_ROW = (i, patient, provider) => `
     </td>
     <td data-element="cell-time-${i}" class="appointments-table__col--sm"><p data-element="start-time">${9 + i}:00 AM</p></td>
     <td data-element="cell-provider-name-${i}" class="appointments-table__col--sm">${provider}</td>
-    <td data-element="cell-appointment-type-${i}"><p title="Follow-Up Visit">Follow-Up Visit</p></td>
+    <td data-element="cell-appointment-type-${i}"><p title="${type}">${type}</p></td>
   </tr>`;
 const PF_HTML = `<!doctype html><html><body>
   <div class="item--TBn" data-element="scheduler-selected-date">Mon, Jun 29, 2026</div>
@@ -89,6 +89,12 @@ const SP_HTML = `<!doctype html><html><body>
     ['Heather', null, null], // bare first name, no surname info at all — must refuse, not guess
     ['Nicole L', 'Nicole Lee-Williams', 'Heather Vines-Dubose'],
     ['Samantha S', 'Samantha Impellizeri (Scavo)', 'Heather Vines-Dubose'],
+    // Reported live (Aug 10): both were mis-booked under Caryn on an old version.
+    // Dani = Danielle (COTA → Heather); Paul Bertuglia (SLPA → Karine).
+    ['Dani Reichert', 'Danielle Reichert', 'Heather Vines-Dubose'],
+    ['Dani R', 'Danielle Reichert', 'Heather Vines-Dubose'],
+    ['Paul Bertuglia', 'Paul Bertuglia', 'Karine Rocha de Benedicto'],
+    ['Paul B', 'Paul Bertuglia', 'Karine Rocha de Benedicto'],
   ]) {
     const r = matchProvider(pf, DEMO_PROVIDERS);
     if (want === null) check(`"${pf}" → refused (ambiguous), never guessed`, r.provider === null);
@@ -152,6 +158,44 @@ const SP_HTML = `<!doctype html><html><body>
   check('discipline tag "SLP" is ignored', sameName('Nicolas SLP Bousseau', 'Nicolas Bousseau'));
   check('discipline tag "PT/OT" ignored, reversed order', sameName('Jennifer OT Burgand', 'Burgand, Jennifer'));
   check('a real "PT"/"OT" as an actual surname would still be stripped (accepted risk — same convention as book.js)', sameName('Sam OT', 'Sam'));
+})();
+
+(function testSelfPay() {
+  console.log('# Self-pay: type detection, reading the type, plan skips CPT, picks the Self Pay record');
+  const { isSelfPay } = require(path.join(__dirname, '..', 'src', 'main', 'model'));
+  const { chooseOptionIndex } = require(path.join(__dirname, '..', 'src', 'main', 'book'));
+  // the practice's rule
+  ['Physical Therapy', 'Occupational Therapy', 'Speech Therapy', 'Home Visit', 'Office Visit'].forEach((t) =>
+    check(`"${t}" is self-pay`, isSelfPay(t)));
+  ['Follow-Up Visit', 'New Patient Visit', 'Re-evaluation', ''].forEach((t) =>
+    check(`"${t || '(blank)'}" is NOT self-pay`, !isSelfPay(t)));
+  // the appointment type is read off the row, and planning flags self-pay + drops CPT
+  const doc = new JSDOM(`<!doctype html><html><body><table class="data-table"><tbody>
+    ${PF_ROW(0, 'Shelby Morton', 'Gianna G', 'Physical Therapy')}
+    ${PF_ROW(1, 'James Carter', 'Gianna G', 'Follow-Up Visit')}
+  </tbody></table><div data-element="scheduler-selected-date">Mon, Jun 29, 2026</div></body></html>`).window.document;
+  const visits = extractVisits(doc, presets.PF.selectors, 50).map((x) => ({ ...x, patientName: x.patientName.trim(), doctorName: x.doctorName.trim() }));
+  check('appointment type is read from the row', visits[0].type === 'Physical Therapy');
+  const planned = planAppointments(visits, DEMO_PROVIDERS, DEMO_MAIN_DOCTORS);
+  const sp = planned.find((p) => p.patientName === 'Shelby Morton');
+  const ins = planned.find((p) => p.patientName === 'James Carter');
+  check('self-pay appointment flagged + no CPT services', sp.selfPay === true && sp.services.length === 0);
+  check('insurance appointment keeps its CPT services', ins.selfPay === false && ins.services.length > 0);
+  // client picker chooses the "Self Pay" record, not the OT/PT/SLP insurance ones
+  const recs = ['Shelby PT Morton', 'Shelby OT Morton', 'Shelby Self Pay Morton'];
+  check('self-pay → picks the Self Pay record', chooseOptionIndex(recs, 'Shelby Morton', { selfPay: true }) === 2);
+  check('self-pay waits if only insurance records loaded', chooseOptionIndex(['Shelby PT Morton'], 'Shelby Morton', { selfPay: true }) === -2);
+  check('self-pay picks a plain record when there is no tagged variant', chooseOptionIndex(['Celia Solorvano'], 'Celia Solorvano', { selfPay: true }) === 0);
+  // Override list: a client marked "always self-pay" wins even when the appointment
+  // type looks like insurance (Follow-Up Visit).
+  const doc2 = new JSDOM(`<!doctype html><html><body><table class="data-table"><tbody>
+    ${PF_ROW(0, 'Shelby Morton', 'Gianna G', 'Follow-Up Visit')}
+  </tbody></table><div data-element="scheduler-selected-date">Mon, Jun 29, 2026</div></body></html>`).window.document;
+  const v2 = extractVisits(doc2, presets.PF.selectors, 50).map((x) => ({ ...x, patientName: x.patientName.trim(), doctorName: x.doctorName.trim() }));
+  const off = planAppointments(v2, DEMO_PROVIDERS, DEMO_MAIN_DOCTORS, [])[0];
+  const on = planAppointments(v2, DEMO_PROVIDERS, DEMO_MAIN_DOCTORS, ['Shelby Morton'])[0];
+  check('insurance-type client is NOT self-pay without the override', off.selfPay === false && off.services.length > 0);
+  check('override list forces self-pay + drops CPT even on an insurance type', on.selfPay === true && on.services.length === 0);
 })();
 
 (function testDisciplinePick() {

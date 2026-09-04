@@ -1,6 +1,6 @@
 'use strict';
 
-const { matchProvider, mainCodeFor } = require('./model');
+const { matchProvider, mainCodeFor, isSelfPay, isSelfPayClient } = require('./model');
 const liveEngine = require('./liveEngine');
 
 /** Trim + drop blanks + drop case-insensitive duplicates, keeping first seen. */
@@ -65,7 +65,7 @@ function visitKey(v) {
   return [v.patientName, v.date, v.doctorName].map((s) => String(s || '').trim().toLowerCase()).join('|');
 }
 
-function planAppointments(visits, providers, mainDoctors = []) {
+function planAppointments(visits, providers, mainDoctors = [], selfPayClients = []) {
   return visits.map((v) => {
     // A patient we searched for but couldn't open / had nothing to read — surface
     // it clearly, never guess.
@@ -90,16 +90,24 @@ function planAppointments(visits, providers, mainDoctors = []) {
       // doctor code, is written to ONE box, not several.
       modifiers: dedupeMods([...(mainCode ? [mainCode] : []), ...((c.modifiers) || [])]),
     })) : [];
+    // Self-pay if the appointment TYPE says so, OR the patient is on the practice's
+    // "always self-pay" override list (a client the type wouldn't reveal).
+    const selfPay = isSelfPay(v.type) || isSelfPayClient(v.patientName, selfPayClients);
     return {
       patientName: v.patientName,
       date: v.date,
       time: v.time || '',
       doctorName: v.doctorName,
+      type: v.type || '',
+      // Self-pay (private pay): book the patient's "Self Pay" record with its preset
+      // service + fee — NO CPT codes. Decided by the Practice Fusion appointment type.
+      selfPay,
       matched: Boolean(provider),
       mainDoctor: provider ? provider.mainDoctor : null,
       mainCode,
       codes: provider ? provider.codes : [],
-      services,
+      // Self-pay lines are preset in SimplePractice, so we never impose CPT services.
+      services: selfPay ? [] : services,
       confidence,
       reason: provider ? undefined : (reason || 'not recognized'),
       key: visitKey(v),
