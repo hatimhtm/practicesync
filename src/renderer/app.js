@@ -6,6 +6,7 @@ const $$ = (sel, root = document) => [...root.querySelectorAll(sel)];
 let settings = {};
 let draftProviders = []; // providers parsed/edited but not yet saved (codes held as text)
 let draftMains = [];     // main doctors [{name, code}]
+let clients = [];        // client payer list [{name, status}] (Clients screen)
 
 // Local mirror of model.formatCodes (renderer can't require main-process modules).
 function formatCodes(codes) {
@@ -78,12 +79,8 @@ async function refresh() {
 
   // Doctors & Codes
   $('#rosterText').value = settings.rosterText || '';
-  if ($('#selfPayList')) $('#selfPayList').value = (settings.selfPayClients || []).join('\n');
-  if ($('#payerList')) {
-    const payers = settings.clientPayers || [];
-    $('#payerList').value = formatPayers(payers);
-    $('#payerCount').textContent = payers.length ? payerSummary(payers) : '';
-  }
+  clients = (settings.clientPayers || []).slice();
+  renderClients();
   if (!draftMains.length) draftMains = (settings.mainDoctors || []).map(normMain);
   if (!draftProviders.length && providers.length) {
     draftProviders = providers.map((p) => ({ name: p.name, discipline: p.discipline || '', mainDoctor: p.mainDoctor, codes: formatCodes(p.codes) }));
@@ -237,11 +234,21 @@ async function loadFullRoster() {
 $('#loadDemoBtn').addEventListener('click', loadFullRoster);
 $('#loadRosterBtn').addEventListener('click', loadFullRoster);
 
-// Client payer list: "Name, Private|Insurance|Contracted" per line (mirrors model.parsePayerList).
-const PAYER_LABEL = { private: 'Private', insurance: 'Insurance', contracted: 'Contracted' };
+/* -------------------------------- clients ------------------------------- */
+// Each client's payer type decides booking: insurance → codes, private → Self Pay
+// record (just save), contracted → never added to SimplePractice. Saved straight to
+// this Mac's settings on every change.
+const PAYER_LABEL = { insurance: 'Insurance', private: 'Private', contracted: 'Contracted' };
+let clientFilter = 'all';
+let clientEditIdx = -1; // -1 = adding a new client
+
 function normPayer(t) {
   t = String(t || '').trim().toLowerCase();
   return /^contract/.test(t) ? 'contracted' : /^insur/.test(t) ? 'insurance' : /^(private|self)/.test(t) ? 'private' : '';
+}
+// Format-independent name key (mirrors model.sameName): "Doe, Jane" = "jane doe".
+function clientKey(n) {
+  return String(n || '').toLowerCase().replace(/[^a-z0-9\s]/g, ' ').split(/\s+/).filter(Boolean).sort().join(' ');
 }
 function parsePayers(text) {
   const ok = [], bad = [];
@@ -252,26 +259,122 @@ function parsePayers(text) {
   }
   return { ok, bad };
 }
-function formatPayers(list) { return (list || []).map((c) => `${c.name}, ${PAYER_LABEL[c.status] || c.status}`).join('\n'); }
-function payerSummary(list) {
-  const n = { private: 0, insurance: 0, contracted: 0 };
-  list.forEach((c) => { if (c.status in n) n[c.status] += 1; });
-  return `${list.length} clients · ${n.insurance} insurance · ${n.private} private · ${n.contracted} contracted`;
+function payerBadge(status) {
+  return `<span class="payer-badge payer-${status}">${PAYER_LABEL[status] || status}</span>`;
 }
-$('#savePayerBtn').addEventListener('click', async () => {
-  const { ok, bad } = parsePayers($('#payerList').value);
-  if (bad.length) { toast(`Can't read ${bad.length} line${bad.length === 1 ? '' : 's'} — each needs ", Private", ", Insurance" or ", Contracted". First: "${bad[0]}"`); return; }
-  await window.api.saveSettings({ clientPayers: ok });
-  await refresh();
-  toast(ok.length ? `Saved payer status for ${ok.length} clients.` : 'Payer list cleared.');
+async function saveClients(msg) {
+  clients.sort((a, b) => a.name.localeCompare(b.name, undefined, { sensitivity: 'base' }));
+  await window.api.saveSettings({ clientPayers: clients });
+  renderClients();
+  if (msg) toast(msg);
+}
+
+function renderClients() {
+  const n = { insurance: 0, private: 0, contracted: 0 };
+  clients.forEach((c) => { if (c.status in n) n[c.status] += 1; });
+  $('#statInsurance').textContent = n.insurance;
+  $('#statPrivate').textContent = n.private;
+  $('#statContracted').textContent = n.contracted;
+  $('#clientsCount').textContent = clients.length || '';
+  $$('#clientFilter button').forEach((b) => b.classList.toggle('active', b.dataset.filter === clientFilter));
+  $$('.payer-stat').forEach((b) => b.classList.toggle('active', b.dataset.filter === clientFilter));
+
+  const q = clientKey($('#clientSearch').value);
+  const rows = clients
+    .map((c, i) => ({ c, i }))
+    .filter(({ c }) => (clientFilter === 'all' || c.status === clientFilter)
+      && (!q || q.split(' ').every((t) => clientKey(c.name).includes(t))));
+  $('#clientRows').innerHTML = rows.map(({ c, i }) => `
+    <tr data-i="${i}">
+      <td class="client-name">${escapeHtml(c.name)}</td>
+      <td>${payerBadge(c.status)}</td>
+      <td class="client-row-actions">
+        <button class="btn btn-sm client-edit" data-i="${i}">Edit</button>
+        <button class="btn btn-sm client-del" data-i="${i}" title="Remove client">Remove</button>
+      </td>
+    </tr>`).join('');
+  const empty = $('#clientEmpty');
+  empty.classList.toggle('hidden', rows.length > 0);
+  empty.innerHTML = !clients.length
+    ? '<strong>No clients yet</strong><span>Add clients one at a time, or import your whole list at once.</span>'
+    : '<strong>No matching clients</strong><span>Try a different name or filter.</span>';
+  $('.client-table').classList.toggle('hidden', rows.length === 0);
+
+  $$('.client-edit').forEach((b) => b.addEventListener('click', (e) => { e.stopPropagation(); openClientModal(+b.dataset.i); }));
+  $$('#clientRows tr').forEach((r) => r.addEventListener('dblclick', () => openClientModal(+r.dataset.i)));
+  $$('.client-del').forEach((b) => b.addEventListener('click', async (e) => {
+    e.stopPropagation();
+    const c = clients[+b.dataset.i];
+    if (!confirm(`Remove ${c.name} from the client list?\n\nTheir visits will then be booked by appointment type.`)) return;
+    clients.splice(+b.dataset.i, 1);
+    await saveClients(`Removed ${c.name}.`);
+  }));
+}
+
+function setClientFilter(f) { clientFilter = (clientFilter === f && f !== 'all') ? 'all' : f; renderClients(); }
+$$('#clientFilter button').forEach((b) => b.addEventListener('click', () => setClientFilter(b.dataset.filter)));
+$$('.payer-stat').forEach((b) => b.addEventListener('click', () => setClientFilter(b.dataset.filter)));
+$('#clientSearch').addEventListener('input', renderClients);
+
+function openModal(id) { $(id).classList.remove('hidden'); }
+function closeModal(id) { $(id).classList.add('hidden'); }
+function modalError(id, msg) { const e = $(id); e.textContent = msg || ''; e.classList.toggle('hidden', !msg); }
+
+function openClientModal(i = -1) {
+  clientEditIdx = i;
+  const c = i >= 0 ? clients[i] : { name: '', status: '' };
+  $('#clientModalTitle').textContent = i >= 0 ? 'Edit Client' : 'Add Client';
+  $('#clientSave').textContent = i >= 0 ? 'Save Changes' : 'Add Client';
+  $('#clientName').value = c.name;
+  $$('input[name="clientPayer"]').forEach((r) => { r.checked = r.value === c.status; });
+  modalError('#clientErr', '');
+  openModal('#clientModal');
+  setTimeout(() => $('#clientName').focus(), 30);
+}
+$('#addClientBtn').addEventListener('click', () => openClientModal(-1));
+$('#clientCancel').addEventListener('click', () => closeModal('#clientModal'));
+$('#clientSave').addEventListener('click', async () => {
+  const name = $('#clientName').value.trim().replace(/\s+/g, ' ');
+  const picked = $$('input[name="clientPayer"]').find((r) => r.checked);
+  if (!name) return modalError('#clientErr', 'Enter the client\'s full name.');
+  if (!picked) return modalError('#clientErr', 'Choose a payer type.');
+  const dup = clients.findIndex((c, j) => j !== clientEditIdx && clientKey(c.name) === clientKey(name));
+  if (dup >= 0) return modalError('#clientErr', `${clients[dup].name} is already on the list. Edit that entry instead.`);
+  const entry = { name, status: picked.value };
+  if (clientEditIdx >= 0) clients[clientEditIdx] = entry; else clients.push(entry);
+  closeModal('#clientModal');
+  await saveClients(clientEditIdx >= 0 ? `Saved ${name}.` : `Added ${name} as ${PAYER_LABEL[entry.status]}.`);
 });
 
-$('#saveSelfPayBtn').addEventListener('click', async () => {
-  const names = $('#selfPayList').value.split('\n').map((s) => s.trim()).filter(Boolean);
-  await window.api.saveSettings({ selfPayClients: names });
-  await refresh();
-  toast(names.length ? `Saved ${names.length} always-self-pay client${names.length === 1 ? '' : 's'}.` : 'Self-pay list cleared.');
+$('#importClientsBtn').addEventListener('click', () => {
+  $('#importText').value = '';
+  modalError('#importErr', '');
+  openModal('#importModal');
+  setTimeout(() => $('#importText').focus(), 30);
 });
+$('#importCancel').addEventListener('click', () => closeModal('#importModal'));
+$('#importSave').addEventListener('click', async () => {
+  const { ok, bad } = parsePayers($('#importText').value);
+  if (bad.length) return modalError('#importErr', `${bad.length} line${bad.length === 1 ? '' : 's'} couldn't be read. Each line needs a name followed by Private, Insurance or Contracted. First one: "${bad[0]}"`);
+  if (!ok.length) return modalError('#importErr', 'Paste at least one client.');
+  let added = 0, updated = 0;
+  for (const e of ok) {
+    const j = clients.findIndex((c) => clientKey(c.name) === clientKey(e.name));
+    if (j >= 0) { if (clients[j].status !== e.status) updated += 1; clients[j] = { ...clients[j], status: e.status }; }
+    else { clients.push(e); added += 1; }
+  }
+  closeModal('#importModal');
+  await saveClients(`Imported: ${added} added, ${updated} updated.`);
+});
+
+// Esc closes, Enter submits (not inside the import textarea), click outside closes.
+document.addEventListener('keydown', (e) => {
+  const open = ['#clientModal', '#importModal'].find((id) => !$(id).classList.contains('hidden'));
+  if (!open) return;
+  if (e.key === 'Escape') closeModal(open);
+  else if (e.key === 'Enter' && open === '#clientModal') { e.preventDefault(); $('#clientSave').click(); }
+});
+['#clientModal', '#importModal'].forEach((id) => $(id).addEventListener('mousedown', (e) => { if (e.target === $(id)) closeModal(id); }));
 
 $('#saveRosterBtn').addEventListener('click', async () => {
   const mains = draftMains.filter((m) => m.name.trim());

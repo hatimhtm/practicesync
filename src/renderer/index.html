@@ -29,6 +29,7 @@
       <nav class="nav">
         <button class="nav-item active" data-view="home"><span class="dot"></span> Overview</button>
         <button class="nav-item" data-view="doctors"><span class="dot"></span> Doctors &amp; Codes</button>
+        <button class="nav-item" data-view="clients"><span class="dot"></span> Clients <span class="nav-count" id="clientsCount"></span></button>
         <button class="nav-item" data-view="connect"><span class="dot"></span> Connection</button>
         <button class="nav-item" data-view="ai"><span class="dot"></span> AI Engine</button>
         <button class="nav-item" data-view="schedule"><span class="dot"></span> Schedule</button>
@@ -133,25 +134,6 @@
           <p class="muted" style="font-size:12px;margin:8px 0 0"><strong>Load full roster</strong> fills the grid with every therapist under Caryn, Heather and Karine, ready for you to review and Save. <strong>+ Add a doctor</strong> adds a blank row — enter the name and pick their main doctor.</p>
         </div>
 
-        <div class="card">
-          <div class="card-k">Client payer status</div>
-          <p class="muted" style="font-size:13px;margin:2px 0 12px">One client per line: <strong>Name, Private</strong> / <strong>Insurance</strong> / <strong>Contracted</strong>, with the name as it appears in Practice Fusion. <strong>Contracted</strong> — not added to SimplePractice. <strong>Insurance</strong> — booked with the doctor's codes. <strong>Private</strong> — Self Pay record, no codes, just saved. Clients not listed here fall back to the appointment type.</p>
-          <textarea id="payerList" rows="8" placeholder="Jane Doe, Insurance&#10;John Smith, Private&#10;Sunrise Hospice, Contracted"></textarea>
-          <div class="row" style="margin-top:10px">
-            <button class="btn btn-primary" id="savePayerBtn">Save payer list</button>
-            <span class="muted" id="payerCount" style="font-size:12px"></span>
-          </div>
-        </div>
-
-        <div class="card">
-          <div class="card-k">Always self-pay clients</div>
-          <p class="muted" style="font-size:13px;margin:2px 0 12px">Private-pay visits are normally detected automatically from the Practice Fusion appointment type — you don't need to list anyone here. Add a client <strong>only</strong> if they should <strong>always</strong> be booked as self-pay, no matter the visit type. One name per line, exactly as it appears in Practice Fusion.</p>
-          <textarea id="selfPayList" rows="4" placeholder="Jane Doe&#10;John Smith"></textarea>
-          <div class="row" style="margin-top:10px">
-            <button class="btn btn-primary" id="saveSelfPayBtn">Save self-pay clients</button>
-          </div>
-        </div>
-
         <details class="advanced">
           <summary>Paste a list instead (the AI fills the grid for you)</summary>
           <div style="margin-top:12px">
@@ -166,6 +148,53 @@
       </section>
 
       <!-- CONNECTION -->
+      <section class="view hidden" data-view="clients">
+        <header class="view-head">
+          <h1>Clients</h1>
+          <p class="muted">Each client's payer type decides how their visits are booked in SimplePractice.</p>
+        </header>
+
+        <div class="payer-stats">
+          <button class="payer-stat" data-filter="insurance">
+            <span class="payer-badge payer-insurance">Insurance</span>
+            <span class="payer-stat-n" id="statInsurance">0</span>
+            <span class="payer-stat-d">Booked with the doctor's codes</span>
+          </button>
+          <button class="payer-stat" data-filter="private">
+            <span class="payer-badge payer-private">Private</span>
+            <span class="payer-stat-n" id="statPrivate">0</span>
+            <span class="payer-stat-d">Self Pay record, saved with no codes</span>
+          </button>
+          <button class="payer-stat" data-filter="contracted">
+            <span class="payer-badge payer-contracted">Contracted</span>
+            <span class="payer-stat-n" id="statContracted">0</span>
+            <span class="payer-stat-d">Not added to SimplePractice</span>
+          </button>
+        </div>
+
+        <div class="card">
+          <div class="client-toolbar">
+            <input type="text" id="clientSearch" placeholder="Search clients" autocomplete="off" />
+            <div class="seg seg-sm" id="clientFilter">
+              <button class="active" data-filter="all">All</button>
+              <button data-filter="insurance">Insurance</button>
+              <button data-filter="private">Private</button>
+              <button data-filter="contracted">Contracted</button>
+            </div>
+            <div class="client-actions">
+              <button class="btn" id="importClientsBtn">Import list…</button>
+              <button class="btn btn-primary" id="addClientBtn">+ Add client</button>
+            </div>
+          </div>
+          <table class="client-table">
+            <thead><tr><th>Client</th><th>Payer type</th><th></th></tr></thead>
+            <tbody id="clientRows"></tbody>
+          </table>
+          <div class="client-empty hidden" id="clientEmpty"></div>
+          <p class="muted client-foot">Clients who aren't listed are booked by their Practice Fusion appointment type, as before.</p>
+        </div>
+      </section>
+
       <section class="view hidden" data-view="connect">
         <header class="view-head">
           <h1>Connection</h1>
@@ -525,6 +554,51 @@
       </div>
     </div>
   </div>
+
+    <!-- Add / edit client -->
+    <div class="modal-backdrop hidden" id="clientModal" role="dialog" aria-modal="true" aria-labelledby="clientModalTitle">
+      <div class="modal">
+        <h2 id="clientModalTitle">Add Client</h2>
+        <p class="muted modal-sub">Payer type decides how this client's visits are booked in SimplePractice.</p>
+        <label class="field">
+          <span>Full name</span>
+          <input type="text" id="clientName" placeholder="As it appears in Practice Fusion" autocomplete="off" />
+        </label>
+        <div class="field">
+          <span>Payer type</span>
+          <div class="payer-choices" role="radiogroup">
+            <label class="payer-choice"><input type="radio" name="clientPayer" value="insurance" />
+              <span class="payer-badge payer-insurance">Insurance</span>
+              <span class="payer-choice-d">Booked with the doctor's billing codes.</span></label>
+            <label class="payer-choice"><input type="radio" name="clientPayer" value="private" />
+              <span class="payer-badge payer-private">Private</span>
+              <span class="payer-choice-d">Booked to the client's Self Pay record and saved, with no codes.</span></label>
+            <label class="payer-choice"><input type="radio" name="clientPayer" value="contracted" />
+              <span class="payer-badge payer-contracted">Contracted</span>
+              <span class="payer-choice-d">Billed through the contract and never added to SimplePractice.</span></label>
+          </div>
+        </div>
+        <p class="modal-err hidden" id="clientErr"></p>
+        <div class="modal-actions">
+          <button class="btn" id="clientCancel">Cancel</button>
+          <button class="btn btn-primary" id="clientSave">Add Client</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Import a client list -->
+    <div class="modal-backdrop hidden" id="importModal" role="dialog" aria-modal="true" aria-labelledby="importModalTitle">
+      <div class="modal">
+        <h2 id="importModalTitle">Import client list</h2>
+        <p class="muted modal-sub">Paste one client per line, followed by their payer type, for example <strong>Jane Doe, Insurance</strong>. Rows copied straight from a spreadsheet work too. Clients already on the list are updated.</p>
+        <textarea id="importText" rows="10" placeholder="Jane Doe, Insurance&#10;John Smith, Private&#10;Sunrise Hospice, Contracted"></textarea>
+        <p class="modal-err hidden" id="importErr"></p>
+        <div class="modal-actions">
+          <button class="btn" id="importCancel">Cancel</button>
+          <button class="btn btn-primary" id="importSave">Import</button>
+        </div>
+      </div>
+    </div>
 
   <div class="toast hidden" id="toast"></div>
   <script src="app.js"></script>
