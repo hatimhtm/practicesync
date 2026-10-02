@@ -1,6 +1,6 @@
 'use strict';
 
-const { matchProvider, mainCodeFor, isSelfPay, isSelfPayClient } = require('./model');
+const { matchProvider, mainCodeFor, isSelfPay, isSelfPayClient, payerStatusFor } = require('./model');
 const liveEngine = require('./liveEngine');
 
 /** Trim + drop blanks + drop case-insensitive duplicates, keeping first seen. */
@@ -65,7 +65,7 @@ function visitKey(v) {
   return [v.patientName, v.date, v.doctorName].map((s) => String(s || '').trim().toLowerCase()).join('|');
 }
 
-function planAppointments(visits, providers, mainDoctors = [], selfPayClients = []) {
+function planAppointments(visits, providers, mainDoctors = [], selfPayClients = [], clientPayers = []) {
   return visits.map((v) => {
     // A patient we searched for but couldn't open / had nothing to read — surface
     // it clearly, never guess.
@@ -90,9 +90,14 @@ function planAppointments(visits, providers, mainDoctors = [], selfPayClients = 
       // doctor code, is written to ONE box, not several.
       modifiers: dedupeMods([...(mainCode ? [mainCode] : []), ...((c.modifiers) || [])]),
     })) : [];
-    // Self-pay if the appointment TYPE says so, OR the patient is on the practice's
-    // "always self-pay" override list (a client the type wouldn't reveal).
-    const selfPay = isSelfPay(v.type) || isSelfPayClient(v.patientName, selfPayClients);
+    // The client payer list decides first: Private → self-pay, Insurance → codes.
+    // Unlisted clients: self-pay if the appointment TYPE says so, OR the patient is
+    // on the "always self-pay" override list. (Contracted clients are dropped
+    // before planning — see sync.js.)
+    const payer = payerStatusFor(v.patientName, clientPayers);
+    const selfPay = payer === 'private' ? true
+      : payer === 'insurance' ? false
+      : (isSelfPay(v.type) || isSelfPayClient(v.patientName, selfPayClients));
     return {
       patientName: v.patientName,
       date: v.date,
@@ -102,6 +107,7 @@ function planAppointments(visits, providers, mainDoctors = [], selfPayClients = 
       // Self-pay (private pay): book the patient's "Self Pay" record with its preset
       // service + fee — NO CPT codes. Decided by the Practice Fusion appointment type.
       selfPay,
+      payer,
       matched: Boolean(provider),
       mainDoctor: provider ? provider.mainDoctor : null,
       mainCode,

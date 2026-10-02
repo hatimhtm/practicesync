@@ -129,7 +129,7 @@ const SP_HTML = `<!doctype html><html><body>
   const gi = planned.find((p) => p.doctorName === 'Gianna G');
   check('Gianna → Caryn (GP)', gi.mainDoctor === 'Caryn McAllister' && gi.services[0].modifiers.includes('GP'));
   const sam = planned.find((p) => p.doctorName === 'Sam Comrie');
-  check('Sam Comrie → Samantha Comrie / Karine (GN), 2 services', sam.mainDoctor === 'Karine Rocha de Benedicto' && sam.services.length === 2 && sam.services.every((s) => s.modifiers.includes('GN')));
+  check('Sam Comrie → Samantha Comrie / Karine (GN), 4 speech services', sam.mainDoctor === 'Karine Rocha de Benedicto' && sam.services.map((s) => s.code + 'x' + s.units).join(',') === '92523x1,92507x1,92626x1,97535x2' && sam.services.every((s) => s.modifiers.includes('GN')));
 })();
 
 (function testNonPatientSkip() {
@@ -196,6 +196,38 @@ const SP_HTML = `<!doctype html><html><body>
   const on = planAppointments(v2, DEMO_PROVIDERS, DEMO_MAIN_DOCTORS, ['Shelby Morton'])[0];
   check('insurance-type client is NOT self-pay without the override', off.selfPay === false && off.services.length > 0);
   check('override list forces self-pay + drops CPT even on an insurance type', on.selfPay === true && on.services.length === 0);
+})();
+
+(function testClientPayerList() {
+  console.log('# Client payer list — Private → just save, Insurance → codes, Contracted → skipped');
+  const m = require(path.join(__dirname, '..', 'src', 'main', 'model'));
+  const L = m.parsePayerList('Jamie Rivera, Private\nPat Okafor, Insurance\ndana whitfield, Insurance\nLakeside Board of Education, Contracted\nAcme Health, Contracted');
+  check('list parsed (5 clients)', L.length === 5);
+  check('Jamie Rivera → private', m.payerStatusFor('Jamie Rivera', L) === 'private');
+  check('Pat Okafor → insurance', m.payerStatusFor('Pat Okafor', L) === 'insurance');
+  check('lower/upper-case names still match (dana whitfield)', m.payerStatusFor('Dana Whitfield', L) === 'insurance');
+  check('Lakeside Board of Education → contracted', m.payerStatusFor('Lakeside Board of Education', L) === 'contracted');
+  check('Acme Health → contracted', m.payerStatusFor('Acme Health', L) === 'contracted');
+  check('unlisted client → no status (falls back to type)', m.payerStatusFor('Morgan Ellis', L) === '');
+  check('parse "Name<TAB>Status" + round-trip', JSON.stringify(m.parsePayerList(m.formatPayerList(m.parsePayerList('Jane Doe\tInsurance\nAcme Hospice Contracted'))))
+    === JSON.stringify([{ name: 'Jane Doe', status: 'insurance' }, { name: 'Acme Hospice', status: 'contracted' }]));
+  const doc = new JSDOM(`<!doctype html><html><body><table class="data-table"><tbody>
+    ${PF_ROW(0, 'Jamie Rivera', 'Gianna G', 'Follow-Up Visit')}
+    ${PF_ROW(1, 'Pat Okafor', 'Gianna G', 'Physical Therapy')}
+  </tbody></table><div data-element="scheduler-selected-date">Mon, Jun 29, 2026</div></body></html>`).window.document;
+  const v = extractVisits(doc, presets.PF.selectors, 50).map((x) => ({ ...x, patientName: x.patientName.trim(), doctorName: x.doctorName.trim() }));
+  const [priv, ins] = planAppointments(v, DEMO_PROVIDERS, DEMO_MAIN_DOCTORS, [], L);
+  check('Private on the list → self-pay, no codes, even on an insurance-looking type', priv.selfPay === true && priv.services.length === 0);
+  check('Insurance on the list → codes, even on a self-pay-looking type', ins.selfPay === false && ins.services.length === 2);
+})();
+
+(function testDisciplineCodes() {
+  console.log('# Discipline codes — Speech / PT / OT');
+  const m = require(path.join(__dirname, '..', 'src', 'main', 'model'));
+  const codesOf = (name) => m.formatCodes(DEMO_PROVIDERS.find((p) => p.name === name).codes);
+  check('Speech (SLP) → 92523, 92507, 92626, 97535 x2', codesOf('Joan Black') === '92523, 92507, 92626, 97535 x2');
+  check('PT → 97112 x2, 97530 x2', codesOf('Gianna Hernandez') === '97112 x2, 97530 x2 (59)');
+  check('OT → 97112 x2, 97530 x2', codesOf('Amanda Meyer') === '97112 x2, 97530 x2 (59)');
 })();
 
 (function testDisciplinePick() {

@@ -23,7 +23,7 @@ const login = require('./login');
 const book = require('./book');
 const { extractVisits } = require('./extract');
 const { planAppointments } = require('./automation');
-const { isNonPatient, sameName } = require('./model');
+const { isNonPatient, sameName, payerStatusFor } = require('./model');
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const say = (onStep, m) => { try { if (typeof onStep === 'function') onStep(m); } catch {} };
@@ -89,7 +89,7 @@ async function pfNavigateToDate(page, target, onStep) {
  * @param {function} opts.onMissingPatient  called with a patient name the SimplePractice
  *   search couldn't find (never called for agency/org rows — those are dropped earlier)
  */
-async function runFullSync({ secrets, dates, providers, mainDoctors, selfPayClients = [], save = false, onStep, onMissingPatient, overrides = null, context: existing } = {}) {
+async function runFullSync({ secrets, dates, providers, mainDoctors, selfPayClients = [], clientPayers = [], save = false, onStep, onMissingPatient, overrides = null, context: existing } = {}) {
   const result = { ok: true, planned: [], booked: 0, skipped: 0, failed: 0, unmatched: 0, missingPatients: [], dryRun: !save };
   const own = !existing;
   let context = existing;
@@ -121,9 +121,11 @@ async function runFullSync({ secrets, dates, providers, mainDoctors, selfPayClie
       // have no SimplePractice client, so they must never be booked.
       const visits = allRows.filter((v) => {
         if (isNonPatient(v.patientName)) { result.skipped += 1; say(onStep, `Skip ${v.patientName} — not a patient (agency/contract entry)`); return false; }
+        // Contracted clients are billed through their contract — never added to SimplePractice.
+        if (payerStatusFor(v.patientName, clientPayers) === 'contracted') { result.skipped += 1; say(onStep, `Skip ${v.patientName} — contracted (not added to SimplePractice)`); return false; }
         return true;
       });
-      const planned = planAppointments(visits, providers, mainDoctors, selfPayClients);
+      const planned = planAppointments(visits, providers, mainDoctors, selfPayClients, clientPayers);
       const matched = planned.filter((p) => p.matched);
       result.unmatched += planned.length - matched.length;
       matched.forEach((p) => { p.date = date; all.push(p); });

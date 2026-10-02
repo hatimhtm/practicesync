@@ -6,7 +6,7 @@ const { app, BrowserWindow, Tray, Menu, nativeImage, ipcMain, Notification, shel
 const store = require('./store');
 const { runSync } = require('./automation');
 const { parseRoster, appleIntelligenceAvailable, detectEngines, appleHelperPath } = require('./ai');
-const { DEMO_MAIN_DOCTORS, DEMO_PROVIDERS, makeProvider, makeMainDoctor } = require('./model');
+const { DEMO_MAIN_DOCTORS, DEMO_PROVIDERS, UNIT_CODES, OLD_SPEECH_CODES, parseCodes, formatCodes, makeProvider, makeMainDoctor } = require('./model');
 const { teach, runSiteDemo } = require('./liveEngine');
 const { runFullSync, expandDates } = require('./sync');
 const presets = require('./presets');
@@ -181,7 +181,7 @@ async function performWindowSync(trigger = 'manual') {
     const onStep = (text) => sendToRenderer('live-step', { text, at: nowISO() });
     const providers = (s.providers && s.providers.length) ? s.providers : DEMO_PROVIDERS;
     const mainDoctors = (s.mainDoctors && s.mainDoctors.length) ? s.mainDoctors : DEMO_MAIN_DOCTORS;
-    const res = await runFullSync({ secrets: creds, dates, providers, mainDoctors, selfPayClients: s.selfPayClients || [], save: true, overrides: s.spFieldOverrides, onStep, onMissingPatient: notifyMissingPatient });
+    const res = await runFullSync({ secrets: creds, dates, providers, mainDoctors, selfPayClients: s.selfPayClients || [], clientPayers: s.clientPayers || [], save: true, overrides: s.spFieldOverrides, onStep, onMissingPatient: notifyMissingPatient });
     res.at = nowISO();
     store.save({ lastRun: res.at, lastResult: { ok: res.ok, at: res.at, mode: 'live', trigger, created: res.booked || 0, skipped: res.skipped || 0, failed: res.failed || 0, unmatched: res.unmatched || 0, error: res.error } });
     refreshTray();
@@ -459,7 +459,7 @@ function registerIpc() {
     const mainDoctors = (s.mainDoctors && s.mainDoctors.length) ? s.mainDoctors : DEMO_MAIN_DOCTORS;
     sendToRenderer('live-step', { text: `Starting sync for ${dates.join(', ')}…`, at: nowISO(), reset: true });
     const onStep = (text) => sendToRenderer('live-step', { text, at: nowISO() });
-    const res = await runFullSync({ secrets: creds, dates, providers, mainDoctors, selfPayClients: s.selfPayClients || [], save: !!opts.save, overrides: s.spFieldOverrides, onStep, onMissingPatient: notifyMissingPatient });
+    const res = await runFullSync({ secrets: creds, dates, providers, mainDoctors, selfPayClients: s.selfPayClients || [], clientPayers: s.clientPayers || [], save: !!opts.save, overrides: s.spFieldOverrides, onStep, onMissingPatient: notifyMissingPatient });
     res.at = nowISO();
     sendToRenderer('run-finished', res);
     if (res.ok) notify(opts.save ? `Booked ${res.booked} · skipped ${res.skipped}${res.failed ? ' · ' + res.failed + ' failed' : ''}` : `Dry run: ${res.planned.length} would book`);
@@ -580,6 +580,19 @@ app.whenReady().then(() => {
   // never re-added if the user later edits or clears it.
   if (!settings.rosterSeeded && !(settings.providers && settings.providers.length)) {
     try { store.save({ providers: DEMO_PROVIDERS, mainDoctors: DEMO_MAIN_DOCTORS, rosterSeeded: true }); } catch {}
+  }
+  // Oct 2026 billing update (once): move speech doctors still on the old default
+  // codes to the new speech set. Doctors whose codes were customised are left alone.
+  // (The client payer list is entered by the practice — never shipped in the app.)
+  if ((store.load().billingVersion || 0) < 2) {
+    try {
+      const cur = store.load();
+      const oldSpeech = formatCodes(parseCodes(OLD_SPEECH_CODES));
+      const newSpeech = parseCodes(UNIT_CODES['Karine Rocha de Benedicto']);
+      const providers = (cur.providers || []).map((p) =>
+        formatCodes(parseCodes(p.codes)) === oldSpeech ? { ...p, codes: newSpeech } : p);
+      store.save({ providers, billingVersion: 2 });
+    } catch {}
   }
   scheduler.setMode(settings.schedule || 'off');
   applyLoginItem(settings.schedule || 'off');

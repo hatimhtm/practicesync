@@ -31,6 +31,8 @@ const DEFAULTS = {
   syncDaysAhead: 7,         // automatic runs sync a rolling window: today … today+N-1
   spFieldOverrides: null,   // first-run capture: SimplePractice field selectors not present in the demo
   selfPayClients: [],       // patients that are ALWAYS self-pay, regardless of appointment type
+  clientPayers: [],         // [{ name, status: 'private'|'insurance'|'contracted' }] — decides billing per client
+  billingVersion: 0,        // one-time billing migrations applied (2 = Oct 2026 codes + payer list)
   rosterSeeded: false,      // whether the built-in doctor roster was pre-loaded on first run
   bookedKeys: [],           // visit keys already booked, so live runs never double-book
   workflows: [],            // recorded workflows: [{ id, name, steps:[...], createdAt }]

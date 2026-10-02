@@ -79,6 +79,11 @@ async function refresh() {
   // Doctors & Codes
   $('#rosterText').value = settings.rosterText || '';
   if ($('#selfPayList')) $('#selfPayList').value = (settings.selfPayClients || []).join('\n');
+  if ($('#payerList')) {
+    const payers = settings.clientPayers || [];
+    $('#payerList').value = formatPayers(payers);
+    $('#payerCount').textContent = payers.length ? payerSummary(payers) : '';
+  }
   if (!draftMains.length) draftMains = (settings.mainDoctors || []).map(normMain);
   if (!draftProviders.length && providers.length) {
     draftProviders = providers.map((p) => ({ name: p.name, discipline: p.discipline || '', mainDoctor: p.mainDoctor, codes: formatCodes(p.codes) }));
@@ -231,6 +236,35 @@ async function loadFullRoster() {
 }
 $('#loadDemoBtn').addEventListener('click', loadFullRoster);
 $('#loadRosterBtn').addEventListener('click', loadFullRoster);
+
+// Client payer list: "Name, Private|Insurance|Contracted" per line (mirrors model.parsePayerList).
+const PAYER_LABEL = { private: 'Private', insurance: 'Insurance', contracted: 'Contracted' };
+function normPayer(t) {
+  t = String(t || '').trim().toLowerCase();
+  return /^contract/.test(t) ? 'contracted' : /^insur/.test(t) ? 'insurance' : /^(private|self)/.test(t) ? 'private' : '';
+}
+function parsePayers(text) {
+  const ok = [], bad = [];
+  for (const raw of String(text || '').split(/\r?\n/)) {
+    const line = raw.trim(); if (!line) continue;
+    const m = /^(.*?)[\s,;:\t-]+(private|self[\s-]?pay|insurance|contracted?)\s*$/i.exec(line);
+    if (m && m[1].trim()) ok.push({ name: m[1].trim(), status: normPayer(m[2]) }); else bad.push(line);
+  }
+  return { ok, bad };
+}
+function formatPayers(list) { return (list || []).map((c) => `${c.name}, ${PAYER_LABEL[c.status] || c.status}`).join('\n'); }
+function payerSummary(list) {
+  const n = { private: 0, insurance: 0, contracted: 0 };
+  list.forEach((c) => { if (c.status in n) n[c.status] += 1; });
+  return `${list.length} clients · ${n.insurance} insurance · ${n.private} private · ${n.contracted} contracted`;
+}
+$('#savePayerBtn').addEventListener('click', async () => {
+  const { ok, bad } = parsePayers($('#payerList').value);
+  if (bad.length) { toast(`Can't read ${bad.length} line${bad.length === 1 ? '' : 's'} — each needs ", Private", ", Insurance" or ", Contracted". First: "${bad[0]}"`); return; }
+  await window.api.saveSettings({ clientPayers: ok });
+  await refresh();
+  toast(ok.length ? `Saved payer status for ${ok.length} clients.` : 'Payer list cleared.');
+});
 
 $('#saveSelfPayBtn').addEventListener('click', async () => {
   const names = $('#selfPayList').value.split('\n').map((s) => s.trim()).filter(Boolean);

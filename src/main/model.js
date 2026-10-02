@@ -139,6 +139,41 @@ function isSelfPayClient(name, list) {
   return Array.isArray(list) && list.some((entry) => sameName(name, entry));
 }
 
+// Per-client payer status, entered on Doctors & Codes and kept ONLY in this Mac's
+// settings (patient names never ship in the app or the repo). It decides
+// billing ahead of the appointment type:
+//   contracted → never booked in SimplePractice (billed through the contract)
+//   insurance  → booked with the doctor's CPT codes
+//   private    → booked against the Self Pay record, no codes — just save
+// Clients not on the list fall back to the appointment-type rule (isSelfPay).
+const PAYER_STATUSES = ['private', 'insurance', 'contracted'];
+function normPayer(s) {
+  const t = String(s || '').trim().toLowerCase();
+  if (/^contract/.test(t)) return 'contracted';
+  if (/^insur/.test(t)) return 'insurance';
+  if (/^(private|self)/.test(t)) return 'private';
+  return '';
+}
+/** "Name, Status" / "Name<TAB>Status" / "Name Status" lines → [{ name, status }]. */
+function parsePayerList(text) {
+  const out = [];
+  for (const raw of String(text || '').split(/\r?\n/)) {
+    const line = raw.trim();
+    const m = /^(.*?)[\s,;:\t-]+(private|self[\s-]?pay|insurance|contracted?)\s*$/i.exec(line);
+    if (m && m[1].trim()) out.push({ name: m[1].trim(), status: normPayer(m[2]) });
+  }
+  return out;
+}
+function formatPayerList(list) {
+  const label = { private: 'Private', insurance: 'Insurance', contracted: 'Contracted' };
+  return (list || []).map((c) => `${c.name}, ${label[c.status] || c.status}`).join('\n');
+}
+/** The client's payer status ('private' | 'insurance' | 'contracted'), or '' if unlisted. */
+function payerStatusFor(name, list) {
+  const hit = (Array.isArray(list) ? list : []).find((c) => c && sameName(name, c.name));
+  return hit ? normPayer(hit.status) : '';
+}
+
 /** Look up a big doctor's 2-letter modifier code from the configured list. */
 function mainCodeFor(mainDoctorName, mainDoctors) {
   const n = normalizeName(mainDoctorName);
@@ -237,8 +272,11 @@ const DEMO_MAIN_DOCTORS = [
 const UNIT_CODES = {
   'Caryn McAllister': '97112 x2, 97530 x2 (59)',       // PT
   'Heather Vines-Dubose': '97112 x2, 97530 x2 (59)',   // OT
-  'Karine Rocha de Benedicto': '92507 x1, 97550 x2',   // Speech
+  'Karine Rocha de Benedicto': '92523 x1, 92507 x1, 92626 x1, 97535 x2', // Speech
 };
+// The speech codes seeded before Oct 2026 — existing installs still holding
+// exactly this set are migrated to the new UNIT_CODES on startup.
+const OLD_SPEECH_CODES = '92507 x1, 97550 x2';
 // Disciplines that actually bill their unit's therapy codes. Everyone else (nurse,
 // intern, admin, social work, massage, aide) is still listed for completeness but
 // seeded with NO codes, so they can never book a wrong service until the user sets
@@ -317,6 +355,12 @@ module.exports = {
   isNonPatient,
   isSelfPay,
   isSelfPayClient,
+  PAYER_STATUSES,
+  parsePayerList,
+  formatPayerList,
+  payerStatusFor,
+  UNIT_CODES,
+  OLD_SPEECH_CODES,
   makeProvider,
   makeMainDoctor,
   matchProvider,

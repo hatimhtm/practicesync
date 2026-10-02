@@ -134,6 +134,16 @@
         </div>
 
         <div class="card">
+          <div class="card-k">Client payer status</div>
+          <p class="muted" style="font-size:13px;margin:2px 0 12px">One client per line: <strong>Name, Private</strong> / <strong>Insurance</strong> / <strong>Contracted</strong>, with the name as it appears in Practice Fusion. <strong>Contracted</strong> — not added to SimplePractice. <strong>Insurance</strong> — booked with the doctor's codes. <strong>Private</strong> — Self Pay record, no codes, just saved. Clients not listed here fall back to the appointment type.</p>
+          <textarea id="payerList" rows="8" placeholder="Jane Doe, Insurance&#10;John Smith, Private&#10;Sunrise Hospice, Contracted"></textarea>
+          <div class="row" style="margin-top:10px">
+            <button class="btn btn-primary" id="savePayerBtn">Save payer list</button>
+            <span class="muted" id="payerCount" style="font-size:12px"></span>
+          </div>
+        </div>
+
+        <div class="card">
           <div class="card-k">Always self-pay clients</div>
           <p class="muted" style="font-size:13px;margin:2px 0 12px">Private-pay visits are normally detected automatically from the Practice Fusion appointment type — you don't need to list anyone here. Add a client <strong>only</strong> if they should <strong>always</strong> be booked as self-pay, no matter the visit type. One name per line, exactly as it appears in Practice Fusion.</p>
           <textarea id="selfPayList" rows="4" placeholder="Jane Doe&#10;John Smith"></textarea>
