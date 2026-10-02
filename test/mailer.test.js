@@ -50,7 +50,7 @@ const check = (n, ok) => { console.log(`${ok ? '  ok  ' : '  FAIL'}  ${n}`); ok 
 (function testMessageIsRFC5322WithCRLF() {
   console.log('# compose — RFC 5322 message, CRLF line endings');
   const message = compose({ from: 'office@example.com', to: ['a@example.com', 'b@example.com'], subject: 'Test', body: 'line one\nline two' });
-  check('From header', message.includes('From: Hope Assistant <office@example.com>\r\n'));
+  check('From header', message.includes('From: Hope Billing Assistant <office@example.com>\r\n'));
   check('To header lists every recipient', message.includes('To: a@example.com, b@example.com\r\n'));
   check('body follows the blank line, CRLF-joined', message.includes('\r\n\r\nline one\r\nline two'));
   check('no bare LFs left (mail servers reject them)', !message.replace(/\r\n/g, '').includes('\n'));

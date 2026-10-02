@@ -1,10 +1,10 @@
 {
   "name": "practicesync",
-  "productName": "Hope Assistant",
-  "version": "1.6.3",
-  "description": "Reads patient visits from Practice Fusion and creates the matching coded appointments in SimplePractice — automatically.",
+  "productName": "Hope Billing Assistant",
+  "version": "1.6.4",
+  "description": "Reads patient visits from Practice Fusion and creates the matching coded appointments in SimplePractice \u2014 automatically.",
   "main": "src/main/main.js",
-  "author": "Hope Assistant",
+  "author": "Hope Billing Assistant",
   "license": "UNLICENSED",
   "private": true,
   "scripts": {
@@ -28,8 +28,8 @@
   },
   "build": {
     "appId": "com.practicesync.app",
-    "productName": "Hope Assistant",
-    "copyright": "© 2026 Hope Assistant",
+    "productName": "Hope Billing Assistant",
+    "copyright": "\u00a9 2026 Hope Billing Assistant",
     "afterPack": "build/afterPack.js",
     "files": [
       "src/**/*",
@@ -68,8 +68,8 @@
       }
     ],
     "dmg": {
-      "title": "Hope Assistant",
-      "artifactName": "HopeAssistant-Installer.dmg",
+      "title": "Hope Billing Assistant",
+      "artifactName": "HopeBillingAssistant-Installer.dmg",
       "contents": [
         {
           "x": 140,

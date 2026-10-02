@@ -107,7 +107,7 @@ async function downloadAndOpen({ onStatus } = {}) {
   if (!downloadUrl) { say({ phase: 'error', error: 'Nothing to download yet — check for updates first.' }); return; }
   // Not a direct .dmg (e.g. a release page) → just open it in the browser.
   if (!/\.dmg(\?|$)/i.test(downloadUrl)) { try { shell.openExternal(downloadUrl); } catch {} say({ phase: 'opening' }); return; }
-  const dest = path.join(os.tmpdir(), 'Hope Assistant-Update.dmg');
+  const dest = path.join(os.tmpdir(), 'Hope Billing Assistant-Update.dmg');
   try {
     say({ phase: 'downloading', percent: 0 });
     await download(downloadUrl, dest, (p) => say({ phase: 'downloading', percent: p }));

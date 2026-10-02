@@ -117,7 +117,7 @@ async function openAutomationContext(opts = {}) {
     if (/ProcessSingleton|cannot create|in use|locked|SingletonLock/i.test(s)) {
       clearStaleLocks(userDataDir);
       try { return { context: await tidy(await launch()) }; }
-      catch (e2) { return { error: fail('A Hope Assistant browser window is already open — close it and click again.', String((e2 && e2.message) || e2)) }; }
+      catch (e2) { return { error: fail('A Hope Billing Assistant browser window is already open — close it and click again.', String((e2 && e2.message) || e2)) }; }
     }
     return { error: fail('Could not open Chrome. Make sure Google Chrome is installed, then try again.', s) };
   }
@@ -872,13 +872,13 @@ function writeGallery(dir, manifest) {
       <div class="cap"><b>Step ${m.step}</b> — ${escapeHtmlNode(m.label)}<div class="sel">${escapeHtmlNode(m.selector || '')}</div></div>
       <img src="${escapeHtmlNode(m.screenshot)}" alt="" />
     </div>`).join('');
-  const html = `<!doctype html><meta charset="utf-8"><title>Hope Assistant — teach captures</title>
+  const html = `<!doctype html><meta charset="utf-8"><title>Hope Billing Assistant — teach captures</title>
 <style>body{font:14px -apple-system,system-ui,sans-serif;background:#0f1422;color:#eaf0fb;margin:0;padding:26px}
 h1{font-size:18px;margin:0 0 4px} p.sub{color:#9fb3da;margin:0 0 22px;font-size:13px}
 .card{background:#1a2336;border:1px solid #2a3650;border-radius:12px;padding:14px;margin:0 0 16px}
 .cap{margin-bottom:10px} .sel{color:#9fb3da;font:12px ui-monospace,Menlo,monospace;margin-top:4px;word-break:break-all}
 img{max-width:100%;border-radius:8px;border:1px solid #2a3650;display:block}</style>
-<h1>What you taught Hope Assistant</h1><p class="sub">${manifest.length} screenshot(s) — one per click. Each card shows the field, the element the app will use, and what the screen looked like.</p>${cards}`;
+<h1>What you taught Hope Billing Assistant</h1><p class="sub">${manifest.length} screenshot(s) — one per click. Each card shows the field, the element the app will use, and what the screen looked like.</p>${cards}`;
   try { fs.writeFileSync(path.join(dir, 'index.html'), html); } catch {}
 }
 

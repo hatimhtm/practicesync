@@ -1,7 +1,16 @@
 'use strict';
 
 const path = require('path');
-const { app, BrowserWindow, Tray, Menu, nativeImage, ipcMain, Notification, shell } = require('electron');
+const { app, BrowserWindow, Tray, Menu, nativeImage, ipcMain, Notification, shell, dialog } = require('electron');
+const fs = require('fs');
+
+// The app is shown as "Hope Billing Assistant", but it keeps its original
+// INTERNAL name: Electron derives both the settings folder and the Keychain item
+// that encrypts the saved logins from it, so renaming it would orphan both.
+// This must run before anything touches app paths or safeStorage.
+const INTERNAL_NAME = 'Hope Assistant';
+app.setName(INTERNAL_NAME);
+app.setPath('userData', path.join(app.getPath('appData'), INTERNAL_NAME));
 
 const store = require('./store');
 const { runSync } = require('./automation');
@@ -20,14 +29,14 @@ const mailer = require('./mailer');
 let mainWindow = null;
 let tray = null;
 const scheduler = new Scheduler();
-const APP_NAME = 'Hope Assistant';
+const APP_NAME = 'Hope Billing Assistant'; // display name (see INTERNAL_NAME above)
 
 function nowISO() { return new Date().toISOString(); }
 
 /** Friendly desktop notification when a run finishes (the one macOS permission
  *  the app actually asks for — and only the first time). Always best-effort. */
 function notify(body) {
-  try { if (Notification.isSupported()) new Notification({ title: 'Hope Assistant', body }).show(); } catch {}
+  try { if (Notification.isSupported()) new Notification({ title: APP_NAME, body }).show(); } catch {}
 }
 
 /** One alert per missing patient, gated by the "Alert on missing patient"
@@ -56,8 +65,8 @@ async function emailMissingPatient(name, date) {
   try {
     const settings = store.load();
     const config = mailer.configFrom(settings, store.getCreds().smtp);
-    const subject = `Hope Assistant: patient not found — ${name}`;
-    const body = `Hope Assistant could not find "${name}" in SimplePractice while booking${date ? ` (appointment date ${date})` : ''}.\n\nNothing was booked for them — check the name in SimplePractice, or add/correct it, then re-run the sync.`;
+    const subject = `Hope Billing Assistant: patient not found — ${name}`;
+    const body = `Hope Billing Assistant could not find "${name}" in SimplePractice while booking${date ? ` (appointment date ${date})` : ''}.\n\nNothing was booked for them — check the name in SimplePractice, or add/correct it, then re-run the sync.`;
     await mailer.send({ subject, body, config });
     store.save({ emailLastSentAt: nowISO(), emailLastError: null, emailLastErrorAt: null });
   } catch (e) {
@@ -147,7 +156,7 @@ async function performSync(trigger = 'manual', overrides = {}) {
     sendToRenderer('run-finished', result);
     if (!dryRun) {
       if (result.ok) notify(result.created ? `Booked ${result.created} appointment${result.created === 1 ? '' : 's'}${result.unmatched ? ` · ${result.unmatched} not recognized` : ''} ✓` : 'No new appointments to book.');
-      else notify('Sync needs attention — open Hope Assistant to see why.');
+      else notify('Sync needs attention — open Hope Billing Assistant to see why.');
     }
     return result;
   } catch (err) {
@@ -187,7 +196,7 @@ async function performWindowSync(trigger = 'manual') {
     refreshTray();
     sendToRenderer('run-finished', res);
     if (res.ok) notify(`Synced the next ${n} days — booked ${res.booked || 0}, ${res.skipped || 0} already there${res.failed ? `, ${res.failed} need attention` : ''} ✓`);
-    else notify('Sync needs attention — open Hope Assistant to see why.');
+    else notify('Sync needs attention — open Hope Billing Assistant to see why.');
     return res;
   } catch (err) {
     const r = { ok: false, error: 'Something went wrong during the sync. Please try again.', at: nowISO() };
@@ -386,7 +395,7 @@ function registerIpc() {
       const settings = store.load();
       const config = mailer.configFrom(settings, store.getCreds().smtp);
       await mailer.send({
-        subject: 'Hope Assistant: test email',
+        subject: 'Hope Billing Assistant: test email',
         body: 'This is a test message — email alerts are working.\n\nYou will get an email like this whenever a sync can\'t find a patient in SimplePractice.',
         config,
       });
@@ -412,7 +421,7 @@ function registerIpc() {
     const creds = store.getCreds();
     if (!creds.simplePractice || !creds.simplePractice.password) return { ok: false, error: 'Add your SimplePractice login on the Connection screen first.' };
     const stamp = nowISO().replace(/[:.]/g, '-');
-    const dir = path.join(app.getPath('desktop'), `Hope Assistant Setup ${stamp}`);
+    const dir = path.join(app.getPath('desktop'), `Hope Billing Assistant Setup ${stamp}`);
     const onStep = (t) => sendToRenderer('live-step', { text: t, at: nowISO() });
     sendToRenderer('live-step', { text: 'Opening SimplePractice to capture the booking fields…', at: nowISO(), reset: true });
     const steps = [
@@ -567,7 +576,43 @@ function dequarantineHelper() {
   } catch {}
 }
 
+/** App menu with the display name (Electron's default menu would show the
+ *  internal "Hope Assistant"). Keeps Edit so copy/paste work in every field. */
+function setAppMenu() {
+  Menu.setApplicationMenu(Menu.buildFromTemplate([
+    { label: APP_NAME, submenu: [
+      { role: 'about', label: `About ${APP_NAME}` },
+      { type: 'separator' },
+      { role: 'hide', label: `Hide ${APP_NAME}` }, { role: 'hideOthers' }, { role: 'unhide' },
+      { type: 'separator' },
+      { label: `Quit ${APP_NAME}`, accelerator: 'Command+Q', click: () => { app.isQuitting = true; app.quit(); } },
+    ] },
+    { role: 'editMenu' },
+    { role: 'viewMenu' },
+    { role: 'windowMenu' },
+  ]));
+  app.setAboutPanelOptions({ applicationName: APP_NAME, applicationVersion: app.getVersion() });
+}
+
+/** After updating to the renamed app, the old "Hope Assistant.app" is still in
+ *  Applications. Offer once to move it to the Trash so there's only one app. */
+async function offerOldAppCleanup() {
+  const old = '/Applications/Hope Assistant.app';
+  try {
+    if (!app.isPackaged || store.load().oldAppCleanupAsked) return;
+    if (!fs.existsSync(old) || app.getPath('exe').startsWith(old + '/')) return;
+    store.save({ oldAppCleanupAsked: true });
+    const { response } = await dialog.showMessageBox(mainWindow, {
+      type: 'question', buttons: ['Move to Trash', 'Keep it'], defaultId: 0, cancelId: 1,
+      message: 'Remove the old Hope Assistant app?',
+      detail: 'Hope Assistant is now Hope Billing Assistant. The old app is still in your Applications folder. Your settings, doctors, clients and logins are already in the new app.',
+    });
+    if (response === 0) await shell.trashItem(old);
+  } catch {}
+}
+
 app.whenReady().then(() => {
+  setAppMenu();
   dequarantineHelper();
   registerIpc();
   scheduler.configure({
@@ -600,6 +645,7 @@ app.whenReady().then(() => {
   createTray();
   createWindow();
   maybeCatchUp();
+  mainWindow.webContents.once('did-finish-load', () => setTimeout(offerOldAppCleanup, 1500));
 
   // Boot self-check: `PS_BOOTCHECK=1 npm start` loads everything, confirms the
   // window is ready, prints a marker, and exits — a fast smoke test that the app

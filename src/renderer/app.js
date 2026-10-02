@@ -124,7 +124,7 @@ async function refresh() {
 
 /* schedule status cards */
 const SCHED_NOTE = {
-  off: 'Off — Hope Assistant runs only when you press <strong>Sync now</strong>.',
+  off: 'Off — Hope Billing Assistant runs only when you press <strong>Sync now</strong>.',
   '6h': 'Runs automatically every 6 hours, plus whenever you press Sync now.',
   daily: 'Runs automatically once a day, plus whenever you press Sync now.',
 };
@@ -880,7 +880,7 @@ async function finishOnboarding() {
   inSetup = false;
   $('#onboard').classList.add('hidden');
   await refresh();
-  toast("All set — Hope Assistant is ready.");
+  toast("All set — Hope Billing Assistant is ready.");
 }
 
 $('#obBack').addEventListener('click', () => { $('#obError').classList.add('hidden'); obShow(obStep - 1); });
@@ -1010,7 +1010,7 @@ window.api.onUpdateStatus((s) => {
       break;
     case 'opening':
       ubTitle.textContent = 'Last step — finish in the window that opened';
-      ubSub.textContent = 'Quit Hope Assistant, drag the new version onto Applications (replace the old one), then reopen it.';
+      ubSub.textContent = 'Quit Hope Billing Assistant, drag the new version onto Applications (replace the old one), then reopen it.';
       ubBtn.textContent = 'Open installer again'; ubBtn.disabled = false;
       banner.classList.remove('hidden');
       if (sb) sb.textContent = 'Finish in Finder →';
@@ -1030,19 +1030,136 @@ function fmtClock(iso) {
   try { return new Date(iso).toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit', second: '2-digit' }); }
   catch { return ''; }
 }
+// Live feed: turns the engine's one-line steps into a readable activity view —
+// phases, one collapsible card per patient, and highlighted problems.
+const LV = { feed: null, group: null, raw: [], booked: 0, skipped: 0, problems: 0, follow: true };
+const LV_DETAIL = /^(Date|Time|Clinician|Service|Line \d+|Service boxes|Location|Units)\b|^Self-pay —|^Saving |^Filled \(dry run|^Scheduling warning/;
+function lvKind(t) {
+  if (/^Done —/.test(t)) return 'done';
+  if (/^Booked .*✓/.test(t)) return 'booked';
+  if (/^Skip /.test(t)) return 'skip';
+  if (/^(Could not book|Alert:)|could NOT|⚠︎|failed|error/i.test(t)) return 'problem';
+  if (/^Client: /.test(t)) return 'client';
+  if (LV_DETAIL.test(t)) return 'detail';
+  return 'phase';
+}
+function lvLine(time, html, cls) {
+  const d = document.createElement('div');
+  d.className = 'lv-line ' + cls;
+  d.innerHTML = `<span class="t">${escapeHtml(time)}</span>${html}`;
+  return d;
+}
+function lvStats() {
+  $('#lvBooked').textContent = LV.booked; $('#lvSkipped').textContent = LV.skipped; $('#lvProblems').textContent = LV.problems;
+  $('#lvProblems').parentElement.classList.toggle('on', LV.problems > 0);
+}
+function lvCloseGroup() {
+  const g = LV.group; if (!g) return;
+  if (!g.el.classList.contains('has-problem')) g.el.classList.add('collapsed');
+  g.el.classList.remove('active');
+  LV.group = null;
+}
+function lvOpenGroup(name, time) {
+  lvCloseGroup();
+  const el = document.createElement('div');
+  el.className = 'lv-group active';
+  el.innerHTML = `<button class="lv-g-head"><span class="lv-g-dot"></span><span class="lv-g-name">${escapeHtml(name)}</span><span class="lv-g-state"></span><span class="lv-g-time">${escapeHtml(time)}</span></button><div class="lv-g-body"></div>`;
+  el.querySelector('.lv-g-head').addEventListener('click', () => el.classList.toggle('collapsed'));
+  LV.group = { el, body: el.querySelector('.lv-g-body') };
+  lvState(LV.group, 'working', 'Booking…');
+  LV.feed.appendChild(el);
+}
+function lvState(g, state, label) { g.el.dataset.state = state; g.el.querySelector('.lv-g-state').textContent = label; }
+function lvAdd(s) {
+  const t = String(s.text || '').trim(); if (!t) return;
+  const time = fmtClock(s.at);
+  const span = `<span>${escapeHtml(t)}</span>`;
+  LV.raw.push(`${time}  ${t}`);
+  const kind = lvKind(t);
+  if (kind !== 'detail') $('#lvNow').textContent = t.replace(/\s*✓$/, '');
+
+  if (kind === 'client') {
+    lvOpenGroup(t.replace(/^Client:\s*/, '').replace(/\s*\[.*?\]/, '').replace(/\s*\(.*\)/, '').replace(/\s*✓\s*$/, '').trim(), time);
+    LV.group.body.appendChild(lvLine(time, span, 'lv-detail'));
+  } else if (kind === 'detail' && LV.group) {
+    LV.group.body.appendChild(lvLine(time, span, 'lv-detail'));
+    if (/^Filled \(dry run/.test(t)) lvState(LV.group, 'checked', 'Checked — not saved');
+  } else if (kind === 'booked') {
+    LV.booked += 1;
+    if (LV.group) { lvState(LV.group, 'booked', 'Booked ✓'); LV.group.body.appendChild(lvLine(time, span, 'lv-detail')); lvCloseGroup(); }
+    else LV.feed.appendChild(lvLine(time, span, 'lv-booked'));
+  } else if (kind === 'problem') {
+    // Count each patient once, however many warning lines they produce.
+    if (!(LV.group && LV.group.el.classList.contains('has-problem'))) LV.problems += 1;
+    // "Client: could NOT find "X"" — the patient's card starts with the problem.
+    const nf = /^Client: could NOT find "(.+?)"/.exec(t);
+    if (nf) { lvOpenGroup(nf[1], time); lvState(LV.group, 'failed', 'Not found'); }
+    const line = lvLine(time, span, 'lv-problem');
+    if (LV.group) {
+      LV.group.el.classList.add('has-problem'); LV.group.el.classList.remove('collapsed');
+      if (/^Could not book/.test(t)) lvState(LV.group, 'failed', 'Not booked');
+      else if (LV.group.el.dataset.state === 'working') lvState(LV.group, 'warn', 'Check this');
+      LV.group.body.appendChild(line);
+    } else LV.feed.appendChild(line);
+  } else if (kind === 'skip') {
+    LV.skipped += 1;
+    lvCloseGroup();
+    const m = /^Skip (.+?)(?: on \S+)? — (.+)$/.exec(t);
+    LV.feed.appendChild(lvLine(time, `<span class="lv-tag">Skipped</span><span><strong>${escapeHtml(m ? m[1] : t)}</strong>${m ? ' — ' + escapeHtml(m[2]) : ''}</span>`, 'lv-skip'));
+  } else if (kind === 'done') {
+    lvCloseGroup();
+    const d = document.createElement('div');
+    d.className = 'lv-done';
+    d.innerHTML = `<span class="lv-done-ic">✓</span><span>${escapeHtml(t.replace(/^Done —\s*/, 'Finished — '))}</span>`;
+    LV.feed.appendChild(d);
+    $('#lvNow').textContent = 'Finished';
+  } else if (LV.group && !/^(Reading|Opening|Signing|Signed|Starting|Sync|Morning|SimplePractice calendar)/.test(t)) {
+    LV.group.body.appendChild(lvLine(time, span, 'lv-detail'));
+  } else {
+    lvCloseGroup();
+    const milestone = /✓$|^(Reading|Sync|Morning|Starting)/.test(t);
+    LV.feed.appendChild(lvLine(time, span, 'lv-phase' + (milestone ? ' lv-milestone' : '')));
+  }
+  lvStats();
+  if (LV.follow) LV.feed.scrollTop = LV.feed.scrollHeight;
+  else $('#lvJump').classList.remove('hidden');
+}
+function lvReset() {
+  Object.assign(LV, { group: null, raw: [], booked: 0, skipped: 0, problems: 0, follow: true });
+  LV.feed.innerHTML = '';
+  $('#lvNow').textContent = 'Starting…';
+  $('#lvJump').classList.add('hidden');
+  $('#liveCard').classList.add('running');
+  lvStats();
+}
+LV.feed = $('#liveLog');
+LV.feed.addEventListener('scroll', () => {
+  LV.follow = LV.feed.scrollHeight - LV.feed.scrollTop - LV.feed.clientHeight < 40;
+  if (LV.follow) $('#lvJump').classList.add('hidden');
+});
+$('#lvJump').addEventListener('click', () => { LV.follow = true; LV.feed.scrollTop = LV.feed.scrollHeight; $('#lvJump').classList.add('hidden'); });
+$('#lvDetails').addEventListener('change', (e) => {
+  $('#liveCard').classList.toggle('show-details', e.target.checked);
+  try { localStorage.setItem('lvDetails', e.target.checked ? '1' : ''); } catch {}
+});
+try { if (localStorage.getItem('lvDetails')) { $('#lvDetails').checked = true; $('#liveCard').classList.add('show-details'); } } catch {}
+$('#lvExpand').addEventListener('click', () => {
+  const on = $('#liveCard').classList.toggle('expanded');
+  $('#lvExpand').textContent = on ? 'Close' : 'Expand';
+});
+document.addEventListener('keydown', (e) => {
+  if (e.key === 'Escape' && $('#liveCard').classList.contains('expanded')) $('#lvExpand').click();
+});
+$('#lvCopy').addEventListener('click', async () => {
+  try { await navigator.clipboard.writeText(LV.raw.join('\n')); toast('Log copied.'); } catch { toast('Could not copy the log.'); }
+});
+
 window.api.onLiveStep((s) => {
   if (!s) return;
-  const log = $('#liveLog'); const card = $('#liveCard');
-  if (!log || !card) return;
-  if (s.reset) { log.innerHTML = ''; card.classList.remove('hidden'); showView('home'); }
-  const prev = log.querySelector('.live-line.cur'); if (prev) prev.classList.remove('cur');
-  const line = document.createElement('div');
-  line.className = 'live-line cur';
-  line.innerHTML = `<span class="t">${fmtClock(s.at)}</span><span>${escapeHtml(s.text || '')}</span>`;
-  log.appendChild(line);
-  log.scrollTop = log.scrollHeight;
+  if (s.reset) { lvReset(); $('#liveCard').classList.remove('hidden'); showView('home'); }
+  lvAdd(s);
 });
-window.api.onRunFinished(() => { const c = $('#liveLog .live-line.cur'); if (c) c.classList.remove('cur'); refresh(); });
+window.api.onRunFinished(() => { lvCloseGroup(); $('#liveCard').classList.remove('running'); refresh(); });
 window.api.onRunStatus((s) => { if (s && s.phase === 'running') $('#statusIcon').textContent = '⏳'; });
 
 /* --------------------------------- init --------------------------------- */

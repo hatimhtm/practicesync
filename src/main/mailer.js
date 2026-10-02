@@ -61,7 +61,7 @@ function configFrom(settings, smtpCreds) {
 function compose({ from, to, subject, body }) {
   const date = new Date().toUTCString().replace('GMT', '+0000');
   const headers = [
-    `From: Hope Assistant <${from}>`,
+    `From: Hope Billing Assistant <${from}>`,
     `To: ${to.join(', ')}`,
     `Subject: ${subject}`,
     `Date: ${date}`,
