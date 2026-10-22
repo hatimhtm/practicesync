@@ -91,6 +91,122 @@ function chooseOptionIndex(texts, value, { discipline = '', selfPay = false, all
   return -1;
 }
 
+/* ------------------------------ clinician ------------------------------ */
+// The clinician is the BILLING PROVIDER — a wrong one bills the visit under the
+// wrong person (Dani's OT visit under Caryn). So it is matched on the whole name,
+// looked for only inside the clinician box, and checked afterwards.
+
+/** Tokens of a person's name for comparison: lowercase, hyphens and punctuation as
+ *  spaces, "(You)" and credentials dropped. "Heather Vines-Dubose" = "heather vines dubose". */
+function personTokens(s) {
+  return String(s || '').toLowerCase().replace(/\(you\)/g, ' ').replace(/[^a-z0-9]+/g, ' ').trim().split(' ')
+    .filter((t) => t.length >= 2 && !/^(otr|ot|pt|dpt|slp|ccc|cota|ms|ma|ed|l|r)$/.test(t));
+}
+
+/** Does this text name the doctor (first name + last name both present)? */
+function namesPerson(text, doctor) {
+  const want = personTokens(doctor);
+  const have = personTokens(text);
+  if (!want.length || !have.length) return false;
+  return have.includes(want[0]) && have.includes(want[want.length - 1]);
+}
+
+/**
+ * PURE: which option is this doctor? Every name token present wins; failing that,
+ * first + last name. Two candidates (two Heathers with no surname) → -1, never a guess.
+ */
+function pickClinicianIndex(texts, doctor) {
+  const want = personTokens(doctor);
+  if (!want.length) return -1;
+  const items = texts.map(personTokens);
+  const full = items.map((t, i) => (want.every((w) => t.includes(w)) ? i : -1)).filter((i) => i >= 0);
+  if (full.length === 1) return full[0];
+  if (full.length > 1) {
+    const exact = full.filter((i) => items[i].length === want.length);
+    return exact.length === 1 ? exact[0] : -1;
+  }
+  const loose = texts.map((t, i) => (namesPerson(t, doctor) ? i : -1)).filter((i) => i >= 0);
+  return loose.length === 1 ? loose[0] : -1;
+}
+
+/** The name SimplePractice shows as this appointment's clinician right now ('' if unreadable). */
+async function shownClinician(page, S) {
+  return page.evaluate((sel) => {
+    const box = document.querySelector(sel);
+    if (!box) return '';
+    const label = box.querySelector('.typeahead-label, .select-box__selected-option, .non-editable-dropdown');
+    return ((label || box).textContent || '').replace(/\bClinician\b/i, '').replace(/\s+/g, ' ').trim();
+  }, S.clinician).catch(() => '');
+}
+
+/**
+ * Set the clinician to the billing provider and prove it took.
+ * → { status: 'ok' | 'locked' | 'failed', shown }
+ *   ok      the box now shows this doctor
+ *   locked  the box never opened a list (a single, fixed clinician) — booked, but flagged
+ *   failed  a list opened, yet the box still shows someone else — never saved
+ */
+async function selectClinician(page, S, doctor, onStep) {
+  const before = await shownClinician(page, S);
+  if (namesPerson(before, doctor)) { say(onStep, `Clinician: ${doctor} ✓`); return { status: 'ok', shown: before }; }
+  const triggers = [S.clinicianOpen, `${S.clinician} .typeahead-trigger`, `${S.clinician} [role="combobox"]`, `${S.clinician} .non-editable-dropdown`, S.clinician].filter(Boolean);
+  let sawList = false;
+  for (let attempt = 0; attempt < 2; attempt++) {
+    let opened = false;
+    for (const t of triggers) {
+      const el = await page.$(t).catch(() => null);
+      if (!el) continue;
+      await liveEngine.stage(page, 'moveTo', t).catch(() => {});
+      await el.click({ timeout: 3000 }).catch(async () => { try { await el.evaluate((e) => e.click()); } catch {} });
+      opened = true;
+      break;
+    }
+    if (!opened) break;
+    // A search box inside the clinician list narrows it; type the name if there is one.
+    const search = await page.$(`${S.clinician} .select-box__input, .flyout-clinician-dropdown .select-box__input`).catch(() => null);
+    if (search && await search.isVisible().catch(() => false)) { await search.fill('').catch(() => {}); await search.type(doctor.split(' ')[0], { delay: 15 }).catch(() => {}); }
+    // Wait for the options — only VISIBLE ones, and never the client's or the
+    // location's leftover lists (the old code read those and found no doctor).
+    const deadline = Date.now() + 5000;
+    let clicked = false;
+    while (Date.now() < deadline && !clicked) {
+      const handles = [];
+      for (const os of OPTION_SELECTORS) {
+        for (const h of await page.$$(os).catch(() => [])) {
+          const ok = await h.evaluate((el) => !el.closest('[data-validation-path="client"], [data-validation-path="officeId"]') && !el.classList.contains('no-results')
+            && !!(el.offsetWidth || el.offsetHeight || el.getClientRects().length)).catch(() => false);
+          if (ok && !handles.includes(h)) handles.push(h);
+        }
+        if (handles.length) break;
+      }
+      if (handles.length) {
+        const texts = [];
+        for (const h of handles) texts.push(((await h.textContent().catch(() => '')) || '').trim());
+        const idx = pickClinicianIndex(texts, doctor);
+        // It's the clinician list only if it holds the doctor we want or the one
+        // shown now — a stray visible list (a time picker) never counts.
+        if (idx >= 0 || (before && texts.some((t) => namesPerson(t, before)))) sawList = true;
+        if (idx >= 0) {
+          await handles[idx].click({ timeout: 2000 }).catch(async () => { try { await handles[idx].evaluate((el) => el.click()); } catch {} });
+          clicked = true;
+          break;
+        }
+      }
+      await sleep(200);
+    }
+    await sleep(350);
+    const now = await shownClinician(page, S);
+    if (namesPerson(now, doctor)) { say(onStep, `Clinician: ${doctor} ✓`); return { status: 'ok', shown: now }; }
+  }
+  const shown = await shownClinician(page, S);
+  if (!sawList) {
+    say(onStep, `⚠︎ Clinician: the box didn't open a list — it shows "${shown || 'nothing'}", wanted ${doctor}`);
+    return { status: 'locked', shown };
+  }
+  say(onStep, `⚠︎ Clinician: could not set ${doctor} (SimplePractice shows "${shown || 'nothing'}")`);
+  return { status: 'failed', shown };
+}
+
 // Click the chosen option. Robust click (normal + JS-click fallback) so it is never
 // a silent no-op. Returns false when nothing should be clicked (none / keep waiting).
 async function clickOptionMatching(page, value, opts = {}) {
@@ -245,22 +361,25 @@ async function bookAppointment(page, appointment, { onStep, dryRun = true, overr
     say(onStep, `Time: ${appointment.time}`);
   }
 
-  // 3) CLINICIAN = the main doctor. Demo has a single non-editable clinician (a
-  // no-op); the real account opens a list to pick from (all clinicians pre-loaded).
-  if (appointment.mainDoctor) {
-    const open = await page.$(S.clinicianOpen);
-    if (open) {
-      await open.click({ timeout: 3000 }).catch(async () => { try { await open.evaluate((el) => el.click()); } catch {} });
-      await sleep(250);
-      const ok = await clickOptionMatching(page, appointment.mainDoctor.split(' ')[0]); // first name is enough
-      say(onStep, `Clinician: ${appointment.mainDoctor}${ok ? ' ✓' : ' (single/locked on demo)'}`);
+  // 3) CLINICIAN = the billing provider (the therapist's main doctor). Set on the
+  // whole name and CHECKED: if SimplePractice still shows someone else after a
+  // list opened, the visit is NOT saved (a wrong clinician bills the wrong person).
+  // A box that never opens a list (one fixed clinician, as on the demo) is booked
+  // but flagged for a look.
+  const warnings = [];
+  if (appointment.mainDoctor && await page.$(S.clinician)) {
+    const c = await selectClinician(page, S, appointment.mainDoctor, onStep);
+    if (c.status === 'failed') {
+      return { ok: false, reason: 'clinician', error: `Couldn't set the clinician to ${appointment.mainDoctor} (SimplePractice showed "${c.shown || 'nothing'}") — not saved, so it isn't billed under the wrong provider.` };
     }
+    if (c.status === 'locked') warnings.push(`Clinician couldn't be changed — SimplePractice shows "${c.shown || 'nothing'}", should be ${appointment.mainDoctor}.`);
   }
 
   // 4) LOCATION — pick the practice's location. It exists on the account now, so
   // the typeahead matches and selects it (and there is NO Escape anywhere, so the
   // dialog stays open). If it ever doesn't match, typeaheadSelect just moves on.
-  if (presets.SP.defaultLocation && await page.$(S.locationTrigger)) {
+  // Private-pay clients have their place of service preset, so it's left alone.
+  if (!appointment.selfPay && presets.SP.defaultLocation && await page.$(S.locationTrigger)) {
     await typeaheadSelect(page, S.locationTrigger, presets.SP.defaultLocation, onStep, 'Location', S.locationSearchInput);
   }
 
@@ -319,7 +438,7 @@ async function bookAppointment(page, appointment, { onStep, dryRun = true, overr
     const sv = await page.$(S.saveButton);
     const dis = sv ? await sv.isDisabled().catch(() => true) : null;
     say(onStep, `Filled (dry run — not saved). Save button: ${sv ? (dis ? 'found but disabled' : 'found + ENABLED ✓') : 'NOT FOUND'}`);
-    return { ok: true, dryRun: true };
+    return { ok: true, dryRun: true, warnings };
   }
 
   // SAVE — the button enables once required fields are valid. Bounded click +
@@ -339,7 +458,7 @@ async function bookAppointment(page, appointment, { onStep, dryRun = true, overr
   const deadline = Date.now() + 9000;
   let confirmed = false;
   while (Date.now() < deadline) {
-    if (!(await page.$(S.clientTrigger).catch(() => null))) { say(onStep, `Booked ${appointment.patientName} ✓`); return { ok: true }; }
+    if (!(await page.$(S.clientTrigger).catch(() => null))) { say(onStep, `Booked ${appointment.patientName} ✓`); return { ok: true, warnings }; }
     if (!confirmed) {
       const proceed = await page.$(S.confirmSave).catch(() => null);
       if (proceed) {
@@ -396,4 +515,4 @@ async function spClientsOnDate(page) {
   } catch { return []; }
 }
 
-module.exports = { bookAppointment, spNavigateToDate, spClientsOnDate, chooseOptionIndex };
+module.exports = { bookAppointment, spNavigateToDate, spClientsOnDate, chooseOptionIndex, pickClinicianIndex, namesPerson, selectClinician };

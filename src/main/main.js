@@ -11,13 +11,15 @@ const fs = require('fs');
 const INTERNAL_NAME = 'Hope Assistant';
 app.setName(INTERNAL_NAME);
 app.setPath('userData', path.join(app.getPath('appData'), INTERNAL_NAME));
+// Development only: run against a throwaway settings folder (tests of the startup updates).
+if (process.env.PS_DATA_DIR) app.setPath('userData', process.env.PS_DATA_DIR);
 
 const store = require('./store');
 const { runSync } = require('./automation');
 const { parseRoster, appleIntelligenceAvailable, detectEngines, appleHelperPath } = require('./ai');
-const { DEMO_MAIN_DOCTORS, DEMO_PROVIDERS, UNIT_CODES, OLD_SPEECH_CODES, parseCodes, formatCodes, makeProvider, makeMainDoctor } = require('./model');
+const { DEMO_MAIN_DOCTORS, DEMO_PROVIDERS, UNIT_CODES, OLD_SPEECH_CODES, parseCodes, formatCodes, makeProvider, makeMainDoctor, ROSTER_VERSION, mergeRoster, normalizeName } = require('./model');
 const { teach, runSiteDemo } = require('./liveEngine');
-const { runFullSync, expandDates } = require('./sync');
+const { runFullSync, expandDates, PROBLEM } = require('./sync');
 const presets = require('./presets');
 const { loginSimplePractice } = require('./login');
 const { startSheetServer } = require('./demoSheet');
@@ -39,34 +41,71 @@ function notify(body) {
   try { if (Notification.isSupported()) new Notification({ title: APP_NAME, body }).show(); } catch {}
 }
 
-/** One alert per missing patient, gated by the "Alert on missing patient"
- *  setting. Never fires for agency/org rows — those are dropped before
- *  booking is even attempted (isNonPatient), so this is patients only.
- *  Persisted to the Alerts screen (a desktop notification alone is easy to
- *  miss if no one's looking at the moment it fires) AND shown as a native
- *  notification. Capped at the most recent 200 so the file never grows
- *  unbounded. */
-const MAX_ALERTS = 200;
-function notifyMissingPatient(name, date) {
+/** Every visit a sync couldn't book (and every booking to check) goes to the
+ *  Alerts screen — therapist, discipline and reason included, since several
+ *  therapists can see one patient on one day. A visit already on the screen isn't
+ *  added again by the next run (the rolling window re-reads the same days), so
+ *  the list only grows with something new. One desktop notification and, if on,
+ *  one summary email per run. Capped at the newest MAX_ALERTS. */
+const MAX_ALERTS = 500;
+const ALERT_KIND = {
+  unmatched: 'Therapist not recognized',
+  client_not_found: 'Patient not found in SimplePractice',
+  clinician: 'Billing provider could not be set',
+  failed: 'Could not be saved',
+  check: 'Booked — check it',
+};
+function alertKey(a) {
+  return [a.date || '', normalizeName(a.patientName), normalizeName(a.therapist), a.kind || 'client_not_found'].join('|');
+}
+function recordRunAlerts(res) {
+  if (!res || res.dryRun || !Array.isArray(res.outcomes)) return [];
   const settings = store.load();
-  if (settings.alertOnMissingPatient === false) return;
-  const entry = { id: 'al_' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6), patientName: name, date: date || '', at: nowISO() };
-  const alerts = [entry, ...(settings.alerts || [])].slice(0, MAX_ALERTS);
-  store.save({ alerts });
-  sendToRenderer('alert-added', entry);
-  notify(`Patient not found in SimplePractice: "${name}" — sync skipped booking them.`);
-  if (settings.emailAlertsEnabled) emailMissingPatient(name, date);
+  const existing = settings.alerts || [];
+  const seen = new Set(existing.map(alertKey));
+  const fresh = [];
+  const at = nowISO();
+  for (const o of res.outcomes) {
+    const problem = PROBLEM.has(o.status);
+    const check = o.status === 'booked' && o.warnings && o.warnings.length;
+    if (!problem && !check) continue;
+    const a = {
+      id: 'al_' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6),
+      kind: problem ? o.status : 'check', patientName: o.patientName, patientId: o.patientId || '',
+      therapist: o.therapist || '', discipline: o.discipline || '', billingProvider: o.billingProvider || '',
+      date: o.date || '', reason: problem ? o.reason : o.warnings.join(' · '), at,
+    };
+    if (seen.has(alertKey(a))) continue;
+    seen.add(alertKey(a));
+    fresh.push(a);
+  }
+  if (!fresh.length) return [];
+  store.save({ alerts: [...fresh, ...existing].slice(0, MAX_ALERTS) });
+  sendToRenderer('alert-added', fresh[0]);
+  const notBooked = fresh.filter((a) => a.kind !== 'check').length;
+  const checks = fresh.length - notBooked;
+  if (settings.alertOnMissingPatient !== false) {
+    notify([notBooked && `${notBooked} visit${notBooked === 1 ? '' : 's'} not booked`, checks && `${checks} to check`].filter(Boolean).join(' · ') + ' — see Alerts.');
+  }
+  if (settings.emailAlertsEnabled) emailRunAlerts(fresh);
+  return fresh;
 }
 
-/** Mirrors the desktop alert into an email, through the agency's own mailbox
- *  (see mailer.js) — best-effort: a failed/unconfigured send never breaks the
- *  sync, it just records the error for the Alerts screen to show. */
-async function emailMissingPatient(name, date) {
+/** One email per run listing what's new on the Alerts screen, through the
+ *  agency's own mailbox (see mailer.js) — best-effort: a failed/unconfigured send
+ *  never breaks the sync, it just records the error for the Alerts screen. */
+async function emailRunAlerts(alerts) {
   try {
     const settings = store.load();
     const config = mailer.configFrom(settings, store.getCreds().smtp);
-    const subject = `Hope Billing Assistant: patient not found — ${name}`;
-    const body = `Hope Billing Assistant could not find "${name}" in SimplePractice while booking${date ? ` (appointment date ${date})` : ''}.\n\nNothing was booked for them — check the name in SimplePractice, or add/correct it, then re-run the sync.`;
+    const notBooked = alerts.filter((a) => a.kind !== 'check');
+    const checks = alerts.filter((a) => a.kind === 'check');
+    const line = (a) => `• ${a.date} — ${a.patientName}${a.therapist ? ` — ${a.therapist}${a.discipline ? ` (${a.discipline})` : ''}` : ''}\n  ${a.reason}`;
+    const parts = [];
+    if (notBooked.length) parts.push(`NOT BOOKED (${notBooked.length}) — nothing was added to SimplePractice for these:\n\n${notBooked.map(line).join('\n\n')}`);
+    if (checks.length) parts.push(`BOOKED, BUT CHECK (${checks.length}):\n\n${checks.map(line).join('\n\n')}`);
+    const subject = `Hope Billing Assistant: ${[notBooked.length && `${notBooked.length} not booked`, checks.length && `${checks.length} to check`].filter(Boolean).join(', ')}`;
+    const body = `${parts.join('\n\n\n')}\n\nThe same list is on the Alerts screen in Hope Billing Assistant.`;
     await mailer.send({ subject, body, config });
     store.save({ emailLastSentAt: nowISO(), emailLastError: null, emailLastErrorAt: null });
   } catch (e) {
@@ -190,8 +229,9 @@ async function performWindowSync(trigger = 'manual') {
     const onStep = (text) => sendToRenderer('live-step', { text, at: nowISO() });
     const providers = (s.providers && s.providers.length) ? s.providers : DEMO_PROVIDERS;
     const mainDoctors = (s.mainDoctors && s.mainDoctors.length) ? s.mainDoctors : DEMO_MAIN_DOCTORS;
-    const res = await runFullSync({ secrets: creds, dates, providers, mainDoctors, clientPayers: s.clientPayers || [], save: true, overrides: s.spFieldOverrides, onStep, onMissingPatient: notifyMissingPatient });
+    const res = await runFullSync({ secrets: creds, dates, providers, mainDoctors, clientPayers: s.clientPayers || [], save: true, overrides: s.spFieldOverrides, onStep });
     res.at = nowISO();
+    recordRunAlerts(res);
     store.save({ lastRun: res.at, lastResult: { ok: res.ok, at: res.at, mode: 'live', trigger, created: res.booked || 0, skipped: res.skipped || 0, failed: res.failed || 0, unmatched: res.unmatched || 0, error: res.error } });
     refreshTray();
     sendToRenderer('run-finished', res);
@@ -220,7 +260,7 @@ function createWindow() {
   });
   mainWindow.webContents.on('did-create-window', (w) => w.close()); // deny child windows
   mainWindow.loadFile(path.join(__dirname, '..', 'renderer', 'index.html'));
-  mainWindow.once('ready-to-show', () => mainWindow.show());
+  mainWindow.once('ready-to-show', () => { if (!process.env.PS_BOOTCHECK) mainWindow.show(); });
   mainWindow.on('close', (e) => {
     if (!app.isQuitting) { e.preventDefault(); mainWindow.hide(); }
   });
@@ -396,7 +436,7 @@ function registerIpc() {
       const config = mailer.configFrom(settings, store.getCreds().smtp);
       await mailer.send({
         subject: 'Hope Billing Assistant: test email',
-        body: 'This is a test message — email alerts are working.\n\nYou will get an email like this whenever a sync can\'t find a patient in SimplePractice.',
+        body: 'This is a test message — email alerts are working.\n\nAfter each sync, you will get one email listing any visits it couldn\'t book, with the therapist and the reason.',
         config,
       });
       store.save({ emailLastSentAt: nowISO(), emailLastError: null, emailLastErrorAt: null });
@@ -468,8 +508,9 @@ function registerIpc() {
     const mainDoctors = (s.mainDoctors && s.mainDoctors.length) ? s.mainDoctors : DEMO_MAIN_DOCTORS;
     sendToRenderer('live-step', { text: `Starting sync for ${dates.join(', ')}…`, at: nowISO(), reset: true });
     const onStep = (text) => sendToRenderer('live-step', { text, at: nowISO() });
-    const res = await runFullSync({ secrets: creds, dates, providers, mainDoctors, clientPayers: s.clientPayers || [], save: !!opts.save, overrides: s.spFieldOverrides, onStep, onMissingPatient: notifyMissingPatient });
+    const res = await runFullSync({ secrets: creds, dates, providers, mainDoctors, clientPayers: s.clientPayers || [], save: !!opts.save, overrides: s.spFieldOverrides, onStep });
     res.at = nowISO();
+    recordRunAlerts(res);
     sendToRenderer('run-finished', res);
     if (res.ok) notify(opts.save ? `Booked ${res.booked} · skipped ${res.skipped}${res.failed ? ' · ' + res.failed + ' failed' : ''}` : `Dry run: ${res.planned.length} would book`);
     return res;
@@ -625,6 +666,18 @@ app.whenReady().then(() => {
   // never re-added if the user later edits or clears it.
   if (!settings.rosterSeeded && !(settings.providers && settings.providers.length)) {
     try { store.save({ providers: DEMO_PROVIDERS, mainDoctors: DEMO_MAIN_DOCTORS, rosterSeeded: true }); } catch {}
+  }
+  // Oct 2026 roster (once): the practice's updated "Billing Providers" list.
+  // Adds therapists who are missing and moves anyone to their new billing
+  // provider; nobody's codes change and no one the office added is removed.
+  if ((store.load().rosterVersion || 0) < ROSTER_VERSION) {
+    try {
+      const cur = store.load();
+      if (cur.providers && cur.providers.length) {
+        const merged = mergeRoster(cur.providers);
+        store.save({ providers: merged.providers, rosterVersion: ROSTER_VERSION, rosterMergedAt: nowISO(), rosterMergeNote: { added: merged.added, moved: merged.moved } });
+      } else store.save({ rosterVersion: ROSTER_VERSION });
+    } catch {}
   }
   // Oct 2026 billing update (once): move speech doctors still on the old default
   // codes to the new speech set. Doctors whose codes were customised are left alone.

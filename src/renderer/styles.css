@@ -462,8 +462,13 @@ input[type="number"]::-webkit-outer-spin-button { -webkit-appearance: none; marg
 }
 .client-table td { padding: 9px 10px; border-bottom: 1px solid var(--line); vertical-align: middle; }
 .client-table tbody tr:hover { background: var(--bg); }
-.client-table th:nth-child(2) { width: 150px; }
+.client-table th:nth-child(3) { width: 120px; }
+.client-table th.client-id-col { width: 74px; }
+.client-id { color: var(--muted); font-variant-numeric: tabular-nums; font-size: 12.5px; white-space: nowrap; }
 .client-name { font-weight: 550; overflow-wrap: anywhere; }
+.client-codes { color: var(--muted); font-size: 12.5px; max-width: 260px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+#clientCodes { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; line-height: 1.5; }
+#clientCodesField small { display: block; margin-top: 6px; font-size: 11.5px; line-height: 1.4; }
 .client-row-actions { text-align: right; white-space: nowrap; width: 1%; }
 .btn-sm { padding: 5px 11px; font-size: 12px; border-radius: 8px; }
 .client-row-actions .btn-sm { opacity: 0; transition: opacity 0.12s; }
@@ -603,3 +608,14 @@ input[type="number"]::-webkit-outer-spin-button { -webkit-appearance: none; marg
 .lv-phase { background: none; border: 0; font-weight: 500; color: var(--text); }
 .lv-phase.lv-milestone { font-weight: 650; }
 .lv-phase.lv-milestone span:last-child::before { content: '●'; color: var(--accent); font-size: 9px; margin-right: 8px; vertical-align: 2px; }
+
+/* Alerts: one block per visit that needs a look */
+.alert-row { padding: 11px 12px; margin: 0 0 8px; border-radius: 10px; border: 1px solid var(--line); border-left-width: 3px; background: var(--bg-2); }
+.alert-row.alert-problem { border-left-color: var(--bad); }
+.alert-row.alert-check { border-left-color: var(--warn); }
+.alert-top { display: flex; justify-content: space-between; gap: 10px; font-size: 11.5px; margin-bottom: 4px; }
+.alert-kind { font-weight: 650; letter-spacing: 0.2px; }
+.alert-problem .alert-kind { color: var(--bad); }
+.alert-check .alert-kind { color: var(--warn); }
+.alert-who { font-size: 13.5px; }
+.alert-why { font-size: 12.5px; color: var(--muted); margin-top: 3px; line-height: 1.45; }

@@ -127,7 +127,7 @@
       <section class="view hidden" data-view="doctors">
         <header class="view-head">
           <h1>Doctors &amp; Codes</h1>
-          <p class="muted">Each <strong>main doctor</strong> supervises several other doctors. When a patient is seen by one of those doctors, the visit is filed under their main doctor — using that doctor's codes.</p>
+          <p class="muted">Every therapist bills under one <strong>main doctor</strong> (their billing provider). Each visit is booked in SimplePractice under that billing provider, with the codes on the client's own list (Clients screen).</p>
         </header>
 
         <div class="card">
@@ -140,9 +140,9 @@
 
         <div class="card">
           <div class="card-k">Your doctors</div>
-          <p class="muted" style="font-size:13px;margin:2px 0 12px">One row per doctor: their name, their discipline (PT / OT / SLP…), the main doctor they work under, and their code(s). Add, edit, or remove any of them freely — customise it however you like. (The visit date is read automatically from Practice Fusion — you don't enter it here.)</p>
+          <p class="muted" style="font-size:13px;margin:2px 0 12px">One row per doctor: their name, their discipline (PT / OT / SLP…), the main doctor they bill under, and their standard codes. <strong>A client's own code list comes first</strong>; the standard codes are only used when that list doesn't name this therapist, and the visit is then flagged on <button class="link" data-goto="alerts">Alerts</button> to check.</p>
           <div class="roster-head hidden" id="rosterGridHead">
-            <div>Doctor</div><div>Discipline</div><div>Main doctor</div><div>Billing codes (CPT)</div><div></div>
+            <div>Doctor</div><div>Discipline</div><div>Main doctor</div><div>Standard codes (backup)</div><div></div>
           </div>
           <div id="providerList"></div>
           <div class="row" style="margin-top:10px">
@@ -170,14 +170,14 @@
       <section class="view hidden" data-view="clients">
         <header class="view-head">
           <h1>Clients</h1>
-          <p class="muted">Each client's payer type decides how their visits are booked in SimplePractice.</p>
+          <p class="muted">Each client's payer type decides how their visits are booked in SimplePractice, and their code list decides the codes for each therapist who sees them.</p>
         </header>
 
         <div class="payer-stats">
           <button class="payer-stat" data-filter="insurance">
             <span class="payer-badge payer-insurance">Insurance</span>
             <span class="payer-stat-n" id="statInsurance">0</span>
-            <span class="payer-stat-d">Booked with the doctor's codes</span>
+            <span class="payer-stat-d">Booked with their own codes per therapist</span>
           </button>
           <button class="payer-stat" data-filter="private">
             <span class="payer-badge payer-private">Private</span>
@@ -206,11 +206,11 @@
             </div>
           </div>
           <table class="client-table">
-            <thead><tr><th>Client</th><th>Payer type</th><th></th></tr></thead>
+            <thead><tr><th class="client-id-col">ID</th><th>Client</th><th>Payer type</th><th>Code list</th><th></th></tr></thead>
             <tbody id="clientRows"></tbody>
           </table>
           <div class="client-empty hidden" id="clientEmpty"></div>
-          <p class="muted client-foot">Clients who aren't listed are booked by their Practice Fusion appointment type, as before.</p>
+          <p class="muted client-foot">Clients who aren't listed are booked by their Practice Fusion appointment type and the therapist's standard codes, as before.</p>
         </div>
       </section>
 
@@ -345,12 +345,12 @@
         </div>
 
         <div class="card">
-          <div class="card-k">Alert when a patient isn't found</div>
+          <div class="card-k">Notify me when a visit isn't booked</div>
           <div class="seg" id="alertMissingSeg" style="margin-top:8px">
             <button data-val="on">On</button>
             <button data-val="off">Off</button>
           </div>
-          <p class="muted" style="font-size:12px;margin:8px 0 0">Fires whenever a patient's name can't be found in SimplePractice's search while booking — as a desktop notification AND logged on the <button class="link" data-goto="alerts">Alerts</button> screen, so it's never missed. Agency/organization rows (e.g. "…Contract Agency") are never patients and never trigger this.</p>
+          <p class="muted" style="font-size:12px;margin:8px 0 0">After each sync, a desktop notification if any visit couldn't be booked (therapist not recognized, patient not found, billing provider not set, save failed) or was booked with backup codes. Every one is listed on the <button class="link" data-goto="alerts">Alerts</button> screen either way. Agency and contracted rows are never booked and never alert.</p>
         </div>
 
         <div class="callout small">
@@ -362,12 +362,12 @@
       <section class="view hidden" data-view="alerts">
         <header class="view-head">
           <h1>Alerts</h1>
-          <p class="muted">Patients the SimplePractice search couldn't find while booking — nothing was booked for them, so they need a manual look. Agency/organization rows are never patients and never show up here.</p>
+          <p class="muted">Every visit a sync couldn't book, with the therapist and the reason, so it can be booked by hand or fixed for next time. Also visits that were booked but need a check (backup codes, a clinician that couldn't be changed). Agency and contracted rows are never booked and never show up here.</p>
         </header>
 
         <div class="card">
           <div class="row" style="justify-content:space-between;align-items:center">
-            <div class="card-k" style="margin:0">Missing patients</div>
+            <div class="card-k" style="margin:0">Visits that need a look</div>
             <button class="btn" id="alertsClearBtn">Clear all</button>
           </div>
           <div id="alertsList" style="margin-top:10px"></div>
@@ -579,16 +579,22 @@
       <div class="modal">
         <h2 id="clientModalTitle">Add Client</h2>
         <p class="muted modal-sub">Payer type decides how this client's visits are booked in SimplePractice.</p>
-        <label class="field">
-          <span>Full name</span>
-          <input type="text" id="clientName" placeholder="As it appears in Practice Fusion" autocomplete="off" />
-        </label>
+        <div class="row" style="gap:10px;align-items:flex-start">
+          <label class="field" style="width:120px;flex:none">
+            <span>Patient ID</span>
+            <input type="text" id="clientId" placeholder="000123" autocomplete="off" />
+          </label>
+          <label class="field" style="flex:1">
+            <span>Full name</span>
+            <input type="text" id="clientName" placeholder="As it appears in Practice Fusion" autocomplete="off" />
+          </label>
+        </div>
         <div class="field">
           <span>Payer type</span>
           <div class="payer-choices" role="radiogroup">
             <label class="payer-choice"><input type="radio" name="clientPayer" value="insurance" />
               <span class="payer-badge payer-insurance">Insurance</span>
-              <span class="payer-choice-d">Booked with the doctor's billing codes.</span></label>
+              <span class="payer-choice-d">Booked with the codes listed below for each therapist.</span></label>
             <label class="payer-choice"><input type="radio" name="clientPayer" value="private" />
               <span class="payer-badge payer-private">Private</span>
               <span class="payer-choice-d">Booked to the client's Self Pay record and saved, with no codes.</span></label>
@@ -597,6 +603,11 @@
               <span class="payer-choice-d">Billed through the contract and never added to SimplePractice.</span></label>
           </div>
         </div>
+        <label class="field" id="clientCodesField">
+          <span>Codes for each therapist</span>
+          <textarea id="clientCodes" rows="5" spellcheck="false" placeholder="One therapist per line, as on the payer sheet:&#10;Caryn: 97112 x 2 (GP), 97530 x 2 (GP, 59)&#10;Jessica/Danielle: 97112 x 2 (GO), 97530 x 2 (GO, 59)&#10;Jade: $165   ← that therapist's visits are private pay"></textarea>
+          <small class="muted" id="clientCodesHint">Each visit gets the codes on its therapist's line. A therapist who isn't listed gets the same-discipline line if there's only one, otherwise their standard codes, and the visit is flagged on Alerts.</small>
+        </label>
         <p class="modal-err hidden" id="clientErr"></p>
         <div class="modal-actions">
           <button class="btn" id="clientCancel">Cancel</button>
@@ -609,8 +620,9 @@
     <div class="modal-backdrop hidden" id="importModal" role="dialog" aria-modal="true" aria-labelledby="importModalTitle">
       <div class="modal">
         <h2 id="importModalTitle">Import client list</h2>
-        <p class="muted modal-sub">Paste one client per line, followed by their payer type, for example <strong>Jane Doe, Insurance</strong>. Rows copied straight from a spreadsheet work too. Clients already on the list are updated.</p>
-        <textarea id="importText" rows="10" placeholder="Jane Doe, Insurance&#10;John Smith, Private&#10;Sunrise Hospice, Contracted"></textarea>
+        <p class="muted modal-sub">Choose the <strong>Payer Status</strong> sheet saved as a CSV file (in Google Sheets: File → Download → Comma-separated values), or copy its rows, header included, and paste them here. The <strong>Patient ID</strong>, <strong>Patient Name</strong>, <strong>Payer Type</strong> and <strong>Insurance Code Bank</strong> columns are read. A plain list (<strong>Jane Doe, Insurance</strong>) works too. Clients already on the list are updated, matched by ID, then by name.</p>
+        <div class="row" style="margin-bottom:8px"><button class="btn" id="importFileBtn">Choose a CSV file…</button><input type="file" id="importFile" accept=".csv,.tsv,.txt,text/csv,text/tab-separated-values" class="hidden" /><span class="muted" id="importFileName" style="font-size:12px"></span></div>
+        <textarea id="importText" rows="10" spellcheck="false" placeholder="Patient ID, Patient Name, Payer Type, Insurance Code Bank&#10;000001, Jane Doe, Insurance, Caryn: 97112 x 2 (GP), 97530 x 2 (GP, 59)&#10;…or one per line:  John Smith, Private"></textarea>
         <p class="modal-err hidden" id="importErr"></p>
         <div class="modal-actions">
           <button class="btn" id="importCancel">Cancel</button>

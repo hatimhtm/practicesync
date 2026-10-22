@@ -31,9 +31,10 @@ const DEFAULTS = {
   syncDaysAhead: 7,         // automatic runs sync a rolling window: today … today+N-1
   spFieldOverrides: null,   // first-run capture: SimplePractice field selectors not present in the demo
   selfPayClients: [],       // patients that are ALWAYS self-pay, regardless of appointment type
-  clientPayers: [],         // [{ name, status: 'private'|'insurance'|'contracted' }] — decides billing per client
+  clientPayers: [],         // [{ name, status: 'private'|'insurance'|'contracted', id?, codes? }] — decides billing + codes per client (codes = one "Therapist: codes" line each)
   billingVersion: 0,        // one-time billing migrations applied (2 = Oct 2026 codes + payer list)
   rosterSeeded: false,      // whether the built-in doctor roster was pre-loaded on first run
+  rosterVersion: 0,         // the practice's roster sheet merged in (3 = Oct 2026 "Billing Providers")
   bookedKeys: [],           // visit keys already booked, so live runs never double-book
   workflows: [],            // recorded workflows: [{ id, name, steps:[...], createdAt }]
   schedule: 'off',          // 'off' | '6h' | 'daily'
@@ -41,7 +42,7 @@ const DEFAULTS = {
   lastResult: null,
   setupComplete: false,
   alertOnMissingPatient: true, // desktop notification when a patient can't be found in SimplePractice (agency/org rows never trigger this)
-  alerts: [],               // persisted log of missing-patient alerts: [{ id, patientName, date, at }], newest first
+  alerts: [],               // visits a sync couldn't book (or booked to check): [{ id, kind, patientName, therapist, discipline, billingProvider, date, reason, at }], newest first
   // Email alerts — same approach as the practice's Hope Reminder app: sends
   // through the agency's OWN mailbox (no third-party email service). The SMTP
   // username + app password live only in creds.bin (see setCreds); everything

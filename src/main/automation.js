@@ -1,6 +1,6 @@
 'use strict';
 
-const { matchProvider, mainCodeFor, isSelfPay, isSelfPayClient, payerStatusFor } = require('./model');
+const { matchProvider, mainCodeFor, isSelfPay, isSelfPayClient, clientFor, parseCodeBank, patientCodesFor, formatServices } = require('./model');
 const liveEngine = require('./liveEngine');
 
 /** Trim + drop blanks + drop case-insensitive duplicates, keeping first seen. */
@@ -65,6 +65,9 @@ function visitKey(v) {
   return [v.patientName, v.date, v.doctorName].map((s) => String(s || '').trim().toLowerCase()).join('|');
 }
 
+/** PT / OT / SLP for a big-doctor code, for messages. */
+const DISC_LABEL = { GP: 'PT', GO: 'OT', GN: 'SLP' };
+
 function planAppointments(visits, providers, mainDoctors = [], selfPayClients = [], clientPayers = []) {
   return visits.map((v) => {
     // A patient we searched for but couldn't open / had nothing to read — surface
@@ -80,9 +83,9 @@ function planAppointments(visits, providers, mainDoctors = [], selfPayClients = 
     }
     const { provider, confidence, reason } = matchProvider(v.doctorName, providers);
     const mainCode = provider ? mainCodeFor(provider.mainDoctor, mainDoctors) : '';
-    // Each service line = code + units + modifiers (the big doctor's 2-letter
-    // code first, then any per-code modifier like 59).
-    const services = provider ? (provider.codes || []).map((c) => ({
+    // The therapist's standard lines = code + units + modifiers (the big doctor's
+    // 2-letter code first, then any per-code modifier like 59).
+    const standard = provider ? (provider.codes || []).map((c) => ({
       code: c.code,
       units: c.units || 1,
       // Doctor code (GP/GO/GN) first, then the code's own modifiers — but DEDUPED
@@ -94,10 +97,31 @@ function planAppointments(visits, providers, mainDoctors = [], selfPayClients = 
     // Unlisted clients: self-pay if the appointment TYPE says so, OR the patient is
     // on the "always self-pay" override list. (Contracted clients are dropped
     // before planning — see sync.js.)
-    const payer = payerStatusFor(v.patientName, clientPayers);
-    const selfPay = payer === 'private' ? true
+    const client = clientFor(v.patientName, clientPayers);
+    const payer = client ? normPayerLocal(client.status) : '';
+    let selfPay = payer === 'private' ? true
       : payer === 'insurance' ? false
       : (isSelfPay(v.type) || isSelfPayClient(v.patientName, selfPayClients));
+    // The patient's own code list (from the practice's payer sheet) beats the
+    // therapist's standard codes; a "$" line makes that therapist's visits private.
+    let services = standard;
+    let codeSource = 'standard';
+    const warnings = [];
+    const bank = client && client.codes ? parseCodeBank(client.codes) : [];
+    if (provider && bank.length && payer !== 'private') {
+      const pick = patientCodesFor(bank, provider, mainCode);
+      const disc = DISC_LABEL[mainCode] || provider.discipline || '';
+      if (pick.entry && pick.entry.private) {
+        selfPay = true;
+        codeSource = 'patient';
+      } else if (pick.entry) {
+        services = pick.entry.codes.map((c) => ({ code: c.code, units: c.units || 1, modifiers: c.modifiers.slice() }));
+        codeSource = pick.source;
+        if (pick.source === 'discipline') warnings.push(`${provider.name} isn't on ${v.patientName}'s code list — used the ${disc} codes listed for ${pick.entry.names.join('/')} (${formatServices(pick.entry.codes)})`);
+      } else if (!selfPay) {
+        warnings.push(`${provider.name} isn't on ${v.patientName}'s code list — used ${provider.name}'s standard codes (${formatServices(standard) || 'none'})`);
+      }
+    }
     return {
       patientName: v.patientName,
       date: v.date,
@@ -108,6 +132,11 @@ function planAppointments(visits, providers, mainDoctors = [], selfPayClients = 
       // service + fee — NO CPT codes. Decided by the Practice Fusion appointment type.
       selfPay,
       payer,
+      patientId: client && client.id ? String(client.id) : '',
+      therapist: provider ? provider.name : (v.doctorName || ''),
+      discipline: provider ? (DISC_LABEL[mainCode] || provider.discipline || '') : '',
+      codeSource,
+      warnings,
       matched: Boolean(provider),
       mainDoctor: provider ? provider.mainDoctor : null,
       mainCode,
@@ -167,4 +196,9 @@ async function runSync({ providers = [], mainDoctors = [], count = 6, dryRun = t
   return { ok: true, dryRun, planned, created, unmatched, skipped, failed, bookedKeys: dedup ? [...already] : bookedKeys, newlyBooked };
 }
 
-module.exports = { runSync, planAppointments, readVisits, createAppointment };
+function normPayerLocal(t) {
+  const x = String(t || '').trim().toLowerCase();
+  return /^contract/.test(x) ? 'contracted' : /^insur/.test(x) ? 'insurance' : /^(private|self)/.test(x) ? 'private' : '';
+}
+
+module.exports = { runSync, planAppointments, readVisits, createAppointment, DISC_LABEL };

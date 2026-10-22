@@ -259,6 +259,59 @@ function parsePayers(text) {
   }
   return { ok, bad };
 }
+// The payer sheet: Patient ID, Patient Name, Payer Type, Insurance Code Bank.
+// Comma- or tab-separated (a CSV download, or rows copied from the sheet), with
+// quoted cells that may hold several lines (one therapist per line).
+function parseDelimited(text) {
+  const src = String(text || '').replace(/^\uFEFF/, '');
+  const firstLine = src.split(/\r?\n/, 1)[0] || '';
+  const delim = firstLine.includes('\t') ? '\t' : ',';
+  const rows = []; let row = []; let cell = ''; let quoted = false;
+  for (let i = 0; i < src.length; i++) {
+    const ch = src[i];
+    if (quoted) {
+      if (ch === '"' && src[i + 1] === '"') { cell += '"'; i++; }
+      else if (ch === '"') quoted = false;
+      else cell += ch;
+    } else if (ch === '"' && cell === '') quoted = true;
+    else if (ch === delim) { row.push(cell); cell = ''; }
+    else if (ch === '\n' || ch === '\r') {
+      if (ch === '\r' && src[i + 1] === '\n') i++;
+      row.push(cell); rows.push(row); row = []; cell = '';
+    } else cell += ch;
+  }
+  if (cell !== '' || row.length) { row.push(cell); rows.push(row); }
+  return rows.filter((r) => r.some((c) => String(c).trim()));
+}
+/** The payer sheet's rows → { ok:[{id,name,status,codes}], bad:[...], sheet:true }, or null if it isn't one. */
+function parseSheet(text) {
+  const rows = parseDelimited(text);
+  if (!rows.length) return null;
+  const head = rows[0].map((c) => String(c).trim().toLowerCase());
+  const col = (re) => head.findIndex((h) => re.test(h));
+  const iName = col(/name/), iPayer = col(/payer|status/), iId = col(/\bid\b|patient id/), iCodes = col(/code/);
+  if (iName < 0 || iPayer < 0) return null;
+  const ok = [], bad = [];
+  for (const r of rows.slice(1)) {
+    const name = String(r[iName] || '').trim().replace(/\s+/g, ' ');
+    if (!name) continue;
+    const status = normPayer(r[iPayer]);
+    if (!status) { bad.push(`${name} — payer type "${String(r[iPayer] || '').trim() || 'blank'}"`); continue; }
+    const codes = iCodes >= 0 ? String(r[iCodes] || '').split(/\r?\n/).map((l) => l.trim()).filter(Boolean).join('\n') : undefined;
+    ok.push({ id: iId >= 0 ? String(r[iId] || '').trim() : '', name, status, ...(codes !== undefined ? { codes } : {}) });
+  }
+  return { ok, bad, sheet: true };
+}
+/** Who a client's code list names, for the table ("Caryn, Jessica/Danielle"). */
+function codeSummary(text) {
+  const out = [];
+  for (const line of String(text || '').split(/\r?\n/)) {
+    const re = /([A-Za-z][A-Za-z'’.-]*(?:\s*\/\s*[A-Za-z][A-Za-z'’.-]*|\s+[A-Za-z][A-Za-z'’.-]*){0,3})\s*:/g;
+    let m; while ((m = re.exec(line))) out.push(m[1].replace(/\s*\/\s*/g, '/').trim());
+  }
+  return out.join(', ');
+}
+
 function payerBadge(status) {
   return `<span class="payer-badge payer-${status}">${PAYER_LABEL[status] || status}</span>`;
 }
@@ -283,11 +336,13 @@ function renderClients() {
   const rows = clients
     .map((c, i) => ({ c, i }))
     .filter(({ c }) => (clientFilter === 'all' || c.status === clientFilter)
-      && (!q || q.split(' ').every((t) => clientKey(c.name).includes(t))));
+      && (!q || q.split(' ').every((t) => clientKey(c.name).includes(t) || String(c.id || '').includes(t))));
   $('#clientRows').innerHTML = rows.map(({ c, i }) => `
     <tr data-i="${i}">
+      <td class="client-id">${escapeHtml(c.id || '')}</td>
       <td class="client-name">${escapeHtml(c.name)}</td>
       <td>${payerBadge(c.status)}</td>
+      <td class="client-codes" title="${escapeHtml(c.codes || '')}">${c.status === 'contracted' ? '' : escapeHtml(codeSummary(c.codes)) || (c.status === 'insurance' ? '<span class="muted">standard codes</span>' : '')}</td>
       <td class="client-row-actions">
         <button class="btn btn-sm client-edit" data-i="${i}">Edit</button>
         <button class="btn btn-sm client-del" data-i="${i}" title="Remove client">Remove</button>
@@ -322,10 +377,12 @@ function modalError(id, msg) { const e = $(id); e.textContent = msg || ''; e.cla
 
 function openClientModal(i = -1) {
   clientEditIdx = i;
-  const c = i >= 0 ? clients[i] : { name: '', status: '' };
+  const c = i >= 0 ? clients[i] : { name: '', status: '', id: '', codes: '' };
   $('#clientModalTitle').textContent = i >= 0 ? 'Edit Client' : 'Add Client';
   $('#clientSave').textContent = i >= 0 ? 'Save Changes' : 'Add Client';
   $('#clientName').value = c.name;
+  $('#clientId').value = c.id || '';
+  $('#clientCodes').value = c.codes || '';
   $$('input[name="clientPayer"]').forEach((r) => { r.checked = r.value === c.status; });
   modalError('#clientErr', '');
   openModal('#clientModal');
@@ -340,7 +397,13 @@ $('#clientSave').addEventListener('click', async () => {
   if (!picked) return modalError('#clientErr', 'Choose a payer type.');
   const dup = clients.findIndex((c, j) => j !== clientEditIdx && clientKey(c.name) === clientKey(name));
   if (dup >= 0) return modalError('#clientErr', `${clients[dup].name} is already on the list. Edit that entry instead.`);
-  const entry = { name, status: picked.value };
+  const id = $('#clientId').value.trim();
+  const codes = $('#clientCodes').value.split(/\r?\n/).map((l) => l.trim()).filter(Boolean).join('\n');
+  if (id) {
+    const sameId = clients.findIndex((c, j) => j !== clientEditIdx && String(c.id || '') === id);
+    if (sameId >= 0) return modalError('#clientErr', `Patient ID ${id} already belongs to ${clients[sameId].name}.`);
+  }
+  const entry = { ...(clientEditIdx >= 0 ? clients[clientEditIdx] : {}), name, status: picked.value, id, codes };
   if (clientEditIdx >= 0) clients[clientEditIdx] = entry; else clients.push(entry);
   closeModal('#clientModal');
   await saveClients(clientEditIdx >= 0 ? `Saved ${name}.` : `Added ${name} as ${PAYER_LABEL[entry.status]}.`);
@@ -348,20 +411,41 @@ $('#clientSave').addEventListener('click', async () => {
 
 $('#importClientsBtn').addEventListener('click', () => {
   $('#importText').value = '';
+  $('#importFileName').textContent = '';
   modalError('#importErr', '');
   openModal('#importModal');
   setTimeout(() => $('#importText').focus(), 30);
 });
 $('#importCancel').addEventListener('click', () => closeModal('#importModal'));
+$('#importFileBtn').addEventListener('click', () => $('#importFile').click());
+$('#importFile').addEventListener('change', async (e) => {
+  const file = e.target.files && e.target.files[0];
+  e.target.value = '';
+  if (!file) return;
+  $('#importText').value = await file.text();
+  $('#importFileName').textContent = file.name;
+  modalError('#importErr', '');
+});
 $('#importSave').addEventListener('click', async () => {
-  const { ok, bad } = parsePayers($('#importText').value);
-  if (bad.length) return modalError('#importErr', `${bad.length} line${bad.length === 1 ? '' : 's'} couldn't be read. Each line needs a name followed by Private, Insurance or Contracted. First one: "${bad[0]}"`);
-  if (!ok.length) return modalError('#importErr', 'Paste at least one client.');
+  const text = $('#importText').value;
+  const sheet = parseSheet(text);
+  const { ok, bad } = sheet || parsePayers(text);
+  if (bad.length) {
+    return modalError('#importErr', sheet
+      ? `${bad.length} row${bad.length === 1 ? '' : 's'} had a payer type that isn't Insurance, Private Pay or Contract Agency. First one: ${bad[0]}`
+      : `${bad.length} line${bad.length === 1 ? '' : 's'} couldn't be read. Each line needs a name followed by Private, Insurance or Contracted. First one: "${bad[0]}"`);
+  }
+  if (!ok.length) return modalError('#importErr', 'Choose a file or paste at least one client.');
   let added = 0, updated = 0;
   for (const e of ok) {
-    const j = clients.findIndex((c) => clientKey(c.name) === clientKey(e.name));
-    if (j >= 0) { if (clients[j].status !== e.status) updated += 1; clients[j] = { ...clients[j], status: e.status }; }
-    else { clients.push(e); added += 1; }
+    // Match by Patient ID first (a renamed client keeps their ID), then by name.
+    let j = e.id ? clients.findIndex((c) => String(c.id || '') === e.id) : -1;
+    if (j < 0) j = clients.findIndex((c) => clientKey(c.name) === clientKey(e.name));
+    if (j >= 0) {
+      const before = JSON.stringify(clients[j]);
+      clients[j] = { ...clients[j], ...e, id: e.id || clients[j].id || '' };
+      if (JSON.stringify(clients[j]) !== before) updated += 1;
+    } else { clients.push(e); added += 1; }
   }
   closeModal('#importModal');
   await saveClients(`Imported: ${added} added, ${updated} updated.`);
@@ -653,7 +737,7 @@ if ($('#syncDaysAhead')) $('#syncDaysAhead').addEventListener('change', async (e
 $$('#alertMissingSeg button').forEach((b) => b.addEventListener('click', async () => {
   await window.api.saveSettings({ alertOnMissingPatient: b.dataset.val === 'on' });
   await refresh();
-  toast(b.dataset.val === 'on' ? 'Alert enabled — you\'ll be notified when a patient isn\'t found.' : 'Alert disabled.');
+  toast(b.dataset.val === 'on' ? 'You\'ll be notified when a visit isn\'t booked.' : 'Notifications off — Alerts still lists every visit.');
 }));
 
 /* ------------------------------ test drive ------------------------------ */
@@ -782,6 +866,13 @@ async function renderWorkflowList() {
 }
 
 /* ------------------------------ alerts ------------------------------ */
+const ALERT_LABEL = {
+  unmatched: 'Not booked · therapist not recognized',
+  client_not_found: 'Not booked · patient not found in SimplePractice',
+  clinician: 'Not booked · billing provider couldn’t be set',
+  failed: 'Not booked · couldn’t be saved',
+  check: 'Booked · check it',
+};
 function renderAlertRows(alerts) {
   const list = $('#alertsList');
   const badge = $('#alertsBadge');
@@ -790,12 +881,16 @@ function renderAlertRows(alerts) {
     badge.classList.toggle('hidden', alerts.length === 0);
   }
   if (!list) return;
-  if (!alerts.length) { list.innerHTML = '<p class="muted" style="font-size:13px;margin:6px 0 0">No alerts — every patient searched for has been found in SimplePractice.</p>'; return; }
+  if (!alerts.length) { list.innerHTML = '<p class="muted" style="font-size:13px;margin:6px 0 0">Nothing to look at — every visit the syncs read was booked.</p>'; return; }
   list.innerHTML = '';
   alerts.forEach((a) => {
+    const kind = a.kind || 'client_not_found';
     const row = document.createElement('div');
-    row.className = 'wf-row';
-    row.innerHTML = `<div class="wf-meta"><b>${escapeHtml(a.patientName || '(unnamed)')}</b><span class="muted"> · not found${a.date ? ' for ' + escapeHtml(a.date) : ''} · ${fmtTime(a.at)}</span></div>`;
+    row.className = `alert-row alert-${kind === 'check' ? 'check' : 'problem'}`;
+    const who = [a.therapist, a.discipline && `(${a.discipline})`].filter(Boolean).join(' ');
+    row.innerHTML = `<div class="alert-top"><span class="alert-kind">${escapeHtml(ALERT_LABEL[kind] || 'Needs a look')}</span><span class="muted">${a.date ? escapeHtml(a.date) + ' · ' : ''}found ${fmtTime(a.at)}</span></div>
+      <div class="alert-who"><b>${escapeHtml(a.patientName || '(unnamed)')}</b>${who ? ` <span class="muted">—</span> ${escapeHtml(who)}` : ''}${a.billingProvider && kind !== 'unmatched' ? ` <span class="muted">· bills under ${escapeHtml(a.billingProvider)}</span>` : ''}</div>
+      ${a.reason || kind === 'client_not_found' ? `<div class="alert-why">${escapeHtml(a.reason || 'Not found in SimplePractice\'s client search — nothing was booked.')}</div>` : ''}`;
     list.appendChild(row);
   });
 }
@@ -808,7 +903,7 @@ if ($('#alertsClearBtn')) $('#alertsClearBtn').addEventListener('click', async (
   loadAlerts();
   toast('Alerts cleared.');
 });
-window.api.onAlertAdded(async () => { await loadAlerts(); toast('⚠️ A patient wasn\'t found in SimplePractice — see Alerts.'); });
+window.api.onAlertAdded(async () => { await loadAlerts(); toast('⚠️ Some visits need a look — see Alerts.'); });
 
 window.api.onRecordEvent((s) => {
   if (!s) return;
@@ -1038,7 +1133,9 @@ function lvKind(t) {
   if (/^Done —/.test(t)) return 'done';
   if (/^Booked .*✓/.test(t)) return 'booked';
   if (/^Skip /.test(t)) return 'skip';
-  if (/^(Could not book|Alert:)|could NOT|⚠︎|failed|error/i.test(t)) return 'problem';
+  // The end-of-run list ("Not booked (3) — …", "Booked, but check (1):", "• …"): shown, never counted twice.
+  if (/^(Not booked \(|Booked, but check \(|• )/.test(t)) return 'summary';
+  if (/^(Could not book|Not booked:|Alert:)|could NOT|⚠︎|failed|error/i.test(t)) return 'problem';
   if (/^Client: /.test(t)) return 'client';
   if (LV_DETAIL.test(t)) return 'detail';
   return 'phase';
@@ -1076,7 +1173,7 @@ function lvAdd(s) {
   const span = `<span>${escapeHtml(t)}</span>`;
   LV.raw.push(`${time}  ${t}`);
   const kind = lvKind(t);
-  if (kind !== 'detail') $('#lvNow').textContent = t.replace(/\s*✓$/, '');
+  if (kind !== 'detail' && kind !== 'summary') $('#lvNow').textContent = t.replace(/\s*✓$/, '');
 
   if (kind === 'client') {
     lvOpenGroup(t.replace(/^Client:\s*/, '').replace(/\s*\[.*?\]/, '').replace(/\s*\(.*\)/, '').replace(/\s*✓\s*$/, '').trim(), time);
@@ -1101,6 +1198,9 @@ function lvAdd(s) {
       else if (LV.group.el.dataset.state === 'working') lvState(LV.group, 'warn', 'Check this');
       LV.group.body.appendChild(line);
     } else LV.feed.appendChild(line);
+  } else if (kind === 'summary') {
+    lvCloseGroup();
+    LV.feed.appendChild(lvLine(time, /^• /.test(t) ? span : `<strong>${escapeHtml(t)}</strong>`, 'lv-problem'));
   } else if (kind === 'skip') {
     LV.skipped += 1;
     lvCloseGroup();

@@ -13,7 +13,11 @@ const path = require('path');
 const { JSDOM } = require('jsdom');
 const { extractVisits } = require(path.join(__dirname, '..', 'src', 'main', 'extract'));
 const { planAppointments } = require(path.join(__dirname, '..', 'src', 'main', 'automation'));
-const { DEMO_PROVIDERS, DEMO_MAIN_DOCTORS, matchProvider } = require(path.join(__dirname, '..', 'src', 'main', 'model'));
+const { DEMO_PROVIDERS, DEMO_MAIN_DOCTORS, matchProvider, mergeRoster, makeProvider, UNIT_CODES } = require(path.join(__dirname, '..', 'src', 'main', 'model'));
+// The roster an install that ran before Oct 2026 ends up with: the October sheet
+// merged over the July one keeps Sally Connolly (who's no longer on the sheet),
+// since the merge never removes anyone the office had.
+const INSTALLED = mergeRoster([makeProvider({ name: 'Sally Connolly', discipline: 'SLP', mainDoctor: 'Karine Rocha de Benedicto', codes: UNIT_CODES['Karine Rocha de Benedicto'] })]).providers;
 const presets = require(path.join(__dirname, '..', 'src', 'main', 'presets'));
 
 let pass = 0; const fails = [];
@@ -74,7 +78,7 @@ const SP_HTML = `<!doctype html><html><body>
   console.log('# Doctor matcher — single first names + Practice Fusion surname initials');
   // Real roster: full names, Practice Fusion shows a surname initial or a nickname.
   for (const [pf, want] of [['Shanina s', 'Shanina Smith'], ['Sally S', 'Sally Connolly'], ['Gianna G', 'Gianna Hernandez'], ['Sam Comrie', 'Samantha Comrie'], ['Yamela Cando', 'Yamela Cando']]) {
-    const r = matchProvider(pf, DEMO_PROVIDERS);
+    const r = matchProvider(pf, INSTALLED);
     check(`"${pf}" → ${want}`, !!r.provider && r.provider.name === want);
   }
 })();
@@ -120,7 +124,7 @@ const SP_HTML = `<!doctype html><html><body>
   console.log('# Read → plan with the roster (main doctor + codes + GP/GO/GN + 59)');
   const doc = new JSDOM(PF_HTML).window.document;
   const visits = extractVisits(doc, presets.PF.selectors, 50).map((x) => ({ ...x, patientName: x.patientName.trim(), doctorName: x.doctorName.trim() }));
-  const planned = planAppointments(visits, DEMO_PROVIDERS, DEMO_MAIN_DOCTORS);
+  const planned = planAppointments(visits, INSTALLED, DEMO_MAIN_DOCTORS);
   check('every appointment matched a provider', planned.every((p) => p.matched));
   const sh = planned.find((p) => p.doctorName === 'Shanina s');
   check('Shanina → Heather (GO) with 59 on 97530', sh.mainDoctor === 'Heather Vines-Dubose'

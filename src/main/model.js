@@ -170,8 +170,110 @@ function formatPayerList(list) {
 }
 /** The client's payer status ('private' | 'insurance' | 'contracted'), or '' if unlisted. */
 function payerStatusFor(name, list) {
-  const hit = (Array.isArray(list) ? list : []).find((c) => c && sameName(name, c.name));
+  const hit = clientFor(name, list);
   return hit ? normPayer(hit.status) : '';
+}
+/** The client's entry on the payer list ({ name, status, id?, codes? }), or null. */
+function clientFor(name, list) {
+  return (Array.isArray(list) ? list : []).find((c) => c && sameName(name, c.name)) || null;
+}
+
+/* ------------------------- per-patient code lists ------------------------- */
+// The practice keeps each insurance patient's codes per therapist, the way its
+// "Payer Status for patients" sheet writes them, one therapist per line:
+//   Caryn: 97112 x 2 (GP), 97530 x 2 (GP, 59)
+//   Jessica/Danielle/Heather: 97112 x 2 (GO), 97530 x 2 (GO, 59)
+//   Jade: $165                       ← that therapist's visits are private pay
+// A patient's own list wins over a therapist's standard codes. Modifiers are
+// used exactly as written (the sheet spells out GP/GO/GN and 59 per line).
+
+const G_MOD = /^G[PON]$/;
+// "Name:" / "Name/Name :" / "Nicole Williams:" — the label in front of each list.
+const LABEL_RE = /([A-Za-z][A-Za-z'’.-]*(?:\s*\/\s*[A-Za-z][A-Za-z'’.-]*|\s+[A-Za-z][A-Za-z'’.-]*){0,3})\s*:/g;
+
+/** One code list's text → [{ code, units, modifiers }] with modifiers from its brackets. */
+function parseBankCodes(text) {
+  const s = String(text || '');
+  const codeRe = /\b(\d{5}|[A-Z]\d{4})\b/g;
+  const hits = [];
+  let m;
+  while ((m = codeRe.exec(s))) hits.push({ code: m[1], start: m.index, end: codeRe.lastIndex });
+  return hits.map((h, i) => {
+    const seg = s.slice(h.end, i + 1 < hits.length ? hits[i + 1].start : s.length);
+    const u = /x\s*(\d+)|(\d+)\s*units?/i.exec(seg);
+    const units = u ? (parseInt(u[1] || u[2], 10) || 1) : 1;
+    const inBrackets = /\(([^)]*)\)/.exec(seg);
+    const modifiers = [];
+    for (const t of (inBrackets ? inBrackets[1] : '').split(/[\s,;]+/)) {
+      const v = t.trim().toUpperCase();
+      if (/^([A-Z]{2}|\d{2})$/.test(v) && !modifiers.includes(v)) modifiers.push(v);
+    }
+    return { code: h.code, units, modifiers };
+  });
+}
+
+/** A client's code-list text → [{ names:[...], codes:[...], private:boolean, raw }]. */
+function parseCodeBank(text) {
+  const out = [];
+  for (const line of String(text || '').split(/\r?\n/)) {
+    const labels = [];
+    let m;
+    LABEL_RE.lastIndex = 0;
+    while ((m = LABEL_RE.exec(line))) labels.push({ label: m[1], start: m.index, end: LABEL_RE.lastIndex });
+    labels.forEach((l, i) => {
+      const body = line.slice(l.end, i + 1 < labels.length ? labels[i + 1].start : line.length).trim();
+      const names = l.label.split('/').map((n) => n.trim()).filter(Boolean);
+      const isPrivate = /\$\s*\d|\b(private|self[\s-]?pay)\b/i.test(body);
+      out.push({ names, codes: isPrivate ? [] : parseBankCodes(body), private: isPrivate, raw: `${l.label.trim()}: ${body}`.trim() });
+    });
+  }
+  return out;
+}
+
+/** The GP/GO/GN a code list is written for, or ''. */
+function bankDiscipline(codes) {
+  for (const c of codes || []) for (const mod of c.modifiers || []) if (G_MOD.test(mod)) return mod;
+  return '';
+}
+
+/** Does a list's label ("Sam", "JR", "Nicole Williams") name this therapist? */
+function labelNames(label, provider) {
+  const want = normalizeName(label).split(' ').filter(Boolean);
+  const have = normalizeName(provider && provider.name).split(' ').filter(Boolean);
+  if (!want.length || !have.length) return false;
+  return want.every((w) => have.some((h) => h === w || (w.length >= 3 && h.length >= 3 && (h.startsWith(w) || w.startsWith(h)))));
+}
+
+/**
+ * Which of a patient's lists applies to this visit's therapist:
+ *   { source:'patient', entry }     — the list names the therapist
+ *   { source:'discipline', entry }  — it doesn't, but every list for the same
+ *                                     discipline (GP/GO/GN) carries the same codes
+ *   { source:'none' }               — use the therapist's standard codes
+ * A list written for another discipline never applies ("Sam" with speech codes is
+ * not Samantha the OT), and a private entry ("Jade: $165") wins as private pay.
+ */
+function patientCodesFor(bank, provider, mainCode) {
+  const entries = Array.isArray(bank) ? bank : [];
+  const fits = (e) => { const d = bankDiscipline(e.codes); return !d || !mainCode || d === mainCode; };
+  const named = entries.find((e) => (e.private || e.codes.length) && e.names.some((n) => labelNames(n, provider)) && fits(e));
+  if (named) return { source: 'patient', entry: named };
+  if (mainCode) {
+    const same = entries.filter((e) => !e.private && e.codes.length && bankDiscipline(e.codes) === mainCode);
+    const sets = new Set(same.map((e) => formatServices(e.codes)));
+    if (sets.size === 1) return { source: 'discipline', entry: same[0] };
+  }
+  return { source: 'none' };
+}
+
+/** Service lines as a comparable string ("97112 x2 (GO), 97530 x2 (GO,59)"). */
+function formatServices(codes) {
+  return (codes || []).map((c) => `${c.code} x${c.units || 1}${c.modifiers && c.modifiers.length ? ` (${c.modifiers.join(',')})` : ''}`).join(', ');
+}
+
+/** The therapists a code list names, for a short summary ("Caryn, Jessica/Danielle"). */
+function codeBankSummary(text) {
+  return parseCodeBank(text).map((e) => e.names.join('/') + (e.private ? ' (private)' : '')).join(', ');
 }
 
 /** Look up a big doctor's 2-letter modifier code from the configured list. */
@@ -281,51 +383,54 @@ const OLD_SPEECH_CODES = '92507 x1, 97550 x2';
 // intern, admin, social work, massage, aide) is still listed for completeness but
 // seeded with NO codes, so they can never book a wrong service until the user sets
 // codes themselves. The user can edit any of this on the Doctors & Codes screen.
-const THERAPY_DISCIPLINE = /\b(PT|DPT|CPT|OT|COTA|SOT|SLP|SLPA|CF|Cognition)\b/i;
+const THERAPY_DISCIPLINE = /\b(PT|PTA|DPT|CPT|OT|COTA|SOT|SLP|SLPA|CF|Cognition)\b/i;
 function seedProvider(name, discipline, mainDoctor) {
   const codes = THERAPY_DISCIPLINE.test(discipline) ? (UNIT_CODES[mainDoctor] || '') : '';
   return makeProvider({ name, discipline, mainDoctor, codes });
 }
 
-// The client's real roster (from their July 2026 sheet): every therapist under one
-// of the three main doctors. Loaded via "Load full roster" on Doctors & Codes.
+// The client's roster, from their October 2026 "Billing Providers for AI App"
+// sheet: every therapist and the billing provider (big doctor) they bill under.
+// A fresh install starts with it; an existing install merges it in once (see
+// mergeRoster) without touching anyone's codes.
 const C = 'Caryn McAllister', H = 'Heather Vines-Dubose', K = 'Karine Rocha de Benedicto';
 const DEMO_PROVIDERS = [
   // — Caryn McAllister · Physical Therapy —
-  seedProvider('Abby Ramage', 'PT', C),
   seedProvider('Caryn McAllister', 'PT', C),
-  seedProvider('Dave Quirante', 'PT', C),
   seedProvider('Delicatina Osipow', 'CPT', C),
   seedProvider('Erica Cutler', 'PT', C),
   seedProvider('Ernie Bojorquez', 'CPT', C),
   seedProvider('Francesca Fidaleo', 'Nurse', C),
   seedProvider('Gianna Hernandez', 'PT', C),
-  seedProvider('Gloria Lombardi', 'Intern', C),
   seedProvider('Heather Meehan', 'Nurse', C),
   seedProvider('Jade Lee MeeSook', 'LMT', C),
   seedProvider('Jennifer Barstrom', 'PT', C),
+  seedProvider('Joanne Paulino', 'PTA', C),
   seedProvider('John Pender', 'Flexologist', C),
   seedProvider('JR Meehan', 'PT', C),
+  seedProvider('Julie Connery-Smith', 'PT', C),
   seedProvider('Kempton Brisport', 'MSW', C),
+  seedProvider('Laurits (Mikel) Bensend', 'LMT', C),
   seedProvider('Lindsay Richard', 'PT', C),
-  seedProvider('Mayra Recine', 'DPT', C),
   seedProvider('Michael Goldsmith', 'PT', C),
   seedProvider('Michelle Minnocci', 'PT', C),
   seedProvider('Michelle Broggi', 'PT', C),
   seedProvider('Monica Jain', 'PT', C),
+  seedProvider('Nardeen Abdelsayed', 'PT', C),
   seedProvider('Nathalia (Lesly) Fajardo', 'LCSW/LMT', C),
   seedProvider('Nicole Nelson', 'Nurse', C),
-  seedProvider('Norma Dray', 'LMT', C),
   seedProvider('Olga Vera', 'Psychologist', C),
   seedProvider('Rebecca Passante', 'PT', C),
   seedProvider('Regis Saget', 'LMT', C),
+  seedProvider('Richard Boehmcke', 'NASM - CPT', C),
   seedProvider('Ron Hylton', 'LMT/CPT', C),
   seedProvider('Sarah Zahner', 'PT', C),
-  seedProvider('Thayly Santos Ponce', 'Intern/PT Aide', C),
   // — Heather Vines-Dubose · Occupational Therapy —
   seedProvider('Alexis Parker', 'COTA', H),
   seedProvider('Amanda Meyer', 'OT', H),
+  seedProvider('Bruce Francisco', 'COTA', H),
   seedProvider('Danielle Reichert', 'COTA', H),
+  seedProvider('Diana Alvarado', 'COTA', H),
   seedProvider('Hayley Brooks-Wallin', 'OT', H),
   seedProvider('Heather Vines-Dubose', 'OT', H),
   seedProvider('Jessica Trujillo', 'OT', H),
@@ -335,19 +440,66 @@ const DEMO_PROVIDERS = [
   seedProvider('Samantha Impellizeri (Scavo)', 'OT', H),
   seedProvider('Sara Florio', 'OT', H),
   seedProvider('Shanina Smith', 'COTA', H),
+  seedProvider('Susan Gainty', 'OT', H),
   // — Karine Rocha de Benedicto · Speech —
   seedProvider('Carolyn Finch-Hulme', 'SLP', K),
   seedProvider('Colleen Kopchik', 'SLPA', K),
+  seedProvider('Eileen McGonegal', 'SLP', K),
+  seedProvider('Elisa Isabella-Valenzi', 'SLP', K),
+  seedProvider('Evelyn Marin', 'SLP', K),
+  seedProvider('Francesca Day', 'SLP', K),
   seedProvider('Joan Black', 'SLP', K),
-  seedProvider('Kaitlyn Van Heusden', 'Rehab Aide', K),
   seedProvider('Karine Rocha de Benedicto', 'SLP', K),
-  seedProvider('Laurits (Mikel) Bensend', 'LMT', K),
   seedProvider('Paul Bertuglia', 'SLPA', K),
-  seedProvider('Sally Connolly', 'SLP', K),
   seedProvider('Samantha Comrie', 'SLP CF', K),
   seedProvider('Shandley McMurray-Brown', 'Cognition Specialist', K),
   seedProvider('Yamela Cando', 'SLP', K),
 ];
+
+// Bumped whenever DEMO_PROVIDERS changes, so existing installs merge it once.
+const ROSTER_VERSION = 3;
+
+/** Is roster entry `a` the same therapist as sheet entry `b`? Tolerates a name the
+ *  office typed short ("Nardeen A", "Nardeen") or in another order. */
+function sameStaff(a, b) {
+  if (sameName(a, b)) return true;
+  const ta = normalizeName(a).split(' ').filter(Boolean);
+  const tb = normalizeName(b).split(' ').filter(Boolean);
+  if (!ta.length || !tb.length) return false;
+  const pre = (x, y) => x === y || (x.length >= 3 && y.length >= 3 && (x.startsWith(y) || y.startsWith(x)));
+  if (!pre(ta[0], tb[0])) return false;
+  if (ta.length === 1 || tb.length === 1) return true;
+  const la = ta[ta.length - 1], lb = tb[tb.length - 1];
+  return la === lb || (la.length === 1 && lb[0] === la) || (lb.length === 1 && la[0] === lb) || pre(la, lb);
+}
+
+/**
+ * Merge the practice's latest roster into what's saved on this Mac, never losing
+ * anything: a therapist on the sheet who's missing is added (with the standard
+ * codes of their unit); one already there gets the sheet's billing provider and
+ * discipline but KEEPS their codes; anyone the office added who isn't on the
+ * sheet stays as they are. A short or same-first-name entry that could be two
+ * sheet people is left alone rather than guessed.
+ */
+function mergeRoster(current, sheet = DEMO_PROVIDERS) {
+  const providers = (Array.isArray(current) ? current : []).map((p) => ({ ...p }));
+  const changes = { added: [], moved: [] };
+  for (const s of sheet) {
+    const exact = providers.findIndex((p) => sameName(p.name, s.name));
+    let i = exact;
+    if (i === -1) {
+      const near = providers.map((p, j) => (sameStaff(p.name, s.name) ? j : -1)).filter((j) => j >= 0);
+      // Only a single, unambiguous near-match counts (one "Michelle" vs two on the sheet does not).
+      const rivals = sheet.filter((o) => o !== s && near.some((j) => sameStaff(providers[j].name, o.name)));
+      if (near.length === 1 && !rivals.length) i = near[0];
+    }
+    if (i === -1) { providers.push({ ...s, codes: (s.codes || []).map((c) => ({ ...c })) }); changes.added.push(s.name); continue; }
+    const p = providers[i];
+    if (normalizeName(p.mainDoctor) !== normalizeName(s.mainDoctor)) { changes.moved.push(`${p.name} → ${s.mainDoctor}`); p.mainDoctor = s.mainDoctor; }
+    if (s.discipline) p.discipline = s.discipline;
+  }
+  return { providers, ...changes };
+}
 
 module.exports = {
   normalizeName,
@@ -359,6 +511,16 @@ module.exports = {
   parsePayerList,
   formatPayerList,
   payerStatusFor,
+  clientFor,
+  parseCodeBank,
+  parseBankCodes,
+  bankDiscipline,
+  labelNames,
+  patientCodesFor,
+  formatServices,
+  codeBankSummary,
+  ROSTER_VERSION,
+  mergeRoster,
   UNIT_CODES,
   OLD_SPEECH_CODES,
   makeProvider,
