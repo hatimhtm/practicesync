@@ -171,5 +171,25 @@ const lines = (p) => p.services.map((s) => `${s.code}x${s.units}${s.modifiers.le
   check('a different day is a different visit', ledgerKey(v) !== ledgerKey({ ...v, date: '10/22/2026' }));
 })();
 
-console.log(`${passed} passed, ${failed} failed`);
-process.exit(failed ? 1 : 0);
+(async function testPresetService() {
+  console.log('# Preset service — no code means private, a code means insurance');
+  const { JSDOM } = require('jsdom');
+  const { readPresetService, SERVICE_CODE_RE } = require(path.join(__dirname, '..', 'src', 'main', 'book'));
+  const fakePage = (html) => {
+    const doc = new JSDOM(html).window.document;
+    return { $eval: async (sel, fn) => { const el = doc.querySelector(sel); if (!el) throw new Error('none'); return fn(el); } };
+  };
+  const sel = 'select[name="code"]';
+  const home = await readPresetService(fakePage('<select name="code"><option value="">Choose</option><option value="hv" selected>Home Visit</option></select>'), sel);
+  const ins = await readPresetService(fakePage('<select name="code"><option value="">Choose</option><option value="97112" selected>97112 Neuromuscular re-education</option></select>'), sel);
+  check('"Home Visit" → found, no code (private)', home.found && !home.hasCode);
+  check('"97112 Neuromuscular re-education" → has a code (insurance)', ins.found && ins.hasCode);
+  check('"Physical Therapy" / "Speech Therapy" have no code', !SERVICE_CODE_RE.test('Physical Therapy') && !SERVICE_CODE_RE.test('Speech Therapy'));
+  check('"L3807 Wrist hand finger orthosis" has a code', SERVICE_CODE_RE.test('L3807 Wrist hand finger orthosis'));
+  const p = plan('Casey Example', 'Gianna G', [], 'Physical Therapy');
+  check('unlisted private-looking visit still carries codes in reserve for an insurance preset', p.selfPay === true && p.services.length === 0 && p.insuranceServices.length > 0);
+  const q = plan('Avery Example', 'Gianna G', [{ name: 'Avery Example', status: 'Private' }]);
+  check('a client marked Private never has codes in reserve', q.insuranceServices.length === 0);
+  console.log(`${passed} passed, ${failed} failed`);
+  process.exit(failed ? 1 : 0);
+})();

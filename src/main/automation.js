@@ -143,6 +143,9 @@ function planAppointments(visits, providers, mainDoctors = [], selfPayClients = 
       codes: provider ? provider.codes : [],
       // Self-pay lines are preset in SimplePractice, so we never impose CPT services.
       services: selfPay ? [] : services,
+      // The codes this visit would carry if SimplePractice shows it's insurance
+      // (preset service with a code) — used only when the plan guessed private.
+      insuranceServices: provider && payer !== 'private' ? services : [],
       confidence,
       reason: provider ? undefined : (reason || 'not recognized'),
       key: visitKey(v),

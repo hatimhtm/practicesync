@@ -375,18 +375,44 @@ async function bookAppointment(page, appointment, { onStep, dryRun = true, overr
     if (c.status === 'locked') warnings.push(`Clinician couldn't be changed — SimplePractice shows "${c.shown || 'nothing'}", should be ${appointment.mainDoctor}.`);
   }
 
+  // PRIVATE OR INSURANCE — decided by the service SimplePractice pre-fills for
+  // this client. A preset with NO code ("Home Visit", "Physical Therapy") means
+  // private pay: its codes are already automated, so add none and just save. A
+  // preset that starts with a code ("97112 Neuromuscular re-education") means
+  // insurance. A client marked Private on the client list is never given codes.
+  let selfPay = !!appointment.selfPay;
+  let services = appointment.services || [];
+  const preset = await readPresetService(page, S.codeSelect);
+  if (preset.found && !preset.hasCode) {
+    if (!selfPay) {
+      say(onStep, `Preset service is "${preset.label}" (no code) — private pay, not adding codes.`);
+      if (appointment.payer === 'insurance') warnings.push(`Client list says Insurance, but SimplePractice's preset service is "${preset.label}" (no code), so it was booked as private with no codes.`);
+    }
+    selfPay = true;
+  } else if (preset.found && preset.hasCode && selfPay) {
+    if (appointment.payer === 'private') {
+      warnings.push(`Client list says Private, but SimplePractice's preset service is "${preset.label}". Booked as private (no codes added) — check which is right.`);
+    } else if ((appointment.insuranceServices || []).length) {
+      selfPay = false;
+      services = appointment.insuranceServices;
+      say(onStep, `Preset service is "${preset.label}" — insurance, adding the codes.`);
+    }
+  } else if (!preset.found) {
+    say(onStep, `No preset service showed for ${appointment.patientName} — using the client list (${selfPay ? 'private' : 'insurance'}).`);
+  }
+
   // 4) LOCATION — pick the practice's location. It exists on the account now, so
   // the typeahead matches and selects it (and there is NO Escape anywhere, so the
   // dialog stays open). If it ever doesn't match, typeaheadSelect just moves on.
   // Private-pay clients have their place of service preset, so it's left alone.
-  if (!appointment.selfPay && presets.SP.defaultLocation && await page.$(S.locationTrigger)) {
+  if (!selfPay && presets.SP.defaultLocation && await page.$(S.locationTrigger)) {
     await typeaheadSelect(page, S.locationTrigger, presets.SP.defaultLocation, onStep, 'Location', S.locationSearchInput);
   }
 
   // SELF-PAY: the service ("Home Visit" etc.) and fee are PRESET on the client's
   // record in SimplePractice, so we add NO CPT codes — just save. Insurance
   // appointments fill the coded service lines below.
-  if (appointment.selfPay) {
+  if (selfPay) {
     say(onStep, 'Self-pay — service & fee are preset on this client; not adding codes.');
   } else {
   // SERVICES — one line per code (native <select>, verified). Add EVERY line and
@@ -394,7 +420,6 @@ async function bookAppointment(page, appointment, { onStep, dryRun = true, overr
   // boxes. (Filling per-line inline mis-indexed the shared modifier inputs, so a
   // later line's modifiers overwrote the first line's boxes and the later line was
   // left blank — the "sometimes forgets / wrong box" bug.)
-  const services = appointment.services || [];
   for (let i = 0; i < services.length; i++) {
     if (i > 0) {
       const addBtn = await page.$(S.addService);
@@ -507,6 +532,24 @@ async function spNavigateToDate(page, date, onStep) {
   return false;
 }
 
+/** A service label that starts with a billing code: "97112 …", "L3807 …". */
+const SERVICE_CODE_RE = /^\s*(\d{5}|[A-Z]\d{4})\b/;
+/**
+ * The service SimplePractice pre-fills on the first line once a client is picked.
+ * Waits briefly for it (it fills in after the client loads). { found, label, hasCode }.
+ */
+async function readPresetService(page, codeSelect) {
+  for (let i = 0; i < 12; i++) {
+    const label = await page.$eval(codeSelect, (el) => {
+      const o = el.selectedIndex >= 0 ? el.options[el.selectedIndex] : null;
+      return o && o.value ? (o.textContent || '').trim() : '';
+    }).catch(() => '');
+    if (label) return { found: true, label, hasCode: SERVICE_CODE_RE.test(label) };
+    await sleep(400);
+  }
+  return { found: false, label: '', hasCode: false };
+}
+
 /**
  * Read the day's existing appointments RELIABLY, for the duplicate check. Waits
  * for the calendar grid, then re-reads until the appointment count holds steady
@@ -542,4 +585,4 @@ async function spClientsOnDate(page) {
   } catch { return []; }
 }
 
-module.exports = { bookAppointment, spNavigateToDate, spReadDay, spClientsOnDate, chooseOptionIndex, pickClinicianIndex, namesPerson, selectClinician };
+module.exports = { bookAppointment, spNavigateToDate, spReadDay, readPresetService, SERVICE_CODE_RE, spClientsOnDate, chooseOptionIndex, pickClinicianIndex, namesPerson, selectClinician };
