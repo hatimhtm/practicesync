@@ -62,6 +62,18 @@ function staggeredTime(index, total) {
   return `${h12}:${String(m).padStart(2, '0')} ${ampm}`;
 }
 
+/** Order a day's visits: each patient's 1st session, then 2nd sessions, then 3rd. */
+function spreadSessions(group) {
+  const seen = {};
+  const rounds = [];
+  for (const appt of group) {
+    const k = normalizeName(appt.patientName).split(' ').filter(Boolean).sort().join(' ');
+    const n = seen[k] = (seen[k] || 0) + 1;
+    (rounds[n - 1] = rounds[n - 1] || []).push(appt);
+  }
+  return rounds.flat();
+}
+
 /* --------------------------- outcomes per visit --------------------------- */
 // Every Practice Fusion visit ends up with an outcome, so nothing can go missing
 // silently: booked, already there, skipped by a rule, or NOT booked with the
@@ -137,8 +149,22 @@ function looseSameClient(title, name) {
   if (!fa || !fb) return false;
   return fa.startsWith(fb) || fb.startsWith(fa) || (fa.length >= 3 && fb.length >= 3 && fa.slice(0, 3) === fb.slice(0, 3));
 }
-function findLooseExisting(pool, name) {
-  return pool.find((t) => looseSameClient(t, name)) || '';
+/**
+ * A calendar entry that may be this visit under a different spelling. NOT one
+ * that's the same exact name (that person's other session — the PT/OT/SLP check
+ * already decided it isn't this visit), and NOT one tagged for another
+ * discipline ("Jane PT Doe" is her PT session, not her OT one): a patient can
+ * have several sessions a day, and every Practice Fusion visit is a real one.
+ */
+function findLooseExisting(pool, name, disc) {
+  const want = String(disc || '').toLowerCase();
+  const tagsOf = (n) => (String(n).match(/\b(pt|ot|slp)\b/gi) || []).map((t) => t.toLowerCase());
+  return pool.find((t) => {
+    if (sameName(plainTitle(t), name)) return false;
+    const tags = tagsOf(t);
+    if (tags.length && want && !tags.includes(want)) return false;
+    return looseSameClient(t, name);
+  }) || '';
 }
 
 /**
@@ -269,6 +295,9 @@ async function runFullSync({ secrets, dates, providers, mainDoctors, selfPayClie
       const group = byDate[date];
       // Give each of the day's appointments its own time across 9am–5pm, so they
       // don't all land on the same slot (the same-time stacking the user saw).
+      // A patient's 2nd/3rd session that day goes after everyone's 1st, so the same
+      // patient's sessions are hours apart instead of back-to-back 10 minutes apart.
+      group.splice(0, group.length, ...spreadSessions(group));
       group.forEach((appt, i) => { appt.time = staggeredTime(i, group.length); });
 
       const repeat = {};
@@ -285,7 +314,7 @@ async function runFullSync({ secrets, dates, providers, mainDoctors, selfPayClie
           result.skipped += 1; result.outcomes.push(outcome(appt, 'already', 'already booked earlier by Hope Billing Assistant'));
           say(onStep, `Skip ${appt.patientName} (${appt.therapist}) on ${date} — already booked earlier by Hope Billing Assistant`); continue;
         }
-        const similar = findLooseExisting(existingPool, appt.patientName);
+        const similar = findLooseExisting(existingPool, appt.patientName, disc === 'slp' || disc === 'ot' || disc === 'pt' ? disc : '');
         if (similar) {
           result.failed += 1;
           result.outcomes.push(outcome(appt, 'possible_duplicate', `“${similar}” is already on the calendar that day and looks like the same client, so it wasn't booked. If it's a different person, book it by hand.`));
@@ -341,4 +370,4 @@ function reportProblems(result, onStep) {
   }
 }
 
-module.exports = { runFullSync, expandDates, pfNavigateToDate, PROBLEM, takeExistingFrom, unmatchedReason, looseSameClient, ledgerKey };
+module.exports = { runFullSync, expandDates, pfNavigateToDate, PROBLEM, takeExistingFrom, unmatchedReason, looseSameClient, ledgerKey, findLooseExisting, spreadSessions };

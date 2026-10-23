@@ -338,7 +338,16 @@ async function bookAppointment(page, appointment, { onStep, dryRun = true, overr
   if (appointment.patientName) {
     // Self-pay → the "… Self Pay …" record; otherwise the discipline (GP/GO/GN → PT/OT/SLP) variant.
     const discTag = appointment.selfPay ? '' : (DISC_FOR_CODE[String(appointment.mainCode || '').toUpperCase()] || '');
-    const gotClient = await typeaheadSelect(page, S.clientTrigger, appointment.patientName, onStep, 'Client', S.clientSearchInput, S.codeSelect, discTag, appointment.selfPay);
+    let gotClient = await typeaheadSelect(page, S.clientTrigger, appointment.patientName, onStep, 'Client', S.clientSearchInput, S.codeSelect, discTag, appointment.selfPay);
+    if (!gotClient) {
+      // One more go on a FRESH new-appointment form — a search that came back empty
+      // once (slow results, a stuck dropdown) usually works the second time.
+      say(onStep, `Client: trying "${appointment.patientName}" again on a fresh form…`);
+      await page.goto(presets.SP.newApptUrl, { waitUntil: 'domcontentloaded' }).catch(() => {});
+      await dismissPopups(page);
+      await liveEngine.ensureStage(page);
+      gotClient = await typeaheadSelect(page, S.clientTrigger, appointment.patientName, onStep, 'Client', S.clientSearchInput, S.codeSelect, discTag, appointment.selfPay);
+    }
     if (!gotClient) return { ok: false, reason: 'client_not_found', error: `Could not select client "${appointment.patientName}" in SimplePractice (not found or didn't select).` };
   }
   await sleep(200);
@@ -480,22 +489,72 @@ async function bookAppointment(page, appointment, { onStep, dryRun = true, overr
   // appears ("Scheduling outside availability") — proceed anyway by clicking its
   // "Save appointment" button — OR it stays open (a field was rejected). Polling
   // (not a fixed sleep) so success returns fast and the modal is never missed.
-  const deadline = Date.now() + 9000;
-  let confirmed = false;
+  // SimplePractice can raise SEVERAL warnings in a row (outside availability, then
+  // "client already has an appointment at this time" for a patient's 2nd session),
+  // so each one is answered in turn — the earlier code answered only the first,
+  // which left the second open and the visit unsaved.
+  let deadline = Date.now() + 9000;
+  let confirms = 0;
+  let lastWarning = '';
   while (Date.now() < deadline) {
     if (!(await page.$(S.clientTrigger).catch(() => null))) { say(onStep, `Booked ${appointment.patientName} ✓`); return { ok: true, warnings }; }
-    if (!confirmed) {
-      const proceed = await page.$(S.confirmSave).catch(() => null);
-      if (proceed) {
-        confirmed = true;
-        say(onStep, 'Scheduling warning — clicking “Save appointment” to proceed…');
+    if (confirms < 4) {
+      const w = await findProceedButton(page, S.confirmSave);
+      if (w && w.text !== lastWarning) {
+        confirms += 1;
+        lastWarning = w.text;
+        say(onStep, `Scheduling warning${w.text ? `: “${w.text}”` : ''} — clicking “${w.label}” to proceed…`);
         await liveEngine.stage(page, 'press');
-        await proceed.click({ timeout: 2500 }).catch(async () => { try { await proceed.evaluate((el) => el.click()); } catch {} });
+        await w.handle.click({ timeout: 2500 }).catch(async () => { try { await w.handle.evaluate((el) => el.click()); } catch {} });
+        deadline = Date.now() + 9000;
+        await sleep(500);
+        continue;
+      } else if (w && confirms < 4) {
+        // Same warning still showing — the click didn't land; try it once more.
+        confirms += 1;
+        await w.handle.evaluate((el) => el.click()).catch(() => {});
       }
     }
-    await sleep(200);
+    await sleep(250);
   }
-  return { ok: false, error: 'Clicked Save but the dialog stayed open — a field was likely rejected.' };
+  const why = await visibleFormErrors(page);
+  return { ok: false, error: `Clicked Save but SimplePractice didn't save it${why ? ` — it said: “${why}”` : lastWarning ? ` — last warning: “${lastWarning}”` : ' (no message shown)'}.` };
+}
+
+// The "proceed anyway" button on a SimplePractice confirmation modal. Matches by
+// text, never a Cancel / Delete / Discard / Back button.
+const PROCEED_RE = /^(save appointment|save anyway|schedule anyway|book anyway|continue|proceed|yes,? (save|schedule|continue))\b/i;
+async function findProceedButton(page, confirmSel) {
+  let handle = await page.$(confirmSel).catch(() => null);
+  if (!handle) {
+    for (const b of await page.$$('[role="dialog"] button, .modal button, .ember-modal-dialog button').catch(() => [])) {
+      const t = ((await b.textContent().catch(() => '')) || '').trim();
+      if (PROCEED_RE.test(t) && await b.isVisible().catch(() => false)) { handle = b; break; }
+    }
+  }
+  if (!handle) return null;
+  const label = ((await handle.textContent().catch(() => '')) || '').trim().replace(/\s+/g, ' ') || 'Save appointment';
+  const text = await handle.evaluate((el) => {
+    const box = el.closest('[role="dialog"], .modal, .ember-modal-dialog, [class*="modal"]');
+    const t = box ? (box.innerText || box.textContent || '') : '';
+    return t.replace(/\s+/g, ' ').trim().slice(0, 220);
+  }).catch(() => '');
+  return { handle, label, text: text.replace(label, '').replace(/\bCancel\b/g, '').trim() };
+}
+
+/** Error text SimplePractice shows on the form when it refuses to save. */
+async function visibleFormErrors(page) {
+  return page.evaluate(() => {
+    const sel = '[role="alert"], .error, .errors, .field-error, .invalid-feedback, .form-error, .alert-danger, .flash-error, .validation-error, [class*="error-message"]';
+    const seen = new Set();
+    for (const el of document.querySelectorAll(sel)) {
+      const r = el.getBoundingClientRect();
+      if (!r.width || !r.height) continue;
+      const t = (el.innerText || el.textContent || '').replace(/\s+/g, ' ').trim();
+      if (t && t.length < 200) seen.add(t);
+    }
+    return [...seen].slice(0, 3).join(' · ');
+  }).catch(() => '');
 }
 
 // Parse the FullCalendar title ("Sat, Jun 27, 2026") to a day.
@@ -671,4 +730,4 @@ async function spClientsOnDate(page) {
   } catch { return []; }
 }
 
-module.exports = { bookAppointment, spNavigateToDate, spReadDay, readPresetService, SERVICE_CODE_RE, parseCalTitle, collectDayTitles, isoDay, spClientsOnDate, chooseOptionIndex, pickClinicianIndex, namesPerson, selectClinician };
+module.exports = { PROCEED_RE, bookAppointment, spNavigateToDate, spReadDay, readPresetService, SERVICE_CODE_RE, parseCalTitle, collectDayTitles, isoDay, spClientsOnDate, chooseOptionIndex, pickClinicianIndex, namesPerson, selectClinician };

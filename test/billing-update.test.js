@@ -13,7 +13,7 @@ const path = require('path');
 const m = require(path.join(__dirname, '..', 'src', 'main', 'model'));
 const { planAppointments } = require(path.join(__dirname, '..', 'src', 'main', 'automation'));
 const { pickClinicianIndex, namesPerson } = require(path.join(__dirname, '..', 'src', 'main', 'book'));
-const { takeExistingFrom, unmatchedReason, looseSameClient, ledgerKey } = require(path.join(__dirname, '..', 'src', 'main', 'sync'));
+const { takeExistingFrom, unmatchedReason, looseSameClient, ledgerKey, findLooseExisting, spreadSessions } = require(path.join(__dirname, '..', 'src', 'main', 'sync'));
 
 let passed = 0;
 let failed = 0;
@@ -169,6 +169,37 @@ const lines = (p) => p.services.map((s) => `${s.code}x${s.units}${s.modifiers.le
   check('ledger key ignores name order', ledgerKey(v) === ledgerKey({ ...v, patientName: 'Jane Doe' }));
   check('a second same-day visit gets its own key', ledgerKey(v, 1) !== ledgerKey(v, 2));
   check('a different day is a different visit', ledgerKey(v) !== ledgerKey({ ...v, date: '10/22/2026' }));
+})();
+
+(function testSeveralSessionsADay() {
+  console.log('# Several sessions a day — each Practice Fusion visit is real, never held as a duplicate');
+  // Re-running a day: the PT and SLP sessions were booked, the OT ones weren't.
+  const pool = ['Toby PT Fakename', 'Rowan SLP Testerly', 'Avery Self Pay Example'];
+  const decide = (name, disc) => {
+    if (takeExistingFrom(pool, name, disc)) return 'already';
+    return findLooseExisting(pool, name, disc) ? 'held' : 'book';
+  };
+  check('Toby\'s OT session → booked (his PT one is a different session)', decide('Toby Fakename', 'ot') === 'book');
+  check('Toby\'s PT session → already there', decide('Toby Fakename', 'pt') === 'already');
+  check('Rowan\'s PT session → booked', decide('Rowan Testerly', 'pt') === 'book');
+  check('Avery\'s 1st private session → already there', decide('Avery Example', '') === 'already');
+  check('Avery\'s 2nd private session → booked', decide('Avery Example', '') === 'book');
+  const pool2 = ['Sam PT Placeholder'];
+  check('a spelling variant for the SAME discipline is still held for review', findLooseExisting(pool2, 'Samuel Placeholder', 'pt') === 'Sam PT Placeholder');
+  check('…but not for a different discipline', findLooseExisting(pool2, 'Samuel Placeholder', 'ot') === '');
+  const day = spreadSessions([
+    { patientName: 'Toby Fakename', n: 1 }, { patientName: 'Toby Fakename', n: 2 },
+    { patientName: 'Rowan Testerly', n: 1 }, { patientName: 'Fakename, Toby', n: 3 }, { patientName: 'Avery Example', n: 1 },
+  ]);
+  check('each patient\'s 1st session first, then 2nd, then 3rd', day.map((a) => a.patientName.split(/[ ,]+/)[0] + a.n).join(' ') === 'Toby1 Rowan1 Avery1 Toby2 Fakename3');
+  check('no visit lost or added', day.length === 5);
+})();
+
+(function testProceedButtons() {
+  console.log('# Warning buttons it may click — never Cancel / Delete');
+  const { PROCEED_RE } = require(path.join(__dirname, '..', 'src', 'main', 'book'));
+  check('"Save appointment" / "Save anyway" / "Continue"', ['Save appointment', 'Save anyway', 'Continue', 'Schedule anyway'].every((t) => PROCEED_RE.test(t)));
+  check('never "Cancel" / "Delete" / "Discard changes" / "Go back"', !['Cancel', 'Delete', 'Discard changes', 'Go back', 'Delete appointment'].some((t) => PROCEED_RE.test(t)));
 })();
 
 (async function testPresetService() {
