@@ -893,6 +893,8 @@ const ALERT_LABEL = {
   client_not_found: 'Not booked · patient not found in SimplePractice',
   clinician: 'Not booked · billing provider couldn’t be set',
   failed: 'Not booked · couldn’t be saved',
+  unverified: 'Not booked · calendar couldn’t be checked',
+  possible_duplicate: 'Not booked · may already be on the calendar',
   check: 'Booked · check it',
 };
 function renderAlertRows(alerts) {

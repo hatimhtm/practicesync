@@ -86,7 +86,7 @@ function outcome(appt, status, reason = '', warnings = []) {
   };
 }
 
-const PROBLEM = new Set(['unmatched', 'client_not_found', 'clinician', 'failed']);
+const PROBLEM = new Set(['unmatched', 'client_not_found', 'clinician', 'failed', 'unverified', 'possible_duplicate']);
 
 /** "Toby Fakename — Nardeen Abdelsayed (PT)" */
 function visitLabel(o) {
@@ -117,6 +117,41 @@ function takeExistingFrom(pool, name, disc) {
   return true;
 }
 
+/** Name tokens, lowercased, without discipline / self-pay tags. */
+function nameTokens(n) {
+  return normalizeName(plainTitle(n)).split(' ').filter((t) => t && !/^(pt|ot|slp)$/.test(t));
+}
+/**
+ * A looser "same client?" for the duplicate check: same last name and first
+ * names that agree on their first 3 letters or where one starts the other
+ * ("Sam Placeholder" ~ "Samuel Placeholder", "Liz Testerly" is NOT "Elizabeth
+ * Testerly" but "Eliza Testerly" is). Used only to HOLD a booking for review — never to book.
+ */
+function looseSameClient(title, name) {
+  const a = nameTokens(title), b = nameTokens(name);
+  if (a.length < 2 || b.length < 2) return false;
+  const lastA = a[a.length - 1], lastB = b[b.length - 1];
+  const surname = lastA === lastB || a.includes(lastB) || b.includes(lastA);
+  if (!surname) return false;
+  const fa = a[0] === lastB ? a[1] : a[0], fb = b[0] === lastA ? b[1] : b[0];
+  if (!fa || !fb) return false;
+  return fa.startsWith(fb) || fb.startsWith(fa) || (fa.length >= 3 && fb.length >= 3 && fa.slice(0, 3) === fb.slice(0, 3));
+}
+function findLooseExisting(pool, name) {
+  return pool.find((t) => looseSameClient(t, name)) || '';
+}
+
+/**
+ * The local booking record: every visit this Mac has saved in SimplePractice.
+ * A visit already in it is never booked again, even if the calendar read misses
+ * it. `n` numbers a patient's repeat visits with the same therapist on one day,
+ * so a genuine second visit still gets its own entry.
+ */
+function ledgerKey(appt, n = 1) {
+  const sortTokens = (x) => normalizeName(x).split(' ').filter(Boolean).sort().join(' ');
+  return [appt.date || '', sortTokens(appt.patientName), String(appt.discipline || '').toLowerCase(), sortTokens(appt.therapist || appt.doctorName || ''), n].join('|');
+}
+
 /** Walk the Practice Fusion day arrows (visible cursor) until the heading matches. */
 async function pfNavigateToDate(page, target, onStep) {
   const want = parseTargetDay(target); if (!want) return false;
@@ -144,7 +179,7 @@ async function pfNavigateToDate(page, target, onStep) {
  * @param {function} opts.onMissingPatient  called with a patient name the SimplePractice
  *   search couldn't find (never called for agency/org rows — those are dropped earlier)
  */
-async function runFullSync({ secrets, dates, providers, mainDoctors, selfPayClients = [], clientPayers = [], save = false, onStep, onMissingPatient, overrides = null, context: existing } = {}) {
+async function runFullSync({ secrets, dates, providers, mainDoctors, selfPayClients = [], clientPayers = [], bookedVisits = [], onBooked = null, save = false, onStep, onMissingPatient, overrides = null, context: existing } = {}) {
   const result = { ok: true, planned: [], booked: 0, skipped: 0, failed: 0, unmatched: 0, missingPatients: [], outcomes: [], dryRun: !save };
   const own = !existing;
   let context = existing;
@@ -203,9 +238,24 @@ async function runFullSync({ secrets, dates, providers, mainDoctors, selfPayClie
     // 4) Book per date, skipping clients already on that day's calendar.
     const byDate = {};
     for (const p of all) (byDate[p.date] = byDate[p.date] || []).push(p);
+    const ledger = new Set((bookedVisits || []).map((b) => (typeof b === 'string' ? b : b && b.key)).filter(Boolean));
     for (const date of Object.keys(byDate)) {
-      await book.spNavigateToDate(page, date, onStep);
-      const existingClients = await book.spClientsOnDate(page);
+      // Never book a day we couldn't check: if the calendar won't open on this
+      // date, or its appointments can't be read, book NOTHING for the day — an
+      // unread calendar looks empty, and that is how a visit gets billed twice.
+      const onDay = await book.spNavigateToDate(page, date, onStep);
+      const day = onDay ? await book.spReadDay(page) : { ok: false, titles: [] };
+      if (!day.ok) {
+        const why = onDay ? 'couldn\'t read the SimplePractice calendar for this day' : 'couldn\'t open the SimplePractice calendar on this day';
+        say(onStep, `⚠︎ ${date}: ${why} — not booking this day, so nothing is booked twice.`);
+        for (const appt of byDate[date]) {
+          result.failed += 1;
+          result.outcomes.push(outcome(appt, 'unverified', `${why}, so it wasn't booked (to avoid a double booking). Run the sync again, or check the calendar and book by hand.`));
+        }
+        continue;
+      }
+      const existingClients = day.titles;
+      say(onStep, `SimplePractice already has ${existingClients.length} appointment${existingClients.length === 1 ? '' : 's'} on ${date} — checking each visit against them.`);
       // A mutable pool of the names already on today's calendar: each entry can
       // only account for ONE of this patient's visits, and is matched word-order/
       // format independent (sameName — "Doe, Jane" on the calendar still matches
@@ -221,11 +271,25 @@ async function runFullSync({ secrets, dates, providers, mainDoctors, selfPayClie
       // don't all land on the same slot (the same-time stacking the user saw).
       group.forEach((appt, i) => { appt.time = staggeredTime(i, group.length); });
 
+      const repeat = {};
       for (const appt of group) {
         const disc = appt.selfPay ? '' : String(appt.discipline || '').toLowerCase();
+        const base = ledgerKey(appt, 0);
+        repeat[base] = (repeat[base] || 0) + 1;
+        const key = ledgerKey(appt, repeat[base]);
         if (takeExisting(appt.patientName, disc === 'slp' || disc === 'ot' || disc === 'pt' ? disc : '')) {
           result.skipped += 1; result.outcomes.push(outcome(appt, 'already', 'already on the SimplePractice calendar'));
           say(onStep, `Skip ${appt.patientName} (${appt.therapist}) on ${date} — already booked`); continue;
+        }
+        if (ledger.has(key)) {
+          result.skipped += 1; result.outcomes.push(outcome(appt, 'already', 'already booked earlier by Hope Billing Assistant'));
+          say(onStep, `Skip ${appt.patientName} (${appt.therapist}) on ${date} — already booked earlier by Hope Billing Assistant`); continue;
+        }
+        const similar = findLooseExisting(existingPool, appt.patientName);
+        if (similar) {
+          result.failed += 1;
+          result.outcomes.push(outcome(appt, 'possible_duplicate', `“${similar}” is already on the calendar that day and looks like the same client, so it wasn't booked. If it's a different person, book it by hand.`));
+          say(onStep, `⚠︎ Holding ${appt.patientName} (${appt.therapist}) on ${date} — “${similar}” is already on the calendar; looks like the same client.`); continue;
         }
         let r;
         try { r = await book.bookAppointment(page, appt, { onStep, dryRun: !save, overrides }); }
@@ -233,6 +297,10 @@ async function runFullSync({ secrets, dates, providers, mainDoctors, selfPayClie
         const warnings = [...(appt.warnings || []), ...((r && r.warnings) || [])];
         if (r.ok) {
           result.booked += 1;
+          if (save) {
+            ledger.add(key);
+            if (typeof onBooked === 'function') { try { onBooked(key); } catch {} }
+          }
           result.outcomes.push(outcome(appt, save ? 'booked' : 'would-book', '', warnings));
           for (const w of warnings) say(onStep, `⚠︎ Check ${appt.patientName}: ${w}`);
         } else {
@@ -273,4 +341,4 @@ function reportProblems(result, onStep) {
   }
 }
 
-module.exports = { runFullSync, expandDates, pfNavigateToDate, PROBLEM, takeExistingFrom, unmatchedReason };
+module.exports = { runFullSync, expandDates, pfNavigateToDate, PROBLEM, takeExistingFrom, unmatchedReason, looseSameClient, ledgerKey };

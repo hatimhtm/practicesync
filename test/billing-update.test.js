@@ -13,7 +13,7 @@ const path = require('path');
 const m = require(path.join(__dirname, '..', 'src', 'main', 'model'));
 const { planAppointments } = require(path.join(__dirname, '..', 'src', 'main', 'automation'));
 const { pickClinicianIndex, namesPerson } = require(path.join(__dirname, '..', 'src', 'main', 'book'));
-const { takeExistingFrom, unmatchedReason } = require(path.join(__dirname, '..', 'src', 'main', 'sync'));
+const { takeExistingFrom, unmatchedReason, looseSameClient, ledgerKey } = require(path.join(__dirname, '..', 'src', 'main', 'sync'));
 
 let passed = 0;
 let failed = 0;
@@ -143,6 +143,32 @@ const lines = (p) => p.services.map((s) => `${s.code}x${s.units}${s.modifiers.le
   check('…and the reason names them', unmatchedReason(u) === '“Pat Unknown” isn\'t on Doctors & Codes — add them under their billing provider');
   const amb = plan('Toby Fakename', 'Michelle', []);
   check('a bare first name shared by two therapists → asks for the full name', /could be more than one therapist/.test(unmatchedReason(amb)));
+})();
+
+(function testPrivateNeverGetsCodes() {
+  console.log('# Private pay — never any codes, even with a code list or an insurance-looking visit');
+  const clients = [
+    { name: 'Avery Example', status: 'Private', codes: 'Gianna: 97110 x 2 (GP), 97140 x 2 (GP)' },
+    { name: 'Blake Example', status: 'Private' },
+  ];
+  const a = plan('Avery Example', 'Gianna G', clients, 'Follow-Up Visit');
+  const b = plan('Blake Example', 'Gianna G', clients, 'New Patient Visit');
+  check('private with a code list → self-pay, no services', a.selfPay === true && a.services.length === 0);
+  check('private on an insurance visit type → self-pay, no services', b.selfPay === true && b.services.length === 0);
+})();
+
+(function testDuplicateGuards() {
+  console.log('# Duplicate guards — a name variation is held, a different person is not');
+  check('"Sam Placeholder" ~ "Samuel Placeholder"', looseSameClient('Sam Placeholder', 'Samuel Placeholder'));
+  check('"Placeholder, Samuel" ~ "Sam Placeholder"', looseSameClient('Placeholder, Samuel', 'Sam Placeholder'));
+  check('tagged title "Kate PT Testerly" ~ "Katherine Testerly"', looseSameClient('Kate PT Testerly', 'Katherine Testerly'));
+  check('"Jane Doe" is NOT "John Doe"', !looseSameClient('Jane Doe', 'John Doe'));
+  check('"Jane Doe" is NOT "Jane Smith"', !looseSameClient('Jane Doe', 'Jane Smith'));
+  check('a single name never matches', !looseSameClient('Doe', 'Jane Doe'));
+  const v = { date: '10/21/2026', patientName: 'Doe, Jane', discipline: 'PT', therapist: 'Gianna Hernandez' };
+  check('ledger key ignores name order', ledgerKey(v) === ledgerKey({ ...v, patientName: 'Jane Doe' }));
+  check('a second same-day visit gets its own key', ledgerKey(v, 1) !== ledgerKey(v, 2));
+  check('a different day is a different visit', ledgerKey(v) !== ledgerKey({ ...v, date: '10/22/2026' }));
 })();
 
 console.log(`${passed} passed, ${failed} failed`);

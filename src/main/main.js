@@ -53,11 +53,26 @@ const ALERT_KIND = {
   client_not_found: 'Patient not found in SimplePractice',
   clinician: 'Billing provider could not be set',
   failed: 'Could not be saved',
+  unverified: 'Not booked — calendar could not be checked',
+  possible_duplicate: 'Not booked — may already be on the calendar',
   check: 'Booked — check it',
 };
 function alertKey(a) {
   return [a.date || '', normalizeName(a.patientName), normalizeName(a.therapist), a.kind || 'client_not_found'].join('|');
 }
+/** Save each booking the moment it's made (not at the end of the run), so a crash
+ *  or quit mid-run can never lose the record and lead to a second booking.
+ *  Entries older than 180 days are dropped. */
+const BOOKING_KEEP_MS = 180 * 86400e3;
+function recordBooking(key) {
+  try {
+    const now = Date.now();
+    const list = (store.load().bookedVisits || []).filter((b) => b && b.key && now - Date.parse(b.at || 0) < BOOKING_KEEP_MS && b.key !== key);
+    list.push({ key, at: new Date(now).toISOString() });
+    store.save({ bookedVisits: list });
+  } catch {}
+}
+
 function recordRunAlerts(res) {
   if (!res || res.dryRun || !Array.isArray(res.outcomes)) return [];
   const settings = store.load();
@@ -229,7 +244,7 @@ async function performWindowSync(trigger = 'manual') {
     const onStep = (text) => sendToRenderer('live-step', { text, at: nowISO() });
     const providers = (s.providers && s.providers.length) ? s.providers : DEMO_PROVIDERS;
     const mainDoctors = (s.mainDoctors && s.mainDoctors.length) ? s.mainDoctors : DEMO_MAIN_DOCTORS;
-    const res = await runFullSync({ secrets: creds, dates, providers, mainDoctors, clientPayers: s.clientPayers || [], save: true, overrides: s.spFieldOverrides, onStep });
+    const res = await runFullSync({ secrets: creds, dates, providers, mainDoctors, clientPayers: s.clientPayers || [], bookedVisits: s.bookedVisits || [], onBooked: recordBooking, save: true, overrides: s.spFieldOverrides, onStep });
     res.at = nowISO();
     recordRunAlerts(res);
     store.save({ lastRun: res.at, lastResult: { ok: res.ok, at: res.at, mode: 'live', trigger, created: res.booked || 0, skipped: res.skipped || 0, failed: res.failed || 0, unmatched: res.unmatched || 0, error: res.error } });
@@ -508,7 +523,7 @@ function registerIpc() {
     const mainDoctors = (s.mainDoctors && s.mainDoctors.length) ? s.mainDoctors : DEMO_MAIN_DOCTORS;
     sendToRenderer('live-step', { text: `Starting sync for ${dates.join(', ')}…`, at: nowISO(), reset: true });
     const onStep = (text) => sendToRenderer('live-step', { text, at: nowISO() });
-    const res = await runFullSync({ secrets: creds, dates, providers, mainDoctors, clientPayers: s.clientPayers || [], save: !!opts.save, overrides: s.spFieldOverrides, onStep });
+    const res = await runFullSync({ secrets: creds, dates, providers, mainDoctors, clientPayers: s.clientPayers || [], bookedVisits: s.bookedVisits || [], onBooked: recordBooking, save: !!opts.save, overrides: s.spFieldOverrides, onStep });
     res.at = nowISO();
     recordRunAlerts(res);
     sendToRenderer('run-finished', res);

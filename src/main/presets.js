@@ -71,6 +71,7 @@ const SP = {
     nextDay: '.fc-next-button',
     today: '.fc-today-button',
     apptTitle: '[data-appt-title]',   // attribute value = client name
+    grid: '.fc-view-harness, .fc-view', // FullCalendar's grid — present once the day view has rendered
   },
   selectors: {
     // Client is a typeahead: click the trigger, type into the input that appears,

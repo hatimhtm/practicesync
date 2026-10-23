@@ -507,6 +507,33 @@ async function spNavigateToDate(page, date, onStep) {
   return false;
 }
 
+/**
+ * Read the day's existing appointments RELIABLY, for the duplicate check. Waits
+ * for the calendar grid, then re-reads until the appointment count holds steady
+ * across three reads (appointments load in after the grid). Returns ok:false if
+ * the grid never appears or the page can't be read, so the caller books nothing
+ * rather than treating "couldn't read" as "the day is empty" (a double booking).
+ */
+async function spReadDay(page) {
+  const C = presets.SP.calendar;
+  const grid = await page.waitForSelector(C.grid, { timeout: 15000 }).catch(() => null);
+  if (!grid) return { ok: false, titles: [] };
+  let last = null, steady = 0;
+  for (let i = 0; i < 24 && steady < 2; i++) {
+    await sleep(600);
+    let titles;
+    try {
+      titles = await page.evaluate((sel) => [...document.querySelectorAll(sel)]
+        .map((e) => (e.getAttribute('data-appt-title') || '').trim()).filter(Boolean), C.apptTitle);
+    } catch { return { ok: false, titles: [] }; }
+    const sig = titles.slice().sort().join('\n');
+    steady = sig === last ? steady + 1 : 0;
+    last = sig;
+    if (steady >= 2) return { ok: true, titles };
+  }
+  return { ok: false, titles: [] };
+}
+
 /** Read the client names already booked on the currently-shown calendar day. */
 async function spClientsOnDate(page) {
   try {
@@ -515,4 +542,4 @@ async function spClientsOnDate(page) {
   } catch { return []; }
 }
 
-module.exports = { bookAppointment, spNavigateToDate, spClientsOnDate, chooseOptionIndex, pickClinicianIndex, namesPerson, selectClinician };
+module.exports = { bookAppointment, spNavigateToDate, spReadDay, spClientsOnDate, chooseOptionIndex, pickClinicianIndex, namesPerson, selectClinician };
