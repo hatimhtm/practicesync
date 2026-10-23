@@ -284,15 +284,32 @@ function parseDelimited(text) {
   return rows.filter((r) => r.some((c) => String(c).trim()));
 }
 /** The payer sheet's rows → { ok:[{id,name,status,codes}], bad:[...], sheet:true }, or null if it isn't one. */
+/** A file that isn't rows of text (a PDF or Excel file renamed .csv, a printout): what it is and
+ *  what to download instead, or '' when it reads as text. */
+const SHEET_FIX = 'In Google Sheets, open the patient tab and choose File → Download → Comma Separated Values (.csv), then choose that file here. (Print and PDF don\'t work.)';
+function notASheet(text) {
+  const s = String(text || '');
+  if (s.startsWith('%PDF')) return `This file is a PDF of the sheet, not a CSV, even if its name ends in .csv. ${SHEET_FIX}`;
+  if (s.startsWith('PK')) return `This file is an Excel or Numbers file, not a CSV. ${SHEET_FIX}`;
+  if (/[\u0000-\u0008\u000e-\u001a�]/.test(s.slice(0, 4000))) return `This file isn't a CSV. ${SHEET_FIX}`;
+  return '';
+}
 function parseSheet(text) {
   const rows = parseDelimited(text);
   if (!rows.length) return null;
-  const head = rows[0].map((c) => String(c).trim().toLowerCase());
+  // The header is usually the first row; a title row or two above it is fine.
+  let at = -1, head = [], iName = -1, iPayer = -1;
+  for (let i = 0; i < Math.min(rows.length, 10) && at < 0; i++) {
+    head = rows[i].map((c) => String(c).trim().toLowerCase());
+    iName = head.findIndex((h) => /name/.test(h));
+    iPayer = head.findIndex((h) => /payer|status/.test(h));
+    if (iName >= 0 && iPayer >= 0) at = i;
+  }
+  if (at < 0) return null;
   const col = (re) => head.findIndex((h) => re.test(h));
-  const iName = col(/name/), iPayer = col(/payer|status/), iId = col(/\bid\b|patient id/), iCodes = col(/code/);
-  if (iName < 0 || iPayer < 0) return null;
+  const iId = col(/\bid\b|patient id/), iCodes = col(/code/);
   const ok = [], bad = [];
-  for (const r of rows.slice(1)) {
+  for (const r of rows.slice(at + 1)) {
     const name = String(r[iName] || '').trim().replace(/\s+/g, ' ');
     if (!name) continue;
     const status = normPayer(r[iPayer]);
@@ -422,12 +439,17 @@ $('#importFile').addEventListener('change', async (e) => {
   const file = e.target.files && e.target.files[0];
   e.target.value = '';
   if (!file) return;
-  $('#importText').value = await file.text();
+  const text = await file.text();
   $('#importFileName').textContent = file.name;
-  modalError('#importErr', '');
+  const wrong = notASheet(text);
+  // Never fill the box with a PDF's insides: say what the file is and what to choose instead.
+  $('#importText').value = wrong ? '' : text;
+  modalError('#importErr', wrong);
 });
 $('#importSave').addEventListener('click', async () => {
   const text = $('#importText').value;
+  const wrong = notASheet(text);
+  if (wrong) return modalError('#importErr', wrong);
   const sheet = parseSheet(text);
   const { ok, bad } = sheet || parsePayers(text);
   if (bad.length) {
