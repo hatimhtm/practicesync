@@ -244,7 +244,7 @@ async function runFullSync({ secrets, dates, providers, mainDoctors, selfPayClie
       // date, or its appointments can't be read, book NOTHING for the day — an
       // unread calendar looks empty, and that is how a visit gets billed twice.
       const onDay = await book.spNavigateToDate(page, date, onStep);
-      const day = onDay ? await book.spReadDay(page) : { ok: false, titles: [] };
+      const day = onDay ? await book.spReadDay(page, date) : { ok: false, titles: [] };
       if (!day.ok) {
         const why = onDay ? 'couldn\'t read the SimplePractice calendar for this day' : 'couldn\'t open the SimplePractice calendar on this day';
         say(onStep, `⚠︎ ${date}: ${why} — not booking this day, so nothing is booked twice.`);

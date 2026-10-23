@@ -499,36 +499,95 @@ async function bookAppointment(page, appointment, { onStep, dryRun = true, overr
 }
 
 // Parse the FullCalendar title ("Sat, Jun 27, 2026") to a day.
-function parseCalTitle(s) {
-  const d = new Date(String(s || '').replace(/^[A-Za-z]+,\s*/, ''));
-  return isNaN(d) ? null : new Date(d.getFullYear(), d.getMonth(), d.getDate());
+/** Local-midnight Date → "YYYY-MM-DD" (the form FullCalendar puts in data-date). */
+function isoDay(d) {
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+}
+/**
+ * The calendar toolbar title → the range of days it shows, { start, end }.
+ * Handles "Sat, Jun 27, 2026", "Monday, October 26, 2026", "Oct 26" (no year →
+ * the target's year), and week ranges "Oct 26 – Nov 1, 2026" / "Oct 26 – 31, 2026".
+ */
+function parseCalTitle(s, yearHint) {
+  const t = String(s || '').replace(/\b(mon|tue|wed|thu|fri|sat|sun)[a-z]*,?\s*/gi, '').replace(/\s+/g, ' ').trim();
+  const part = /([a-z]{3,})\.?\s+(\d{1,2})(?:,?\s*(\d{4}))?/gi;
+  const hits = [];
+  let m;
+  while ((m = part.exec(t))) {
+    const mi = (MONTHS[m[1].slice(0, 3).toLowerCase()] || 0) - 1;
+    if (mi >= 0) hits.push({ mi, d: +m[2], y: m[3] ? +m[3] : null, end: part.lastIndex });
+  }
+  if (!hits.length) return null;
+  const year = (hits.find((h) => h.y) || {}).y || yearHint || new Date().getFullYear();
+  const first = hits[0];
+  const start = new Date(first.y || year, first.mi, first.d);
+  // "Oct 26 – 31, 2026": a bare day number after the dash shares the month.
+  const tail = /[–—-]\s*(\d{1,2})(?:,?\s*(\d{4}))?\s*$/.exec(t.slice(first.end));
+  let end = start;
+  if (hits[1]) end = new Date(hits[1].y || year, hits[1].mi, hits[1].d);
+  else if (tail) end = new Date(tail[2] ? +tail[2] : year, first.mi, +tail[1]);
+  if (end < start) end = new Date(end.getFullYear() + 1, end.getMonth(), end.getDate()); // "Dec 28 – Jan 3"
+  return { start, end };
 }
 function targetDay(s) {
   const mdy = toMDY(s); const m = /^(\d{2})\/(\d{2})\/(\d{4})$/.exec(mdy);
   return m ? new Date(+m[3], +m[1] - 1, +m[2]) : null;
 }
 
-/** Move the SimplePractice calendar to a date (MM/DD/YYYY or any parseable form). */
+/** The days the main calendar grid is showing, from FullCalendar's data-date tags. */
+async function visibleCalendarDays(page) {
+  return page.evaluate((grid) => {
+    const root = document.querySelector(grid);
+    if (!root) return [];
+    const days = [...root.querySelectorAll('[data-date]')].map((e) => (e.getAttribute('data-date') || '').slice(0, 10));
+    return [...new Set(days.filter((d) => /^\d{4}-\d{2}-\d{2}$/.test(d)))].sort();
+  }, presets.SP.calendar.grid).catch(() => []);
+}
+
+/**
+ * Move the SimplePractice calendar so it shows `date`. Works in Day, Week or
+ * Month view: it reads the dates the grid itself shows (FullCalendar tags each
+ * day with data-date), falling back to the toolbar title. Returns true only once
+ * the day is on screen; if it can't get there, says what SimplePractice showed.
+ */
 async function spNavigateToDate(page, date, onStep) {
   const C = presets.SP.calendar;
   const want = targetDay(date);
   if (!want) return false;
+  const wantIso = isoDay(want);
   await page.goto(presets.SP.calendarUrl, { waitUntil: 'domcontentloaded' }).catch(() => {});
   await dismissPopups(page);
-  await page.waitForSelector(C.title, { timeout: 6000 }).catch(() => {});
-  await sleep(400);
-  for (let i = 0; i < 200; i++) {
+  await page.waitForSelector(C.title, { timeout: 8000 }).catch(() => {});
+  await sleep(600);
+  let lastTitle = '';
+  let unreadable = 0;
+  for (let i = 0; i < 120; i++) {
     const el = await page.$(C.title);
-    const cur = parseCalTitle(el ? await el.textContent() : '');
-    if (!cur) { await sleep(250); continue; }
-    const diff = Math.round((want - cur) / 86400000);
-    if (diff === 0) { say(onStep, `SimplePractice calendar on ${toMDY(date)} ✓`); return true; }
-    const btn = diff > 0 ? C.nextDay : C.prevDay;
+    lastTitle = el ? ((await el.textContent().catch(() => '')) || '').trim() : '';
+    const days = await visibleCalendarDays(page);
+    let dir = 0;
+    if (days.length) {
+      if (days.includes(wantIso)) { say(onStep, `SimplePractice calendar on ${toMDY(date)} ✓`); return true; }
+      dir = wantIso < days[0] ? -1 : 1;
+    } else {
+      const r = parseCalTitle(lastTitle, want.getFullYear());
+      if (!r) {
+        if (++unreadable > 40) break; // ~15 s of a title we can't read
+        await sleep(350); continue;
+      }
+      if (want >= r.start && want <= r.end) {
+        if (+r.start === +r.end) { say(onStep, `SimplePractice calendar on ${toMDY(date)} ✓`); return true; }
+        break; // a multi-day view with no day tags — can't isolate the day safely
+      }
+      dir = want < r.start ? -1 : 1;
+    }
+    const btn = dir > 0 ? C.nextDay : C.prevDay;
     await liveEngine.stage(page, 'moveTo', btn).catch(() => {});
     await page.click(btn, { timeout: 4000 }).catch(() => {});
-    await sleep(300);
+    await sleep(450);
     await dismissPopups(page);
   }
+  say(onStep, `⚠︎ Couldn't get the SimplePractice calendar to ${toMDY(date)} — it showed "${lastTitle || 'no date heading'}".`);
   return false;
 }
 
@@ -557,18 +616,45 @@ async function readPresetService(page, codeSelect) {
  * the grid never appears or the page can't be read, so the caller books nothing
  * rather than treating "couldn't read" as "the day is empty" (a double booking).
  */
-async function spReadDay(page) {
+/** In the page: the appointment titles on one day. Events inside a day column
+ *  (data-date) count only for their own day; an event outside any column counts
+ *  only when the grid shows that single day. null = can't attribute safely. */
+function collectDayTitles({ grid, appt, iso }) {
+  const root = document.querySelector(grid) || document;
+  const days = new Set([...root.querySelectorAll('[data-date]')].map((e) => (e.getAttribute('data-date') || '').slice(0, 10)).filter(Boolean));
+  const out = [];
+  for (const e of document.querySelectorAll(appt)) {
+    const title = (e.getAttribute('data-appt-title') || '').trim();
+    if (!title) continue;
+    const col = e.closest('[data-date]');
+    if (col) { if ((col.getAttribute('data-date') || '').slice(0, 10) === iso) out.push(title); continue; }
+    if (days.size > 1) return null;
+    out.push(title);
+  }
+  return out;
+}
+
+async function spReadDay(page, date) {
   const C = presets.SP.calendar;
+  const want = date ? targetDay(date) : null;
+  const iso = want ? isoDay(want) : '';
   const grid = await page.waitForSelector(C.grid, { timeout: 15000 }).catch(() => null);
   if (!grid) return { ok: false, titles: [] };
+  // With no day tags on the grid, only a heading that names exactly this one day
+  // proves which day the appointments belong to.
+  if (want && !(await visibleCalendarDays(page)).length) {
+    const el = await page.$(C.title);
+    const r = parseCalTitle(el ? await el.textContent().catch(() => '') : '', want.getFullYear());
+    if (!r || +r.start !== +r.end || +r.start !== +want) return { ok: false, titles: [] };
+  }
   let last = null, steady = 0;
   for (let i = 0; i < 24 && steady < 2; i++) {
     await sleep(600);
     let titles;
     try {
-      titles = await page.evaluate((sel) => [...document.querySelectorAll(sel)]
-        .map((e) => (e.getAttribute('data-appt-title') || '').trim()).filter(Boolean), C.apptTitle);
+      titles = await page.evaluate(collectDayTitles, { grid: C.grid, appt: C.apptTitle, iso });
     } catch { return { ok: false, titles: [] }; }
+    if (!titles) return { ok: false, titles: [] };
     const sig = titles.slice().sort().join('\n');
     steady = sig === last ? steady + 1 : 0;
     last = sig;
@@ -585,4 +671,4 @@ async function spClientsOnDate(page) {
   } catch { return []; }
 }
 
-module.exports = { bookAppointment, spNavigateToDate, spReadDay, readPresetService, SERVICE_CODE_RE, spClientsOnDate, chooseOptionIndex, pickClinicianIndex, namesPerson, selectClinician };
+module.exports = { bookAppointment, spNavigateToDate, spReadDay, readPresetService, SERVICE_CODE_RE, parseCalTitle, collectDayTitles, isoDay, spClientsOnDate, chooseOptionIndex, pickClinicianIndex, namesPerson, selectClinician };
