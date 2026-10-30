@@ -81,6 +81,7 @@ async function refresh() {
   $('#rosterText').value = settings.rosterText || '';
   clients = (settings.clientPayers || []).slice();
   renderClients();
+  renderChartReview();
   if (!draftMains.length) draftMains = (settings.mainDoctors || []).map(normMain);
   if (!draftProviders.length && providers.length) {
     draftProviders = providers.map((p) => ({ name: p.name, discipline: p.discipline || '', mainDoctor: p.mainDoctor, codes: formatCodes(p.codes) }));
@@ -1143,6 +1144,91 @@ window.api.onUpdateStatus((s) => {
       break;
   }
 });
+
+
+/* ------------------------------ chart review ------------------------------ */
+const CR = { tab: 'followups', fu: 'open', running: false };
+const CR_ITEMS = ['Diagnosis', 'Care Team', 'Pinned Note', 'Plan of Care', 'Reassessments', 'Referral', 'Intake Forms', 'Contact Details', 'Schedule'];
+function renderChartReview() {
+  const review = settings.chartReview || null;
+  const results = (review && review.results) || [];
+  const fus = settings.chartFollowUps || [];
+  const open = fus.filter((f) => !f.resolvedAt);
+  $('#crOpenCount').textContent = open.length ? `(${open.length})` : '';
+  const badge = $('#chartBadge');
+  badge.textContent = open.length; badge.classList.toggle('hidden', !open.length);
+  if (!CR.running) {
+    $('#crIcon').textContent = review ? (open.length ? '⚠️' : '✅') : '📋';
+    $('#crTitle').textContent = review ? `${results.length} chart${results.length === 1 ? '' : 's'} reviewed · ${open.length} follow-up${open.length === 1 ? '' : 's'} open` : 'No chart review yet';
+    $('#crSub').textContent = review ? `Last run ${fmtTime(review.at)}` : 'Takes about a minute per client. The Chrome window shows each chart as it\'s read.';
+  }
+  $('#crFollowCard').classList.toggle('hidden', CR.tab !== 'followups');
+  $('#crClientsCard').classList.toggle('hidden', CR.tab !== 'clients');
+  $$('#crTabs button').forEach((b) => b.classList.toggle('active', b.dataset.tab === CR.tab));
+  $$('#crFuFilter button').forEach((b) => b.classList.toggle('active', b.dataset.f === CR.fu));
+
+  // Follow-ups, grouped by client
+  const q = ($('#crSearch').value || '').toLowerCase();
+  const shown = fus.filter((f) => (CR.fu === 'open' ? !f.resolvedAt : !!f.resolvedAt) && (!q || `${f.patientName} ${f.item} ${f.note}`.toLowerCase().includes(q)));
+  const groups = {};
+  shown.forEach((f) => { (groups[f.patientName] = groups[f.patientName] || []).push(f); });
+  const names = Object.keys(groups).sort((a, b) => a.localeCompare(b));
+  $('#crFollowList').innerHTML = names.length ? names.map((n) => `
+    <div class="cr-group">
+      <div class="cr-group-head">${escapeHtml(n)} <span class="muted">· ${groups[n].length}</span></div>
+      ${groups[n].map((f) => `
+        <label class="cr-fu ${f.status}">
+          <input type="checkbox" data-id="${f.id}" ${f.resolvedAt ? 'checked' : ''} />
+          <span class="cr-dot ${f.resolvedAt ? 'ok' : f.status}"></span>
+          <span class="cr-fu-item">${escapeHtml(f.item)}</span>
+          <span class="cr-fu-note">${escapeHtml(f.note)}${f.resolvedAt ? `<span class="muted"> — ${f.resolvedBy === 'review' ? 'fixed in the chart' : 'marked done'} ${fmtTime(f.resolvedAt)}</span>` : ''}</span>
+        </label>`).join('')}
+    </div>`).join('') : `<div class="client-empty"><strong>${CR.fu === 'open' ? (results.length ? 'Nothing open' : 'No follow-ups yet') : 'Nothing resolved yet'}</strong><span>${results.length ? '' : 'Run the chart review to check every scheduled client.'}</span></div>`;
+  $$('#crFollowList input[type="checkbox"]').forEach((c) => c.addEventListener('change', async () => {
+    settings.chartFollowUps = await window.api.chartFollowUp(c.dataset.id, c.checked);
+    renderChartReview();
+  }));
+
+  // By client: the 9-item checklist
+  const sorted = results.slice().sort((a, b) => a.patientName.localeCompare(b.patientName));
+  $('#crClientList').innerHTML = sorted.length ? sorted.map((r) => {
+    if (!r.ok) return `<div class="cr-client"><div class="cr-client-head"><b>${escapeHtml(r.patientName)}</b><span class="cr-err">${escapeHtml(r.error || 'Couldn\'t be reviewed')}</span></div></div>`;
+    const bad = r.items.filter((i) => i.status !== 'ok').length;
+    return `<details class="cr-client"${bad ? '' : ''}>
+      <summary class="cr-client-head"><b>${escapeHtml(r.patientName)}</b>
+        <span class="cr-dots">${r.items.map((i) => `<span class="cr-dot ${i.status}" title="${escapeHtml(i.label)}"></span>`).join('')}</span>
+        <span class="muted">${bad ? `${bad} to fix` : 'all OK'}</span></summary>
+      <div class="cr-items">${r.items.map((i) => `<div class="cr-item"><span class="cr-dot ${i.status}"></span><b>${escapeHtml(i.label)}</b><span>${i.notes.length ? i.notes.map(escapeHtml).join('<br>') : '<span class="muted">OK</span>'}</span></div>`).join('')}</div>
+    </details>`;
+  }).join('') : '<div class="client-empty"><strong>No charts reviewed yet</strong></div>';
+}
+$$('#crTabs button').forEach((b) => b.addEventListener('click', () => { CR.tab = b.dataset.tab; renderChartReview(); }));
+$$('#crFuFilter button').forEach((b) => b.addEventListener('click', () => { CR.fu = b.dataset.f; renderChartReview(); }));
+$('#crSearch').addEventListener('input', renderChartReview);
+$('#crRunBtn').addEventListener('click', async () => {
+  if (CR.running) return;
+  CR.running = true;
+  $('#crRunBtn').disabled = true; $('#crRunBtn').textContent = 'Reviewing…';
+  $('#crIcon').textContent = '⏳'; $('#crTitle').textContent = 'Reviewing charts…';
+  $('#crSub').textContent = 'Practice Fusion is open in Chrome. Leave it running.';
+  const r = await window.api.chartRun();
+  CR.running = false;
+  $('#crRunBtn').disabled = false; $('#crRunBtn').textContent = 'Run chart review';
+  if (!r || !r.ok) toast(r && r.error ? r.error : 'The chart review stopped.');
+  await refresh();
+});
+window.api.onChartStep((s) => {
+  if (!s) return;
+  const log = $('#crLog');
+  if (s.reset) { log.innerHTML = ''; $('#crLiveCard').classList.remove('hidden'); }
+  const prev = log.querySelector('.live-line.cur'); if (prev) prev.classList.remove('cur');
+  const line = document.createElement('div');
+  line.className = 'live-line cur';
+  line.innerHTML = `<span class="t">${fmtClock(s.at)}</span><span>${escapeHtml(s.text || '')}</span>`;
+  log.appendChild(line); log.scrollTop = log.scrollHeight;
+});
+window.api.onChartResult(async () => { settings = await window.api.getSettings(); renderChartReview(); });
+window.api.onChartFinished(() => { const c = $('#crLog .live-line.cur'); if (c) c.classList.remove('cur'); });
 
 /* -------------------------------- events -------------------------------- */
 function fmtClock(iso) {

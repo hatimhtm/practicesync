@@ -30,6 +30,7 @@
         <button class="nav-item active" data-view="home"><span class="dot"></span> Overview</button>
         <button class="nav-item" data-view="doctors"><span class="dot"></span> Doctors &amp; Codes</button>
         <button class="nav-item" data-view="clients"><span class="dot"></span> Clients <span class="nav-count" id="clientsCount"></span></button>
+        <button class="nav-item" data-view="charts"><span class="dot"></span> Chart Review <span class="nav-badge hidden" id="chartBadge">0</span></button>
         <button class="nav-item" data-view="connect"><span class="dot"></span> Connection</button>
         <button class="nav-item" data-view="ai"><span class="dot"></span> AI Engine</button>
         <button class="nav-item" data-view="schedule"><span class="dot"></span> Schedule</button>
@@ -211,6 +212,50 @@
           </table>
           <div class="client-empty hidden" id="clientEmpty"></div>
           <p class="muted client-foot">Clients who aren't listed are booked by their Practice Fusion appointment type and the therapist's standard codes, as before.</p>
+        </div>
+      </section>
+
+      <section class="view hidden" data-view="charts">
+        <header class="view-head">
+          <h1>Chart Review</h1>
+          <p class="muted">The Client Chart Review Guide, run on every client scheduled this week and next week. It only <strong>reads</strong> Practice Fusion — it never changes a chart. Fix what it lists, then run it again: fixed items close by themselves.</p>
+        </header>
+
+        <div class="status-card">
+          <div class="status-main">
+            <div class="status-icon" id="crIcon">📋</div>
+            <div>
+              <div class="status-title" id="crTitle">No chart review yet</div>
+              <div class="status-sub muted" id="crSub">Takes about a minute per client. The Chrome window shows each chart as it's read.</div>
+            </div>
+          </div>
+          <button class="btn btn-primary" id="crRunBtn">Run chart review</button>
+        </div>
+
+        <div class="card live-card hidden" id="crLiveCard">
+          <div class="card-k">Live</div>
+          <div class="live-log" id="crLog"></div>
+        </div>
+
+        <div class="seg seg-sm" id="crTabs">
+          <button class="active" data-tab="followups">Follow-ups <span id="crOpenCount"></span></button>
+          <button data-tab="clients">By client</button>
+        </div>
+
+        <div class="card" id="crFollowCard">
+          <div class="client-toolbar">
+            <input type="text" id="crSearch" placeholder="Search client or item" autocomplete="off" />
+            <div class="seg seg-sm" id="crFuFilter">
+              <button class="active" data-f="open">Open</button>
+              <button data-f="done">Resolved</button>
+            </div>
+          </div>
+          <div id="crFollowList"></div>
+        </div>
+
+        <div class="card hidden" id="crClientsCard">
+          <div class="cr-legend"><span class="cr-dot ok"></span> OK <span class="cr-dot check"></span> Look at it <span class="cr-dot problem"></span> Fix it</div>
+          <div id="crClientList"></div>
         </div>
       </section>
 

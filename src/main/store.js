@@ -36,6 +36,8 @@ const DEFAULTS = {
   rosterSeeded: false,      // whether the built-in doctor roster was pre-loaded on first run
   rosterVersion: 0,         // the practice's roster sheet merged in (3 = Oct 2026 "Billing Providers")
   bookedKeys: [],           // visit keys already booked, so live runs never double-book
+  chartReview: null,        // last chart review: { at, results:[{ patientName, items:[9 checks] }] }
+  chartFollowUps: [],       // chart-review follow-ups, tracked until resolved
   bookedVisits: [],         // [{ key, at }] every visit saved in SimplePractice by this Mac — never booked twice
   workflows: [],            // recorded workflows: [{ id, name, steps:[...], createdAt }]
   schedule: 'off',          // 'off' | '6h' | 'daily'

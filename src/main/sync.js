@@ -195,6 +195,32 @@ async function pfNavigateToDate(page, target, onStep) {
 }
 
 /**
+ * Read the Practice Fusion schedule for each day, for the chart review: every
+ * visit with its patient, therapist and the patient's chart link (the name is a
+ * link to the chart). A day whose heading can't be reached is skipped and said.
+ */
+async function readPfSchedule(page, dates, onStep) {
+  const out = [];
+  for (const date of dates) {
+    await page.goto(presets.PF.scheduleUrl, { waitUntil: 'domcontentloaded' }).catch(() => {});
+    await login.dismissPopups(page);
+    if (!(await pfNavigateToDate(page, date, onStep))) { say(onStep, `  ⚠︎ Couldn't open the Practice Fusion schedule on ${date} — skipped.`); continue; }
+    try { await page.waitForSelector(presets.PF.selectors.rowSelector, { timeout: 8000 }); } catch {}
+    await sleep(900); await login.dismissPopups(page);
+    const html = await page.content();
+    const doc = new JSDOM(html).window.document;
+    const rows = extractVisits(doc, presets.PF.selectors, 400);
+    const links = [...doc.querySelectorAll(presets.PF.selectors.rowSelector)].map((row) => {
+      const a = row.querySelector(presets.PF.selectors.patientSelector);
+      return (a && (a.getAttribute('href') || '')) || '';
+    });
+    rows.forEach((v, i) => out.push({ patientName: (v.patientName || '').trim(), doctorName: (v.doctorName || '').trim(), date, href: links[i] || '' }));
+    say(onStep, `  ${date}: ${rows.length} visit${rows.length === 1 ? '' : 's'}`);
+  }
+  return out;
+}
+
+/**
  * @param {object} opts
  * @param {object} opts.secrets   { practiceFusion:{username,password}, simplePractice:{email,password} }
  * @param {string[]} opts.dates   MM/DD/YYYY days to sync (use expandDates for a range)
@@ -370,4 +396,4 @@ function reportProblems(result, onStep) {
   }
 }
 
-module.exports = { runFullSync, expandDates, pfNavigateToDate, PROBLEM, takeExistingFrom, unmatchedReason, looseSameClient, ledgerKey, findLooseExisting, spreadSessions };
+module.exports = { runFullSync, readPfSchedule, expandDates, pfNavigateToDate, PROBLEM, takeExistingFrom, unmatchedReason, looseSameClient, ledgerKey, findLooseExisting, spreadSessions };

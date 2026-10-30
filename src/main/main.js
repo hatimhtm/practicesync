@@ -18,10 +18,12 @@ const store = require('./store');
 const { runSync } = require('./automation');
 const { parseRoster, appleIntelligenceAvailable, detectEngines, appleHelperPath } = require('./ai');
 const { DEMO_MAIN_DOCTORS, DEMO_PROVIDERS, UNIT_CODES, OLD_SPEECH_CODES, parseCodes, formatCodes, makeProvider, makeMainDoctor, ROSTER_VERSION, mergeRoster, normalizeName } = require('./model');
-const { teach, runSiteDemo } = require('./liveEngine');
-const { runFullSync, expandDates, PROBLEM } = require('./sync');
+const liveEngine = require('./liveEngine');
+const { teach, runSiteDemo } = liveEngine;
+const { runFullSync, readPfSchedule, expandDates, PROBLEM } = require('./sync');
+const chartReview = require('./chartReview');
 const presets = require('./presets');
-const { loginSimplePractice } = require('./login');
+const { loginSimplePractice, loginPracticeFusion } = require('./login');
 const { startSheetServer } = require('./demoSheet');
 const recorder = require('./recorder');
 const { Scheduler } = require('./scheduler');
@@ -529,6 +531,60 @@ function registerIpc() {
     sendToRenderer('run-finished', res);
     if (res.ok) notify(opts.save ? `Booked ${res.booked} · skipped ${res.skipped}${res.failed ? ' · ' + res.failed + ' failed' : ''}` : `Dry run: ${res.planned.length} would book`);
     return res;
+  });
+
+  // CHART REVIEW — the practice's Client Chart Review Guide on every client
+  // scheduled this week and next. Read only: nothing in Practice Fusion is changed.
+  let chartReviewRunning = false;
+  ipcMain.handle('chart:run', async (_e, opts = {}) => {
+    if (chartReviewRunning) return { ok: false, error: 'A chart review is already running.' };
+    const creds = store.getCreds();
+    if (!creds.practiceFusion.password) return { ok: false, error: 'Add your Practice Fusion login first (Connection).' };
+    chartReviewRunning = true;
+    const s = store.load();
+    const step = (text) => sendToRenderer('chart-step', { text, at: nowISO() });
+    sendToRenderer('chart-step', { text: 'Starting the chart review…', at: nowISO(), reset: true });
+    let context = null;
+    try {
+      const r = await liveEngine.openAutomationContext({ headless: false });
+      if (r.error) return { ok: false, error: r.error.error || r.error };
+      context = r.context;
+      const page = context.pages()[0] || (await context.newPage());
+      const pf = await loginPracticeFusion(page, creds.practiceFusion, { onStep: step });
+      if (!pf.ok) return { ok: false, error: pf.error };
+      const providers = (s.providers && s.providers.length) ? s.providers : DEMO_PROVIDERS;
+      const mainDoctors = (s.mainDoctors && s.mainDoctors.length) ? s.mainDoctors : DEMO_MAIN_DOCTORS;
+      const results = await chartReview.runChartReview({
+        page, providers, mainDoctors, onStep: step, only: opts.only || null,
+        readSchedule: (dates) => readPfSchedule(page, dates, step),
+        onResult: (res) => {
+          // Save each chart as it's done, so a long run never loses its work.
+          const cur = store.load();
+          const prev = (cur.chartReview && cur.chartReview.results) || [];
+          store.save({
+            chartReview: { at: nowISO(), results: [...prev.filter((x) => x.patientKey !== res.patientKey), res] },
+            chartFollowUps: chartReview.mergeFollowUps(cur.chartFollowUps || [], [res]),
+          });
+          sendToRenderer('chart-result', res);
+        },
+      });
+      const bad = results.filter((x) => x.ok && x.items.some((i) => i.status !== 'ok')).length;
+      const failedOpen = results.filter((x) => !x.ok).length;
+      step(`Done — ${results.length} chart${results.length === 1 ? '' : 's'} reviewed, ${bad} with items to fix${failedOpen ? `, ${failedOpen} couldn't be opened` : ''}.`);
+      return { ok: true, count: results.length };
+    } catch (e) {
+      return { ok: false, error: (e && e.message) || String(e) };
+    } finally {
+      chartReviewRunning = false;
+      if (context) { try { await context.close(); } catch {} }
+      sendToRenderer('chart-finished', {});
+    }
+  });
+  ipcMain.handle('chart:followup', (_e, { id, done }) => {
+    const s = store.load();
+    const list = (s.chartFollowUps || []).map((f) => (f.id === id ? { ...f, resolvedAt: done ? nowISO() : null, resolvedBy: done ? 'staff' : '' } : f));
+    store.save({ chartFollowUps: list });
+    return list;
   });
 
   // Manual update via GitHub Releases (works unsigned): check, then open the
