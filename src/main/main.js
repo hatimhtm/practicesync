@@ -536,7 +536,7 @@ function registerIpc() {
   // CHART REVIEW — the practice's Client Chart Review Guide on every client
   // scheduled this week and next. Read only: nothing in Practice Fusion is changed.
   let chartReviewRunning = false;
-  const CHART_TABS = 5; // charts reviewed at the same time
+  const CHART_TABS = 3; // charts reviewed at the same time
   ipcMain.handle('chart:run', async (_e, opts = {}) => {
     if (chartReviewRunning) return { ok: false, error: 'A chart review is already running.' };
     const creds = store.getCreds();
@@ -562,7 +562,14 @@ function registerIpc() {
       if (!pf.ok) return { ok: false, error: pf.error };
       // Several charts at once: extra tabs share the signed-in session.
       const tabs = [page];
-      for (let i = 1; i < CHART_TABS; i++) { const t = await context.newPage().catch(() => null); if (t) tabs.push(t); }
+      for (let i = 1; i < CHART_TABS; i++) {
+        const t = await context.newPage().catch(() => null);
+        if (!t) continue;
+        // Let each tab finish starting Practice Fusion before it's given a chart.
+        await t.goto(presets.PF.scheduleUrl, { waitUntil: 'domcontentloaded' }).catch(() => {});
+        await t.waitForSelector(presets.PF.nav.dateHeading, { timeout: 20000 }).catch(() => {});
+        tabs.push(t);
+      }
       await page.bringToFront().catch(() => {});
       const providers = (s.providers && s.providers.length) ? s.providers : DEMO_PROVIDERS;
       const mainDoctors = (s.mainDoctors && s.mainDoctors.length) ? s.mainDoctors : DEMO_MAIN_DOCTORS;
@@ -777,10 +784,10 @@ app.whenReady().then(() => {
       store.save({ providers, billingVersion: 2 });
     } catch {}
   }
-  // 1.8.0's chart review couldn't read most pages ("Couldn't read the … page"),
-  // and some of its other findings were wrong — clear those results once.
-  if ((store.load().chartReviewVersion || 0) < 2) {
-    try { store.save({ chartReview: null, chartFollowUps: [], chartReviewVersion: 2 }); } catch {}
+  // Earlier chart reviews misread pages (the "Go to…" dropdown was taken for the
+  // real sections), so their findings can't be trusted — clear them once.
+  if ((store.load().chartReviewVersion || 0) < 3) {
+    try { store.save({ chartReview: null, chartFollowUps: [], chartReviewVersion: 3 }); } catch {}
   }
   scheduler.setMode(settings.schedule || 'off');
   applyLoginItem(settings.schedule || 'off');

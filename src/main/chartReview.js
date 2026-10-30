@@ -64,16 +64,24 @@ const lines = (t) => String(t || '').split(/\r?\n/).map((l) => l.trim()).filter(
 /** The text of one page section: from its heading to the next of `nextHeadings`. */
 function section(text, heading, nextHeadings = [], maxLen = 4000) {
   const t = String(text || '');
-  const re = new RegExp(`(^|\\n)\\s*${heading}\\b`, 'i');
-  const m = re.exec(t);
-  if (!m) return '';
-  const start = m.index + m[0].length;
-  let end = Math.min(t.length, start + maxLen);
-  for (const h of nextHeadings) {
-    const n = new RegExp(`\\n\\s*${h}\\b`, 'i').exec(t.slice(start));
-    if (n && start + n.index < end) end = start + n.index;
+  // The heading's own line ("Email", not "Email reminders and messaging").
+  const whole = new RegExp(`(^|\\n)[ \\t]*${heading}[ \\t]*(Edit[^\\n]*)?(?=\\n|$)`, 'gi');
+  const re = whole.test(t) ? (whole.lastIndex = 0, whole) : new RegExp(`(^|\\n)\\s*${heading}\\b`, 'gi');
+  let best = '';
+  let m;
+  // Every occurrence, longest wins: the "Go to…" dropdown lists the same names
+  // ("Care team", "Address", "Diagnoses") with nothing under them.
+  while ((m = re.exec(t))) {
+    const start = m.index + m[0].length;
+    let end = Math.min(t.length, start + maxLen);
+    for (const h of nextHeadings) {
+      const n = new RegExp(`\\n\\s*${h}\\b`, 'i').exec(t.slice(start));
+      if (n && start + n.index < end) end = start + n.index;
+    }
+    const sec = t.slice(start, end);
+    if (sec.trim().length > best.trim().length) best = sec;
   }
-  return t.slice(start, end);
+  return best;
 }
 
 /** Summary → diagnoses ("(R53.1) Weakness"). */
@@ -157,13 +165,18 @@ function parseProfile(text, toggles = {}) {
   const addressSec = section(t, 'Address', ['Insurance', 'Demographics', 'Care team', 'Payer'], 600);
   const reminders = section(t, 'Appointment reminders and messaging', ['Address', 'Practice documented', 'Turn on all reminders', 'Insurance'], 800);
   const care = section(t, 'Care team', ['Next of kin', "Patient's mother", 'Insurance', 'Emergency contact'], 4000);
-  const email = toggles.email || toggleState(reminders || t, 'Email reminders');
-  const sms = toggles.sms || toggleState(reminders || t, 'Text\\s*/\\s*SMS reminders');
+  const pick = (label) => {
+    const inSec = toggleState(reminders, label);
+    return inSec !== 'unknown' ? inSec : toggleState(t, label);
+  };
+  const email = toggles.email || pick('Email reminders');
+  const sms = toggles.sms || pick('Text\\s*/\\s*SMS reminders');
   return {
     name: val('NAME'), sex: val('SEX'), dob: val('DATE OF BIRTH'),
     phone: /\(?\d{3}\)?[\s.-]*\d{3}[\s.-]*\d{4}/.test(phoneSec || contact) ,
     email: /[^\s@]+@[^\s@]+\.[a-z]{2,}/i.test(emailSec || contact),
-    address: /\d+\s+\S+.*\n?.*\b[A-Z]{2}\s+\d{5}/.test(addressSec) && !/No current address/i.test(addressSec),
+    address: (/\b\d{5}(-\d{4})?\b/.test(addressSec) || /^\s*\d+\s+[A-Za-z]/m.test(addressSec)) && !/No current address/i.test(addressSec),
+    noConsent: /consent/i.test(t) && !/Practice documented/i.test(t),
     reminders: { email, sms, override: toggles.override != null ? !!toggles.override : /\boverride\b/i.test(reminders) },
     careTeamText: care,
     preferredCount: (care.match(/Preferred provider in practice/gi) || []).length,
@@ -243,7 +256,7 @@ function reviewChart(pages, { today = new Date(), providers = [], visits = [], w
     if (!note.referralExpires) flag('pinnedNote', 'problem', 'Pinned note has no MD referral expiration date.');
     if (!note.documentationType) flag('pinnedNote', 'problem', 'Pinned note has no "Documentation Type" (basic note or insurance note).');
     else if (!/basic|insurance/i.test(note.documentationType)) flag('pinnedNote', 'check', `Documentation Type is "${note.documentationType}" — expected basic note or insurance note.`);
-    if (!note.weeklySchedule && !note.days.length) flag('pinnedNote', 'problem', 'Pinned note has no weekly schedule (the Mo–Su mini calendar).');
+    if (!note.weeklySchedule && !note.days.length) flag('pinnedNote', pages.pinnedPartial ? 'check' : 'problem', pages.pinnedPartial ? 'Couldn\'t open the whole pinned note — check its weekly schedule.' : 'Pinned note has no weekly schedule (the Mo–Su mini calendar).');
     else if (note.days.length && note.days.length < 7) flag('pinnedNote', 'check', `Weekly schedule lists ${note.days.length} of 7 days.`);
   }
 
@@ -255,8 +268,11 @@ function reviewChart(pages, { today = new Date(), providers = [], visits = [], w
     else if (!parseLooseDate(v, today) && !/\bsigned\b/i.test(v)) flag('planOfCare', 'problem', `${d} plan of care has no signed date ("${v || 'blank'}").`);
   }
   const docs = pages.documents == null ? null : lines(pages.documents);
+  // If only "Pending" could be listed, a signed document may just be out of sight.
+  const docSeverity = pages.documentsComplete === false ? 'check' : 'problem';
+  const docNote = (n) => (pages.documentsComplete === false ? `${n} (Only "Pending" documents could be listed — check Signed.)` : n);
   if (docs == null) unread('planOfCare', 'the Documents page');
-  else if (!docs.some((l) => /plan of care|\bPOC\b/i.test(l))) flag('planOfCare', 'problem', 'No signed Plan of Care in Documents.');
+  else if (!docs.some((l) => /plan of care|\bPOC\b/i.test(l))) flag('planOfCare', docSeverity, docNote('No signed Plan of Care in Documents.'));
 
   // 5) Reassessments — one per service, not overdue.
   for (const d of services) {
@@ -282,11 +298,11 @@ function reviewChart(pages, { today = new Date(), providers = [], visits = [], w
   if (docs == null) unread('referral', 'the Documents page');
   else {
     const refDocs = docs.filter((l) => /referral/i.test(l));
-    if (!refDocs.length) flag('referral', 'problem', 'No referral on file in Documents.');
+    if (!refDocs.length) flag('referral', docSeverity, docNote('No referral on file in Documents.'));
     const docDates = refDocs.map((l) => parseLooseDate((/exp\w*\.?\s*:?\s*([\d/.-]+)/i.exec(l) || [])[1], today)).filter(Boolean);
     if (ref && docDates.length && !docDates.some((d) => sameDay(d.date, ref.date))) {
       const latest = docDates.sort((a, b) => b.date - a.date)[0];
-      flag('referral', 'problem', `Pinned note says the referral expires ${ref.text}, but the referral in Documents says ${fmt(latest.date)} — update the pinned note.`);
+      flag('referral', docSeverity, docNote(`Pinned note says the referral expires ${ref.text}, but the referral in Documents says ${fmt(latest.date)} — update the pinned note.`));
     }
     if (!note.referralExpires && docDates.length) flag('referral', 'problem', `Referral in Documents expires ${fmt(docDates[0].date)} — add it to the pinned note.`);
   }
@@ -310,7 +326,7 @@ function reviewChart(pages, { today = new Date(), providers = [], visits = [], w
     } else {
       for (const [k, label] of [['email', 'Email'], ['sms', 'Text/SMS']]) {
         if (p.reminders[k] === 'off') flag('contact', 'problem', `${label} reminders are OFF — turn them on.`);
-        else if (p.reminders[k] === 'unknown') flag('contact', 'check', `Couldn't tell whether ${label} reminders are on.`);
+        else if (p.reminders[k] === 'unknown') flag('contact', 'check', p.noConsent ? `${label} reminders aren't on — no voice and text consent is documented.` : `Couldn't tell whether ${label} reminders are on.`);
       }
     }
 
@@ -376,7 +392,7 @@ function mergeFollowUps(existing, results, at = new Date().toISOString()) {
     for (const it of r.items) {
       if (it.status === 'ok') continue;
       for (const note of it.notes) {
-        if (/^Reminders are locked/.test(note)) continue;
+        if (/^Reminders are locked|^Couldn't read/.test(note)) continue; // not something to fix in the chart
         const key = `${r.patientKey}|${it.key}|${note.replace(/\(\d+ days?( ago)?\)|\(in \d+ days?\)/g, '').trim()}`;
         live.add(key);
         const f = byKey.get(key);
@@ -411,7 +427,12 @@ const patientKey = (name) => normalizeName(name).split(' ').filter(Boolean).sort
  *  Practice Fusion page was the whole page: every read came back empty). */
 async function pageText(page) {
   return page.evaluate(() => {
+    // Dropdowns out of the text: "Go to…" lists every section name on the page.
+    const hide = document.createElement('style');
+    hide.textContent = 'select{display:none!important}';
+    document.head.appendChild(hide);
     const t = document.body ? document.body.innerText : '';
+    hide.remove();
     const W = window.innerWidth || 1200;
     const drop = new Set();
     for (const el of document.querySelectorAll('*')) {
@@ -441,44 +462,80 @@ async function settledText(page, marks, timeoutMs = 12000) {
     const ready = marks.some((m) => (m instanceof RegExp ? m.test(t) : t.includes(m)));
     steady = t === last ? steady + 1 : 0;
     last = t;
-    if (ready && steady >= 1) return t;
+    if (ready && steady >= 2) return t;
   }
   return last && marks.some((m) => (m instanceof RegExp ? m.test(last) : last.includes(m))) ? last : null;
 }
 
-/** The pinned note's full text: the popup that auto-opens, else the Profile panel
- *  (expanded with "View and edit all note text"). */
+/** The pinned note's full text: the popup (it auto-opens on many charts; otherwise
+ *  the pin icon opens it, as in the guide). Read only — the note's Edit button is
+ *  never pressed. Returns { text, partial } — partial = only the Profile panel's
+ *  top lines could be seen. */
 async function readPinnedNote(page) {
   const grab = () => page.evaluate(() => {
     let best = null;
     for (const el of document.querySelectorAll('div, section, article, aside, form')) {
       const t = el.innerText || '';
-      if (!/Services\s*:/i.test(t) || t.length > 6000) continue;
-      const score = (/Weekly Schedule/i.test(t) ? 2 : 0) + (/Documentation Type/i.test(t) ? 1 : 0);
+      if (t.length > 6000 || !/Services?\s*:|MD Referral|\bPOC\b|Re-?assess/i.test(t) || !/\n/.test(t)) continue;
+      if (/Appointment reminders|Care team/i.test(t)) continue; // a page column, not the note
+      const score = (/Weekly\s*Schedule/i.test(t) ? 2 : 0) + (/Documentation\s*Type/i.test(t) ? 1 : 0);
       if (!best || score > best.score || (score === best.score && t.length < best.t.length)) best = { t, score };
     }
     return best ? best.t : '';
   }).catch(() => '');
+  const whole = (t) => /Weekly\s*Schedule/i.test(t);
   let t = await grab();
-  if (!/Weekly Schedule/i.test(t)) {
-    const link = await page.$('text=/View and edit all note text/i').catch(() => null);
-    if (link) { await link.click({ timeout: 3000 }).catch(() => {}); await sleep(1500); const t2 = await grab(); if (t2.length > t.length) t = t2; }
+  for (let i = 0; i < 4 && !whole(t); i++) { await sleep(400); const n = await grab(); if (n.length > t.length) t = n; } // auto-open
+  if (!whole(t)) {
+    // The pin icon: by its name if it has one, else its spot right of the history
+    // icon, right after the "Patient ledger" tab in the chart header.
+    const spot = await page.evaluate(() => {
+      const named = [...document.querySelectorAll('[title], [aria-label], [data-element], [class*="pin" i]')].find((e) => {
+        const a = `${e.getAttribute('title') || ''} ${e.getAttribute('aria-label') || ''} ${e.getAttribute('data-element') || ''} ${e.getAttribute('class') || ''}`;
+        const r = e.getBoundingClientRect();
+        return /\bpin(ned)?\b|pinned|thumb-?tack/i.test(a) && !/spin|ping|shipping/i.test(a) && r.width > 0 && r.width < 70 && r.top < 320;
+      });
+      if (named) { const r = named.getBoundingClientRect(); return { x: r.left + r.width / 2, y: r.top + r.height / 2 }; }
+      const tab = [...document.querySelectorAll('a, button, li, span, div')].find((e) => (e.textContent || '').trim() === 'Patient ledger' && e.getBoundingClientRect().width > 0);
+      if (!tab) return null;
+      const r = tab.getBoundingClientRect();
+      return { x: r.right + 57, y: r.top + r.height / 2 };
+    }).catch(() => null);
+    if (spot) {
+      await page.mouse.click(spot.x, spot.y).catch(() => {});
+      for (let i = 0; i < 5 && !whole(t); i++) { await sleep(400); const n = await grab(); if (n.length > t.length) t = n; }
+    }
   }
-  return t || '';
+  return { text: t || '', partial: !whole(t) && !!t };
 }
 
 /** Read the reminder switches from the page itself (states, and any Override lock). */
 async function readToggles(page) {
   return page.evaluate(() => {
     const state = (label) => {
-      const el = [...document.querySelectorAll('label, span, div, p')].find((e) => new RegExp(label, 'i').test((e.textContent || '').trim()) && (e.textContent || '').trim().length < 60);
+      const el = [...document.querySelectorAll('label, span, div, p, td')].find((e) => new RegExp(label, 'i').test((e.textContent || '').trim()) && (e.textContent || '').trim().length < 60);
       if (!el) return null;
       let box = el;
       for (let i = 0; i < 4 && box; i++, box = box.parentElement) {
-        const sw = box.querySelector('input[type="checkbox"], [role="switch"], [aria-checked]');
+        if ((box.textContent || '').length > 120) break; // left this switch's own row
+        const sw = box.querySelector('input[type="checkbox"], [role="switch"], [aria-checked], [aria-pressed]');
         if (sw) {
-          const on = sw.matches('input') ? sw.checked : sw.getAttribute('aria-checked') === 'true';
-          return on ? 'on' : 'off';
+          if (sw.matches('input')) return sw.checked ? 'on' : 'off';
+          const v = sw.getAttribute('aria-checked') || sw.getAttribute('aria-pressed');
+          if (v) return v === 'true' ? 'on' : 'off';
+        }
+        const own = (box.innerText || '').match(/\b(ON|OFF)\b/);
+        if (own) return own[1] === 'ON' ? 'on' : 'off';
+        const k = box.querySelector('[class*="toggle" i], [class*="switch" i]');
+        if (k) {
+          const c = k.getAttribute('class') || '';
+          if (/\b(is-)?(on|checked|active|enabled)\b/i.test(c)) return 'on';
+          if (/\b(is-)?(off|unchecked|inactive|disabled)\b/i.test(c)) return 'off';
+          for (const part of [k, ...k.querySelectorAll('*')]) for (const ps of ['::before', '::after']) {
+            const txt = getComputedStyle(part, ps).content || '';
+            if (/\bON\b/.test(txt)) return 'on';
+            if (/\bOFF\b/.test(txt)) return 'off';
+          }
         }
       }
       return null;
@@ -489,18 +546,16 @@ async function readToggles(page) {
   }).catch(() => ({}));
 }
 
-/** Documents: switch the list from "Pending" to all documents when the filter allows. */
-async function showAllDocuments(page) {
-  return page.evaluate(() => {
-    for (const s of document.querySelectorAll('select')) {
-      const opts = [...s.options];
-      if (!opts.some((o) => /pending/i.test(o.text))) continue;
-      const all = opts.find((o) => /^all/i.test(o.text.trim()));
-      if (all && s.value !== all.value) { s.value = all.value; s.dispatchEvent(new Event('change', { bubbles: true })); return 'all'; }
-      return all ? 'all' : 'pending-only';
-    }
-    return 'no-filter';
-  }).catch(() => 'no-filter');
+/** Documents opens on "Pending". Returns every other view of the list worth reading
+ *  ("All", or "Signed"…), each as a function that switches to it. */
+async function documentViews(page) {
+  const sel = await page.evaluateHandle(() => [...document.querySelectorAll('select')].find((s) => [...s.options].some((o) => /pending/i.test(o.text))) || null).catch(() => null);
+  const el = sel && sel.asElement ? sel.asElement() : null;
+  if (!el) return null;
+  const opts = await el.evaluate((s) => [...s.options].map((o) => ({ value: o.value, text: o.text.trim() }))).catch(() => []);
+  const all = opts.find((o) => /^all/i.test(o.text));
+  const wanted = all ? [all] : opts.filter((o) => /signed|complete|reviewed/i.test(o.text));
+  return wanted.map((o) => () => el.selectOption({ value: o.value }).catch(() => {}));
 }
 
 /** Chart id for a patient: from the schedule link, else the Charts search. */
@@ -548,29 +603,48 @@ async function findChartId(page, name, scheduleHref, onStep) {
   return '';
 }
 
-/** Read every page of one chart. Missing pages stay null (reported as unread). */
+const ALL = (...words) => new RegExp(words.map((w) => `(?=[\\s\\S]*${w})`).join(''), 'i');
+/** Read every page of one chart. A page that doesn't load gets one reload; one that
+ *  still doesn't stays null (reported as unread, and retried at the end of the run). */
 async function readChart(page, id) {
   const go = async (sub, marks) => {
     await page.goto(PF_BASE + id + '/' + sub, { waitUntil: 'domcontentloaded' }).catch(() => {});
-    return settledText(page, marks);
+    let t = await settledText(page, marks);
+    if (t == null) {
+      await page.reload({ waitUntil: 'domcontentloaded' }).catch(() => {});
+      t = await settledText(page, marks, 20000);
+    }
+    return t;
   };
   const pages = {};
-  pages.summary = await go('summary', ['Diagnoses']);
-  pages.pinnedNote = await readPinnedNote(page);
-  pages.intakes = await go('timeline/intakes', [/intake form/i, /no intake/i, 'TYPE/SOURCE']);
+  // The header and dropdowns show first and the sections fill in after — wait for
+  // the sections themselves.
+  pages.summary = await go('summary', [ALL('Diagnoses', 'Encounters')]);
+  let pinned = await readPinnedNote(page);
+  pages.intakes = await go('timeline/intakes', ['TYPE/SOURCE', /no intake/i]);
   pages.encounters = await go('timeline/encounter', ['TYPE/SOURCE', /no encounters/i]);
-  await page.goto(PF_BASE + id + '/documents', { waitUntil: 'domcontentloaded' }).catch(() => {});
-  const firstDocs = await settledText(page, ['TITLE', /no documents/i]);
-  const filter = await showAllDocuments(page);
-  // Only re-read when the list was switched from "Pending" to all documents.
-  pages.documents = filter === 'all' ? (await settledText(page, ['TITLE', /no documents/i])) || firstDocs : firstDocs;
-  pages.documentsFilter = filter;
-  pages.profile = await go('profile', ['Contact', 'Care team']);
+  const docMarks = ['TITLE', /no documents/i];
+  pages.documents = await go('documents', docMarks);
+  if (pages.documents != null) {
+    const views = await documentViews(page);
+    pages.documentsComplete = !!(views && views.length);
+    for (const show of views || []) {
+      await show();
+      await sleep(600);
+      const more = await settledText(page, docMarks);
+      if (more) pages.documents += `\n${more}`;
+    }
+  }
+  pages.profile = await go('profile', [ALL('Appointment reminders', 'Care team')]);
   if (pages.profile) {
     pages.toggles = await readToggles(page);
-    const fuller = await readPinnedNote(page);
-    if (fuller.length > (pages.pinnedNote || '').length) pages.pinnedNote = fuller;
+    if (!/Weekly\s*Schedule/i.test(pinned.text)) {
+      const again = await readPinnedNote(page);
+      if (again.text.length > pinned.text.length) pinned = again;
+    }
   }
+  pages.pinnedNote = pinned.text;
+  pages.pinnedPartial = pinned.partial;
   return pages;
 }
 
@@ -653,7 +727,6 @@ async function runChartReview({ pages: tabs, page, readSchedule, providers = [],
       else {
         const pg = await readChart(tab, id);
         const items = reviewChart(pg, { today: t0, providers, visits: c.visits, weeks });
-        if (pg.documentsFilter === 'pending-only') items.find((x) => x.key === 'referral').notes.push('Only "Pending" documents could be listed — signed ones weren\'t checked.');
         r = { ok: true, patientKey: c.patientKey, patientName: c.patientName, chartId: id, items, pinnedNote: (pg.pinnedNote || '').slice(0, 3000) };
       }
     } catch (e) {
@@ -669,10 +742,22 @@ async function runChartReview({ pages: tabs, page, readSchedule, providers = [],
   await Promise.all(tabs.slice(0, Math.max(1, Math.min(tabs.length, total))).map(async (tab) => {
     for (let c = queue.shift(); c; c = queue.shift()) await reviewOne(tab, c);
   }));
+  // Second pass, one at a time: any chart with a page that couldn't be read.
+  const unread = (r) => !r.ok || r.items.some((i) => i.notes.some((n) => /^Couldn't read/.test(n)));
+  const again = results.filter(unread).map((r) => clients.get(r.patientKey)).filter(Boolean);
+  if (again.length) {
+    say(`Trying ${again.length} chart${again.length === 1 ? '' : 's'} again, one at a time…`);
+    for (const c of again) {
+      const before = results.findIndex((r) => r.patientKey === c.patientKey);
+      if (before >= 0) results.splice(before, 1);
+      done -= 1;
+      await reviewOne(tabs[0], c);
+    }
+  }
   return results;
 }
 
 module.exports = {
   ITEMS, parseLooseDate, parseDisciplines, parseDiagnoses, parsePinnedNote, parseProfile,
-  pageText, parseEncounters, therapistsIn, toggleState, reviewChart, mergeFollowUps, runChartReview, mondayOf, patientKey, weeksInRange, toDay,
+  pageText, readChart, parseEncounters, therapistsIn, toggleState, reviewChart, mergeFollowUps, runChartReview, mondayOf, patientKey, weeksInRange, toDay,
 };

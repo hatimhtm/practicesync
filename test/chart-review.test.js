@@ -137,6 +137,24 @@ Add provider
 Next of kin`;
 
 const PROFILE_SMS_OFF = PROFILE.replace('ON\nText / SMS reminders', 'OFF\nText / SMS reminders');
+// As read in a real browser the "Go to…" dropdown can come first, with the same names.
+const GO_TO = `Display settings
+Go to...
+Patient
+Contact
+Address
+Insurance, payment, & eligibility
+Demographics
+Care team
+Next of kin
+Flowsheets
+Diagnoses
+Patient risk score
+Social history
+Allergies
+Medications
+Encounters
+`;
 const providers = m.DEMO_PROVIDERS;
 const today = new Date(2026, 9, 30); // Fri Oct 30, 2026
 const ws0 = cr.mondayOf(today), ws1 = new Date(ws0.getTime() + 7 * 86400000);
@@ -219,9 +237,33 @@ const run = (pages, visits = visits3x) => Object.fromEntries(cr.reviewChart(page
   const again = cr.mergeFollowUps(first, res(cr.reviewChart(withOff, { today, providers, visits: visits3x, weekStarts: [ws0, ws1] })), 'T2');
   check('re-running doesn\'t duplicate them', again.length === first.length);
   const fixed = base;
+  const unreadRes = res(cr.reviewChart({ ...withOff, summary: null }, { today, providers, visits: visits3x, weekStarts: [ws0, ws1] }));
+  check('"Couldn\'t read" isn\'t a follow-up (nothing to fix in the chart)', !cr.mergeFollowUps([], unreadRes, 'T').some((f) => /Couldn't read/.test(f.note)));
   const later = cr.mergeFollowUps(again, res(cr.reviewChart(fixed, { today, providers, visits: visits3x, weekStarts: [ws0, ws1] })), 'T3');
   const sms = later.find((f) => /Text\/SMS/.test(f.note));
   check('a fixed item is closed automatically on the next review', sms && sms.resolvedAt === 'T3' && sms.resolvedBy === 'review');
+})();
+
+(function testGoToDropdown() {
+  console.log('# The "Go to…" dropdown lists the same names as the real sections');
+  const r = run({ ...base, summary: GO_TO + SUMMARY, profile: GO_TO + PROFILE });
+  check('diagnosis still found', r.diagnosis.status === 'ok');
+  check('care team still found (preferred, referring)', r.careTeam.status === 'ok');
+  check('address, phone, email, reminders still found', r.contact.status === 'ok');
+  const none = run({ ...base, summary: GO_TO + 'Diagnoses\nShow by\nICD-10\nPatient risk score\nNo score' });
+  check('…and a chart with truly no diagnosis is still flagged', none.diagnosis.status === 'problem');
+  const blank = run({ ...base, profile: GO_TO + PROFILE.replace('Preferred provider in practice', 'Backup provider') });
+  check('…and a care team with no preferred provider too', blank.careTeam.notes.some((x) => /No "Preferred provider/.test(x)));
+})();
+
+(function testDocumentsPending() {
+  console.log('# Documents opens on "Pending"');
+  const onlyPending = run({ ...base, documents: 'TITLE\nMD Referral Expires 1/16/26\nOther', documentsComplete: false, pinnedNote: PINNED.replace('9/19/26', '01/01/2027') });
+  check('only Pending seen + older referral → "look at Signed", not "fix it"', onlyPending.referral.status === 'check' && onlyPending.referral.notes.some((x) => /Only "Pending"/.test(x)));
+  const both = run({ ...base, documents: 'MD Referral Expires 1/16/26\nMD Referral Expires 1/1/27\nMD Signed Plan of Care.pdf', documentsComplete: true, pinnedNote: PINNED.replace('9/19/26', '01/01/2027') });
+  check('Pending + Signed read, one matches the note → no mismatch', !both.referral.notes.some((x) => /update the pinned note/.test(x)));
+  const partial = run({ ...base, pinnedNote: 'Services: PT\nMD Referral Expires: 11/27/26\nMD Signed POC for PT: Signed 4/24\nPT Reassessment due: 12/17/26\nDocumentation Type: Basic note', pinnedPartial: true });
+  check('only the top of the note seen → "check", not "no weekly schedule"', partial.pinnedNote.status === 'check' && !partial.pinnedNote.notes.some((x) => /has no weekly/.test(x)));
 })();
 
 (function testRealNotes() {
@@ -274,7 +316,7 @@ Documentation type: Insurance note`);
   let open = 0, peak = 0;
   const fakeTab = () => ({
     goto: async () => { open += 1; peak = Math.max(peak, open); await new Promise((r) => setTimeout(r, 15)); open -= 1; },
-    evaluate: async () => 'Diagnoses\nTYPE/SOURCE\nTITLE\nContact\nCare team', evaluateHandle: async () => null, $: async () => null, keyboard: { press: async () => {} }, url: () => '',
+    evaluate: async () => 'Diagnoses\nEncounters\nTYPE/SOURCE\nTITLE\nContact\nAppointment reminders\nCare team\nServices: PT\nWeekly Schedule: 1x/wk PT', evaluateHandle: async () => null, reload: async () => {}, mouse: { click: async () => {} }, $: async () => null, keyboard: { press: async () => {} }, url: () => '',
   });
   const visits = Array.from({ length: 8 }, (_, i) => ({ patientName: `Test Client${i}`, doctorName: 'Gianna G', date: '11/02/2026', href: `#/PF/charts/patients/00000000-0000-0000-0000-00000000000${i}/summary` }));
   let asked = [];
