@@ -13,7 +13,7 @@ const path = require('path');
 const m = require(path.join(__dirname, '..', 'src', 'main', 'model'));
 const { planAppointments } = require(path.join(__dirname, '..', 'src', 'main', 'automation'));
 const { pickClinicianIndex, namesPerson } = require(path.join(__dirname, '..', 'src', 'main', 'book'));
-const { takeExistingFrom, unmatchedReason, looseSameClient, ledgerKey, findLooseExisting, spreadSessions } = require(path.join(__dirname, '..', 'src', 'main', 'sync'));
+const { takeExistingFrom, unmatchedReason, looseSameClient, ledgerKey, findLooseExisting, spreadSessions, strayEntry } = require(path.join(__dirname, '..', 'src', 'main', 'sync'));
 
 let passed = 0;
 let failed = 0;
@@ -193,6 +193,32 @@ const lines = (p) => p.services.map((s) => `${s.code}x${s.units}${s.modifiers.le
   ]);
   check('each patient\'s 1st session first, then 2nd, then 3rd', day.map((a) => a.patientName.split(/[ ,]+/)[0] + a.n).join(' ') === 'Toby1 Rowan1 Avery1 Toby2 Fakename3');
   check('no visit lost or added', day.length === 5);
+})();
+
+(function testCalendarColumns() {
+  console.log('# The calendar decides — each column is a billing provider');
+  const C = 'Caryn McAllister', H = 'Heather Vines-Dubose', K = 'Karine Rocha de Benedicto';
+  // A day like 10/26: most visits were removed from SimplePractice; a few remain.
+  const pool = [
+    { title: 'Toby Fakename', clinician: H },
+    { title: 'Rowan PT/OT/SLP Testerly', clinician: H },
+    { title: 'Casey Example', clinician: C },
+  ];
+  check('Toby\'s PT visit (Caryn) isn\'t his entry in Heather\'s column → book it', takeExistingFrom(pool, 'Toby Fakename', 'pt', C) === false && pool.length === 3);
+  check('Toby\'s OT visit (Heather) IS that entry → skip', takeExistingFrom(pool, 'Toby Fakename', 'ot', H) === true && pool.length === 2);
+  check('one record for all 3 services: only its own column counts', takeExistingFrom(pool, 'Rowan Testerly', 'slp', K) === false && takeExistingFrom(pool, 'Rowan Testerly', 'ot', H) === true);
+  const visits = [{ patientName: 'Casey Example', mainDoctor: H }];
+  check('Casey is in Caryn\'s column but has only a Heather visit → held, may be the wrong provider', !!strayEntry(pool, 'Casey Example', visits));
+  const two = [{ patientName: 'Casey Example', mainDoctor: H }, { patientName: 'Casey Example', mainDoctor: C }];
+  check('…but if a visit bills under Caryn, that entry is that session, not a stray', !strayEntry(pool, 'Casey Example', two));
+  const mid = [{ title: 'Morgan PT/OT/SLP Sample', clinician: H }];
+  check('middle initial: "Morgan E Sample" is "Morgan PT/OT/SLP Sample" → already there', takeExistingFrom(mid, 'Morgan E Sample', 'ot', H) === true);
+  check('…and a different first name with that surname is not', takeExistingFrom([{ title: 'Morgan Sample', clinician: H }], 'Jordan E Sample', 'ot', H) === false);
+  const week = [{ title: 'Avery Example', clinician: '' }];
+  check('no column known (Week view) → name match as before', takeExistingFrom(week, 'Avery Example', 'pt', C) === true);
+  check('plain title strings still work', takeExistingFrom(['Toby PT Fakename'], 'Toby Fakename', 'pt') === true);
+  check('a spelling variant in another provider\'s column isn\'t held', findLooseExisting([{ title: 'Sam Placeholder', clinician: H }], 'Samuel Placeholder', 'pt', C) === '');
+  check('…in the same column it is', findLooseExisting([{ title: 'Sam Placeholder', clinician: C }], 'Samuel Placeholder', 'pt', C) === 'Sam Placeholder');
 })();
 
 (function testProceedButtons() {

@@ -593,6 +593,7 @@ function registerIpc() {
       sendToRenderer('chart-finished', {});
     }
   });
+  ipcMain.handle('bookings:forget', () => { store.save({ bookedVisits: [] }); return { ok: true }; });
   ipcMain.handle('chart:followup', (_e, { id, done }) => {
     const s = store.load();
     const list = (s.chartFollowUps || []).map((f) => (f.id === id ? { ...f, resolvedAt: done ? nowISO() : null, resolvedBy: done ? 'staff' : '' } : f));

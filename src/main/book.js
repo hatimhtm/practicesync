@@ -681,14 +681,31 @@ async function readPresetService(page, codeSelect) {
 function collectDayTitles({ grid, appt, iso }) {
   const root = document.querySelector(grid) || document;
   const days = new Set([...root.querySelectorAll('[data-date]')].map((e) => (e.getAttribute('data-date') || '').slice(0, 10)).filter(Boolean));
+  // Whose column an appointment sits in: the resource's header, else whichever
+  // header is straight above it. Day view has one column per team member.
+  const columnOf = (e) => {
+    const res = e.closest('[data-resource-id]');
+    if (res) {
+      const id = res.getAttribute('data-resource-id');
+      const h = [...document.querySelectorAll('.fc-col-header-cell[data-resource-id], th[data-resource-id]')].find((x) => x.getAttribute('data-resource-id') === id);
+      if (h && (h.innerText || '').trim()) return h.innerText.trim();
+    }
+    const r = e.getBoundingClientRect();
+    const cx = r.left + r.width / 2;
+    const heads = [...document.querySelectorAll('.fc-col-header-cell, .fc-resource')].filter((h) => {
+      const b = h.getBoundingClientRect();
+      return b.width > 40 && cx >= b.left && cx <= b.right && (h.innerText || '').trim();
+    }).sort((a, b) => a.getBoundingClientRect().width - b.getBoundingClientRect().width);
+    return heads.length ? heads[0].innerText.trim() : '';
+  };
   const out = [];
   for (const e of document.querySelectorAll(appt)) {
     const title = (e.getAttribute('data-appt-title') || '').trim();
     if (!title) continue;
     const col = e.closest('[data-date]');
-    if (col) { if ((col.getAttribute('data-date') || '').slice(0, 10) === iso) out.push(title); continue; }
+    if (col) { if ((col.getAttribute('data-date') || '').slice(0, 10) === iso) out.push({ title, clinician: columnOf(e) }); continue; }
     if (days.size > 1) return null;
-    out.push(title);
+    out.push({ title, clinician: columnOf(e) });
   }
   return out;
 }
@@ -714,7 +731,7 @@ async function spReadDay(page, date) {
       titles = await page.evaluate(collectDayTitles, { grid: C.grid, appt: C.apptTitle, iso });
     } catch { return { ok: false, titles: [] }; }
     if (!titles) return { ok: false, titles: [] };
-    const sig = titles.slice().sort().join('\n');
+    const sig = titles.map((t) => `${t.title}@${t.clinician}`).sort().join('\n');
     steady = sig === last ? steady + 1 : 0;
     last = sig;
     if (steady >= 2) return { ok: true, titles };

@@ -80,22 +80,22 @@ function fakeCalendar({ start, view = 'day', tags = true, titleFmt, events = [] 
   let p = fakeCalendar({ start: new Date(2026, 9, 23), view: 'day', events });
   check('day view, 3 days ahead → arrives', await book.spNavigateToDate(p, target, say));
   let r = await book.spReadDay(p, target);
-  check('day view → reads only that day', r.ok && r.titles.join('|') === 'Jamie PT Rivera');
+  check('day view → reads only that day', r.ok && r.titles.map((t) => t.title).join('|') === 'Jamie PT Rivera');
 
   p = fakeCalendar({ start: new Date(2026, 9, 23), view: 'week', events });
   check('week view → arrives on the week holding the day', await book.spNavigateToDate(p, target, say));
   r = await book.spReadDay(p, target);
-  check('week view → only that day\'s column counts', r.ok && r.titles.join('|') === 'Jamie PT Rivera');
+  check('week view → only that day\'s column counts', r.ok && r.titles.map((t) => t.title).join('|') === 'Jamie PT Rivera');
 
   p = fakeCalendar({ start: new Date(2026, 7, 10), view: 'month', events });
   check('month view, two months back → arrives', await book.spNavigateToDate(p, target, say));
   r = await book.spReadDay(p, target);
-  check('month view → only that day counts', r.ok && r.titles.join('|') === 'Jamie PT Rivera');
+  check('month view → only that day counts', r.ok && r.titles.map((t) => t.title).join('|') === 'Jamie PT Rivera');
 
   p = fakeCalendar({ start: new Date(2026, 9, 28), view: 'day', tags: false, titleFmt: (ds) => `${MON[ds[0].getMonth()]} ${ds[0].getDate()}`, events });
   check('no day tags + a heading without year → still arrives (going back)', await book.spNavigateToDate(p, target, say));
   r = await book.spReadDay(p, target);
-  check('…and reads the single day shown', r.ok && r.titles.join('|') === 'Jamie PT Rivera');
+  check('…and reads the single day shown', r.ok && r.titles.map((t) => t.title).join('|') === 'Jamie PT Rivera');
 
   p = fakeCalendar({ start: new Date(2026, 9, 23), view: 'week', tags: false, titleFmt: (ds) => `${MON[ds[0].getMonth()]} ${ds[0].getDate()} – ${ds[6].getDate()}, ${ds[6].getFullYear()}`, events });
   check('week view with no day tags → refuses (can\'t tell the days apart)', !(await book.spNavigateToDate(p, target, say)));

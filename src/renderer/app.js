@@ -923,6 +923,11 @@ async function loadAlerts() {
   const alerts = (await window.api.alertsList()) || [];
   renderAlertRows(alerts);
 }
+if ($('#forgetBookingsBtn')) $('#forgetBookingsBtn').addEventListener('click', async () => {
+  if (!confirm('Forget every booking this app remembers?\n\nOnly do this if appointments were deleted from SimplePractice on purpose. The calendar is still checked before anything is booked.')) return;
+  await window.api.forgetBookings();
+  toast('Earlier bookings forgotten.');
+});
 if ($('#alertsClearBtn')) $('#alertsClearBtn').addEventListener('click', async () => {
   await window.api.alertsClear();
   loadAlerts();

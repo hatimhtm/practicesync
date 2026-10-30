@@ -117,16 +117,44 @@ function plainTitle(t) { return String(t || '').replace(/\bself[\s-]?pay\b/ig, '
  * ("Toby PT/OT Fakename" is one record for both PT and OT); an untagged title
  * fits any visit, as before.
  */
-function takeExistingFrom(pool, name, disc) {
+function takeExistingFrom(pool, name, disc, billing = '') {
   const want = String(disc || '').toLowerCase();
-  const tagsOf = (n) => (String(n).match(/\b(pt|ot|slp)\b/gi) || []).map((t) => t.toLowerCase());
-  const same = pool.map((n, i) => ({ n, i })).filter(({ n }) => sameName(plainTitle(n), name));
-  const pick = same.find(({ n }) => want && tagsOf(n).includes(want))
+  const tagsOf = (n) => (entryTitle(n).match(/\b(pt|ot|slp)\b/gi) || []).map((t) => t.toLowerCase());
+  const same = pool.map((n, i) => ({ n, i }))
+    .filter(({ n }) => sameClient(entryTitle(n), name) && !otherColumn(n, billing));
+  // An entry in this visit's own billing provider's column is the surest match.
+  const pick = same.find(({ n }) => billing && entryClinician(n))
+    || same.find(({ n }) => want && tagsOf(n).includes(want))
     || same.find(({ n }) => !tagsOf(n).length)
     || (!want ? same[0] : null);
   if (!pick) return false;
   pool.splice(pick.i, 1);
   return true;
+}
+
+/** A calendar entry is a title string, or { title, clinician } when its column is
+ *  known. The clinician is the billing provider, so an entry in ANOTHER provider's
+ *  column is a different session (Jane's OT with Heather isn't her PT with Caryn). */
+const entryTitle = (e) => (e && typeof e === 'object' ? e.title : String(e || ''));
+const entryClinician = (e) => (e && typeof e === 'object' ? e.clinician || '' : '');
+const otherColumn = (e, billing) => { const c = entryClinician(e); return !!(c && billing && !book.namesPerson(c, billing)); };
+
+/** Same person: the exact name in any order, or the same first and last name with
+ *  a middle name/initial on one side only ("Mary E Moran" = "Mary PT/OT/SLP Moran"). */
+function sameClient(title, name) {
+  if (sameName(plainTitle(title), name)) return true;
+  const a = nameTokens(title), b = nameTokens(name);
+  if (a.length < 2 || b.length < 2 || a.length === b.length) return false;
+  return a[0] === b[0] && a[a.length - 1] === b[b.length - 1];
+}
+
+/** An entry for this client in a column that no visit of theirs today bills under. */
+function strayEntry(pool, name, group) {
+  const billings = group.filter((a) => sameClient(a.patientName, name)).map((a) => a.mainDoctor).filter(Boolean);
+  return pool.find((e) => {
+    const c = entryClinician(e);
+    return c && sameClient(entryTitle(e), name) && !billings.some((b) => book.namesPerson(c, b));
+  }) || null;
 }
 
 /** Name tokens, lowercased, without discipline / self-pay tags. */
@@ -156,15 +184,17 @@ function looseSameClient(title, name) {
  * discipline ("Jane PT Doe" is her PT session, not her OT one): a patient can
  * have several sessions a day, and every Practice Fusion visit is a real one.
  */
-function findLooseExisting(pool, name, disc) {
+function findLooseExisting(pool, name, disc, billing = '') {
   const want = String(disc || '').toLowerCase();
   const tagsOf = (n) => (String(n).match(/\b(pt|ot|slp)\b/gi) || []).map((t) => t.toLowerCase());
-  return pool.find((t) => {
-    if (sameName(plainTitle(t), name)) return false;
+  const hit = pool.find((e) => {
+    const t = entryTitle(e);
+    if (sameClient(t, name) || otherColumn(e, billing)) return false;
     const tags = tagsOf(t);
     if (tags.length && want && !tags.includes(want)) return false;
     return looseSameClient(t, name);
-  }) || '';
+  });
+  return hit ? entryTitle(hit) : '';
 }
 
 /**
@@ -323,7 +353,11 @@ async function runFullSync({ secrets, dates, providers, mainDoctors, selfPayClie
         }
         continue;
       }
-      const existingClients = day.titles;
+      // Only a column headed by one of the billing providers counts as "whose column"
+      // (a Week view's columns are headed by dates, not people).
+      const isBilling = (c) => (mainDoctors || []).some((m) => book.namesPerson(c, m.name || m));
+      const existingClients = day.titles.map((t) => ({ title: t.title, clinician: isBilling(t.clinician) ? t.clinician : '' }));
+      const ledgerToday = (key) => ledger.has(key) && !existingClients.length;
       say(onStep, `SimplePractice already has ${existingClients.length} appointment${existingClients.length === 1 ? '' : 's'} on ${date} — checking each visit against them.`);
       // A mutable pool of the names already on today's calendar: each entry can
       // only account for ONE of this patient's visits, and is matched word-order/
@@ -334,7 +368,7 @@ async function runFullSync({ secrets, dates, providers, mainDoctors, selfPayClie
       // only accounts for the OT visit — never for the same patient's PT visit, or
       // the PT gets skipped as "already booked" while the OT is booked twice.
       const existingPool = existingClients.slice();
-      const takeExisting = (name, disc) => takeExistingFrom(existingPool, name, disc);
+      const takeExisting = (name, disc, billing) => takeExistingFrom(existingPool, name, disc, billing);
       const group = byDate[date];
       // Give each of the day's appointments its own time across 9am–5pm, so they
       // don't all land on the same slot (the same-time stacking the user saw).
@@ -349,15 +383,31 @@ async function runFullSync({ secrets, dates, providers, mainDoctors, selfPayClie
         const base = ledgerKey(appt, 0);
         repeat[base] = (repeat[base] || 0) + 1;
         const key = ledgerKey(appt, repeat[base]);
-        if (takeExisting(appt.patientName, disc === 'slp' || disc === 'ot' || disc === 'pt' ? disc : '')) {
+        const billing = appt.mainDoctor || '';
+        if (takeExisting(appt.patientName, disc === 'slp' || disc === 'ot' || disc === 'pt' ? disc : '', billing)) {
           result.skipped += 1; result.outcomes.push(outcome(appt, 'already', 'already on the SimplePractice calendar'));
           say(onStep, `Skip ${appt.patientName} (${appt.therapist}) on ${date} — already booked`); continue;
         }
-        if (ledger.has(key)) {
-          result.skipped += 1; result.outcomes.push(outcome(appt, 'already', 'already booked earlier by Hope Billing Assistant'));
-          say(onStep, `Skip ${appt.patientName} (${appt.therapist}) on ${date} — already booked earlier by Hope Billing Assistant`); continue;
+        // SimplePractice's calendar is the truth: if a visit isn't on it, it isn't
+        // billed, so it's booked — even if this app booked it before (someone removed
+        // it). The record only speaks up when the calendar shows NOTHING at all that
+        // day though visits were booked: that looks like a calendar that didn't load.
+        if (ledgerToday(key)) {
+          result.failed += 1;
+          result.outcomes.push(outcome(appt, 'unverified', 'SimplePractice shows no appointments this day, but this app booked this visit earlier, so it wasn\'t booked again. If they were deleted on purpose, use "Forget earlier bookings" on the Alerts screen and sync again.'));
+          say(onStep, `⚠︎ Holding ${appt.patientName} (${appt.therapist}) on ${date} — booked earlier, but the calendar shows nothing this day.`); continue;
         }
-        const similar = findLooseExisting(existingPool, appt.patientName, disc === 'slp' || disc === 'ot' || disc === 'pt' ? disc : '');
+        if (ledger.has(key)) say(onStep, `${appt.patientName} (${appt.therapist}) was booked earlier but is no longer on the calendar — booking it again.`);
+        // Same client in a column none of their visits today bill under: it may be
+        // THIS visit booked under another provider — hold it rather than risk a
+        // second charge. (A column one of their visits bills under is that session.)
+        const stray = strayEntry(existingPool, appt.patientName, group);
+        if (stray) {
+          result.failed += 1;
+          result.outcomes.push(outcome(appt, 'possible_duplicate', `“${entryTitle(stray)}” is already on ${entryClinician(stray)}'s column that day, which isn't this visit's billing provider (${billing}). It may be this visit under the wrong provider, so it wasn't booked. Check the calendar: move or delete that entry, then sync again, or book it by hand.`));
+          say(onStep, `⚠︎ Holding ${appt.patientName} (${appt.therapist}) on ${date} — “${entryTitle(stray)}” is on ${entryClinician(stray)}'s column.`); continue;
+        }
+        const similar = findLooseExisting(existingPool, appt.patientName, disc === 'slp' || disc === 'ot' || disc === 'pt' ? disc : '', billing);
         if (similar) {
           result.failed += 1;
           result.outcomes.push(outcome(appt, 'possible_duplicate', `“${similar}” is already on the calendar that day and looks like the same client, so it wasn't booked. If it's a different person, book it by hand.`));
@@ -413,4 +463,4 @@ function reportProblems(result, onStep) {
   }
 }
 
-module.exports = { runFullSync, readPfSchedule, expandDates, pfNavigateToDate, PROBLEM, takeExistingFrom, unmatchedReason, looseSameClient, ledgerKey, findLooseExisting, spreadSessions };
+module.exports = { runFullSync, readPfSchedule, expandDates, pfNavigateToDate, PROBLEM, takeExistingFrom, unmatchedReason, looseSameClient, ledgerKey, findLooseExisting, spreadSessions, strayEntry };

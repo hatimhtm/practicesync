@@ -36,6 +36,7 @@ contextBridge.exposeInMainWorld('api', {
   alertsClear: () => ipcRenderer.invoke('alerts:clear'),
   onAlertAdded: (cb) => ipcRenderer.on('alert-added', (_e, a) => cb(a)),
   emailTest: () => ipcRenderer.invoke('email:test'),
+  forgetBookings: () => ipcRenderer.invoke('bookings:forget'),
   chartRun: (opts) => ipcRenderer.invoke('chart:run', opts || {}),
   chartFollowUp: (id, done) => ipcRenderer.invoke('chart:followup', { id, done }),
   onChartStep: (cb) => ipcRenderer.on('chart-step', (_e, s) => cb(s)),
