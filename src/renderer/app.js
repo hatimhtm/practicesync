@@ -1160,7 +1160,7 @@ function renderChartReview() {
   if (!CR.running) {
     $('#crIcon').textContent = review ? (open.length ? '⚠️' : '✅') : '📋';
     $('#crTitle').textContent = review ? `${results.length} chart${results.length === 1 ? '' : 's'} reviewed · ${open.length} follow-up${open.length === 1 ? '' : 's'} open` : 'No chart review yet';
-    $('#crSub').textContent = review ? `Last run ${fmtTime(review.at)}` : 'Takes about a minute per client. The Chrome window shows each chart as it\'s read.';
+    $('#crSub').textContent = review ? `Last run ${fmtTime(review.at)}${review.start && review.end ? ` · ${review.start} → ${review.end}` : ''}` : 'Takes about a minute per client. The Chrome window shows each chart as it\'s read.';
   }
   $('#crFollowCard').classList.toggle('hidden', CR.tab !== 'followups');
   $('#crClientsCard').classList.toggle('hidden', CR.tab !== 'clients');
@@ -1181,7 +1181,7 @@ function renderChartReview() {
           <input type="checkbox" data-id="${f.id}" ${f.resolvedAt ? 'checked' : ''} />
           <span class="cr-dot ${f.resolvedAt ? 'ok' : f.status}"></span>
           <span class="cr-fu-item">${escapeHtml(f.item)}</span>
-          <span class="cr-fu-note">${escapeHtml(f.note)}${f.resolvedAt ? `<span class="muted"> — ${f.resolvedBy === 'review' ? 'fixed in the chart' : 'marked done'} ${fmtTime(f.resolvedAt)}</span>` : ''}</span>
+          <span class="cr-fu-note">${escapeHtml(f.note)}${f.resolvedAt ? `<span class="muted"> — ${f.resolvedBy === 'review' ? 'no longer found on the last review' : 'marked done'} ${fmtTime(f.resolvedAt)}</span>` : ''}</span>
         </label>`).join('')}
     </div>`).join('') : `<div class="client-empty"><strong>${CR.fu === 'open' ? (results.length ? 'Nothing open' : 'No follow-ups yet') : 'Nothing resolved yet'}</strong><span>${results.length ? '' : 'Run the chart review to check every scheduled client.'}</span></div>`;
   $$('#crFollowList input[type="checkbox"]').forEach((c) => c.addEventListener('change', async () => {
@@ -1198,22 +1198,52 @@ function renderChartReview() {
       <summary class="cr-client-head"><b>${escapeHtml(r.patientName)}</b>
         <span class="cr-dots">${r.items.map((i) => `<span class="cr-dot ${i.status}" title="${escapeHtml(i.label)}"></span>`).join('')}</span>
         <span class="muted">${bad ? `${bad} to fix` : 'all OK'}</span></summary>
-      <div class="cr-items">${r.items.map((i) => `<div class="cr-item"><span class="cr-dot ${i.status}"></span><b>${escapeHtml(i.label)}</b><span>${i.notes.length ? i.notes.map(escapeHtml).join('<br>') : '<span class="muted">OK</span>'}</span></div>`).join('')}</div>
+      <div class="cr-items">${r.items.map((i) => `<div class="cr-item"><span class="cr-dot ${i.status}"></span><b>${escapeHtml(i.label)}</b><span>${i.notes.length ? i.notes.map(escapeHtml).join('<br>') : '<span class="muted">OK</span>'}</span></div>`).join('')}
+        ${r.pinnedNote != null ? `<details class="cr-note"><summary>Pinned note, as the app read it</summary><pre>${escapeHtml(r.pinnedNote || '(none found)')}</pre></details>` : ''}</div>
     </details>`;
   }).join('') : '<div class="client-empty"><strong>No charts reviewed yet</strong></div>';
 }
 $$('#crTabs button').forEach((b) => b.addEventListener('click', () => { CR.tab = b.dataset.tab; renderChartReview(); }));
 $$('#crFuFilter button').forEach((b) => b.addEventListener('click', () => { CR.fu = b.dataset.f; renderChartReview(); }));
 $('#crSearch').addEventListener('input', renderChartReview);
+// Date range — defaults to this week + next week; remembered on this Mac.
+const isoDay = (d) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+const isoToMDY = (v) => { const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(v || ''); return m ? `${m[2]}/${m[3]}/${m[1]}` : ''; };
+function crPreset(p) {
+  const t = new Date(); t.setHours(0, 0, 0, 0);
+  const mon = new Date(t); mon.setDate(t.getDate() - ((t.getDay() + 6) % 7));
+  let a = mon, b = new Date(mon); b.setDate(mon.getDate() + 13);
+  if (p === 'week') { b = new Date(mon); b.setDate(mon.getDate() + 6); }
+  if (p === '30') { a = t; b = new Date(t); b.setDate(t.getDate() + 29); }
+  $('#crFrom').value = isoDay(a); $('#crTo').value = isoDay(b);
+  $$('#crPresets button').forEach((x) => x.classList.toggle('active', x.dataset.p === p));
+  crRangeNote();
+}
+function crRangeNote() {
+  const a = $('#crFrom').value, b = $('#crTo').value;
+  try { localStorage.setItem('crRange', JSON.stringify({ a, b })); } catch {}
+  const days = a && b ? Math.round((new Date(b) - new Date(a)) / 86400000) + 1 : 0;
+  $('#crRangeNote').textContent = days > 0 ? `Reviews every client scheduled in these ${days} day${days === 1 ? '' : 's'}, and checks each week's visits against the pinned note.` : 'Pick a start date on or before the end date.';
+  $('#crRunBtn').disabled = CR.running || days <= 0 || days > 92;
+  if (days > 92) $('#crRangeNote').textContent = 'Pick a range of up to 3 months.';
+}
+$$('#crPresets button').forEach((b) => b.addEventListener('click', () => crPreset(b.dataset.p)));
+['#crFrom', '#crTo'].forEach((id) => $(id).addEventListener('change', () => { $$('#crPresets button').forEach((x) => x.classList.remove('active')); crRangeNote(); }));
+(() => {
+  try { const r = JSON.parse(localStorage.getItem('crRange') || 'null'); if (r && r.a && r.b) { $('#crFrom').value = r.a; $('#crTo').value = r.b; $$('#crPresets button').forEach((x) => x.classList.remove('active')); crRangeNote(); return; } } catch {}
+  crPreset('two');
+})();
+
 $('#crRunBtn').addEventListener('click', async () => {
   if (CR.running) return;
   CR.running = true;
   $('#crRunBtn').disabled = true; $('#crRunBtn').textContent = 'Reviewing…';
   $('#crIcon').textContent = '⏳'; $('#crTitle').textContent = 'Reviewing charts…';
   $('#crSub').textContent = 'Practice Fusion is open in Chrome. Leave it running.';
-  const r = await window.api.chartRun();
+  const r = await window.api.chartRun({ start: isoToMDY($('#crFrom').value), end: isoToMDY($('#crTo').value) });
   CR.running = false;
-  $('#crRunBtn').disabled = false; $('#crRunBtn').textContent = 'Run chart review';
+  $('#crRunBtn').textContent = 'Run chart review';
+  crRangeNote();
   if (!r || !r.ok) toast(r && r.error ? r.error : 'The chart review stopped.');
   await refresh();
 });

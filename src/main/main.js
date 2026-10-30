@@ -536,6 +536,7 @@ function registerIpc() {
   // CHART REVIEW — the practice's Client Chart Review Guide on every client
   // scheduled this week and next. Read only: nothing in Practice Fusion is changed.
   let chartReviewRunning = false;
+  const CHART_TABS = 5; // charts reviewed at the same time
   ipcMain.handle('chart:run', async (_e, opts = {}) => {
     if (chartReviewRunning) return { ok: false, error: 'A chart review is already running.' };
     const creds = store.getCreds();
@@ -549,20 +550,32 @@ function registerIpc() {
       const r = await liveEngine.openAutomationContext({ headless: false });
       if (r.error) return { ok: false, error: r.error.error || r.error };
       context = r.context;
+      // Speed: skip pictures, fonts, video and ads — the review only reads text.
+      await context.route('**/*', (route) => {
+        const req = route.request();
+        const type = req.resourceType();
+        if (type === 'image' || type === 'media' || type === 'font' || /doubleclick|googlesyndication|adservice|adnxs|googletagservices/i.test(req.url())) return route.abort().catch(() => {});
+        return route.continue().catch(() => {});
+      }).catch(() => {});
       const page = context.pages()[0] || (await context.newPage());
       const pf = await loginPracticeFusion(page, creds.practiceFusion, { onStep: step });
       if (!pf.ok) return { ok: false, error: pf.error };
+      // Several charts at once: extra tabs share the signed-in session.
+      const tabs = [page];
+      for (let i = 1; i < CHART_TABS; i++) { const t = await context.newPage().catch(() => null); if (t) tabs.push(t); }
+      await page.bringToFront().catch(() => {});
       const providers = (s.providers && s.providers.length) ? s.providers : DEMO_PROVIDERS;
       const mainDoctors = (s.mainDoctors && s.mainDoctors.length) ? s.mainDoctors : DEMO_MAIN_DOCTORS;
       const results = await chartReview.runChartReview({
-        page, providers, mainDoctors, onStep: step, only: opts.only || null,
+        page, pages: tabs, start: opts.start || null, end: opts.end || null,
+        providers, mainDoctors, onStep: step, only: opts.only || null,
         readSchedule: (dates) => readPfSchedule(page, dates, step),
         onResult: (res) => {
           // Save each chart as it's done, so a long run never loses its work.
           const cur = store.load();
           const prev = (cur.chartReview && cur.chartReview.results) || [];
           store.save({
-            chartReview: { at: nowISO(), results: [...prev.filter((x) => x.patientKey !== res.patientKey), res] },
+            chartReview: { at: nowISO(), start: opts.start || '', end: opts.end || '', results: [...prev.filter((x) => x.patientKey !== res.patientKey), res] },
             chartFollowUps: chartReview.mergeFollowUps(cur.chartFollowUps || [], [res]),
           });
           sendToRenderer('chart-result', res);
@@ -762,6 +775,11 @@ app.whenReady().then(() => {
         formatCodes(parseCodes(p.codes)) === oldSpeech ? { ...p, codes: newSpeech } : p);
       store.save({ providers, billingVersion: 2 });
     } catch {}
+  }
+  // 1.8.0's chart review couldn't read most pages ("Couldn't read the … page"),
+  // and some of its other findings were wrong — clear those results once.
+  if ((store.load().chartReviewVersion || 0) < 2) {
+    try { store.save({ chartReview: null, chartFollowUps: [], chartReviewVersion: 2 }); } catch {}
   }
   scheduler.setMode(settings.schedule || 'off');
   applyLoginItem(settings.schedule || 'off');

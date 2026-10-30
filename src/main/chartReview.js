@@ -18,25 +18,31 @@ const { normalizeName, isNonPatient, matchProvider, mainCodeFor } = require('./m
 /* --------------------------------- dates --------------------------------- */
 
 /** "9/19/26", "11/27/2026", "Signed 4/24" → { date, complete }. 4/24 = month/year only. */
-function parseLooseDate(s) {
+function parseLooseDate(s, today = new Date()) {
   const t = String(s || '');
-  let m = /(\d{1,2})\/(\d{1,2})\/(\d{2,4})/.exec(t);
-  if (m) {
+  let m = /(\d{1,2})[/.-](\d{1,2})[/.-](\d{2,4})\b/.exec(t);
+  if (m && +m[1] >= 1 && +m[1] <= 12 && +m[2] >= 1 && +m[2] <= 31) {
     let y = +m[3]; if (y < 100) y += 2000;
     const d = new Date(y, +m[1] - 1, +m[2]);
     return isNaN(d) ? null : { date: d, complete: true, text: m[0] };
   }
-  m = /\b(\d{1,2})\/(\d{2,4})\b/.exec(t);
-  if (m) {
-    let y = +m[2]; if (y < 100) y += 2000;
-    return { date: new Date(y, +m[1] - 1, 1), complete: false, text: m[0] };
+  // "10/15", "Signed 4/24": month/day with no year — the closest such date to
+  // today (so "10/15" written this fall is Oct 15 of this year, not Oct 2015).
+  m = /\b(\d{1,2})\/(\d{1,2})\b(?![/.-]\d)/.exec(t);
+  if (m && +m[1] >= 1 && +m[1] <= 12 && +m[2] >= 1 && +m[2] <= 31) {
+    const y0 = today.getFullYear();
+    const best = [y0 - 1, y0, y0 + 1].map((y) => new Date(y, +m[1] - 1, +m[2])).sort((a, b) => Math.abs(a - today) - Math.abs(b - today))[0];
+    return { date: best, complete: false, text: m[0] };
   }
   return null;
 }
+/** Calendar-day arithmetic — safe across daylight-saving changes (adding 24 h
+ *  to Nov 1 00:00 lands on Nov 1 23:00, which is how "week of 11/1" happened). */
+const addDays = (d, n) => new Date(d.getFullYear(), d.getMonth(), d.getDate() + n);
 const DAY = 86400000;
 const fmt = (d) => `${d.getMonth() + 1}/${d.getDate()}/${String(d.getFullYear()).slice(2)}`;
 const sameDay = (a, b) => a && b && a.getFullYear() === b.getFullYear() && a.getMonth() === b.getMonth() && a.getDate() === b.getDate();
-const daysFrom = (today, d) => Math.round((d - today) / DAY);
+const daysFrom = (today, d) => Math.round((Date.UTC(d.getFullYear(), d.getMonth(), d.getDate()) - Date.UTC(today.getFullYear(), today.getMonth(), today.getDate())) / DAY);
 
 /* ------------------------------- disciplines ------------------------------ */
 
@@ -83,26 +89,40 @@ function parseDiagnoses(summaryText) {
 /** The pinned note's fields. */
 function parsePinnedNote(text) {
   const t = String(text || '');
+  const L = lines(t);
   const field = (re) => { const m = re.exec(t); return m ? m[1].trim() : null; };
-  const services = field(/Services\s*:\s*([^\n]*)/i);
+  const services = field(/Services?\s*:\s*([^\n]*)/i);
   const note = {
-    found: /Services\s*:/i.test(t) || /MD Referral/i.test(t),
+    found: /Services?\s*:/i.test(t) || /referral/i.test(t) || /\bPOC\b/i.test(t),
     servicesText: services,
     services: parseDisciplines(services),
-    referralExpires: field(/MD Referral Expires?\s*:\s*([^\n]*)/i),
-    documentationType: field(/Documentation Type\s*:\s*([^\n]*)/i),
-    weeklySchedule: field(/Weekly Schedule\s*:\s*([^\n]*)/i),
+    referralExpires: null,
+    documentationType: field(/Documentation\s*Type\s*:?\s*([^\n]*)/i) || field(/\bDoc(?:umentation)?\.?\s*type\s*:?\s*([^\n]*)/i),
+    weeklySchedule: field(/Weekly\s*Schedule\s*:?\s*([^\n]*)/i),
     poc: {},
     reassessment: {},
     days: [],
     frequency: {},
   };
+  const valueOf = (line) => { const i = line.indexOf(':'); return (i >= 0 ? line.slice(i + 1) : line.replace(/^.*?(?=\d|signed|sent|pending|n\/a)/i, '')).trim(); };
+  for (const line of L) {
+    // "MD Referral Expires: 9/19/26", "Referral exp: 11/27/26", "MD Rx expires 1/2/27"
+    if (note.referralExpires == null && /referral|\bRx\b/i.test(line) && /exp|valid|thru|through|until|:/i.test(line) && !/authoriz/i.test(line)) note.referralExpires = valueOf(line);
+    // "MD Signed POC for PT: Signed 4/24", "PT POC: signed 5/1", "Plan of Care (OT): sent 10/20"
+    if (/\bPOC\b|plan of care/i.test(line)) {
+      const label = line.split(':')[0];
+      const ds = parseDisciplines(label.replace(/\bMD\b/gi, ''));
+      for (const d of (ds.length ? ds : note.services)) if (note.poc[d] == null) note.poc[d] = valueOf(line);
+    }
+    // "PT Reassessment due: 10/17/26", "OT re-eval due 1/3/27", "Reassess (SLP): 12/1/26"
+    if (/re-?\s?assess|re-?\s?eval|\bRE\s+due/i.test(line)) {
+      const label = line.split(':')[0];
+      const ds = parseDisciplines(label);
+      for (const d of (ds.length ? ds : note.services)) if (note.reassessment[d] == null) note.reassessment[d] = valueOf(line);
+    }
+  }
   let m;
-  const poc = /MD Signed POC(?: for)?\s+([A-Za-z/&, ]+?)\s*:\s*([^\n]*)/gi;
-  while ((m = poc.exec(t))) for (const d of parseDisciplines(m[1])) note.poc[d] = m[2].trim();
-  const re = /\b(PT|OT|SLP|ST|Speech)\s+Re-?assessment\s+due\s*:\s*([^\n]*)/gi;
-  while ((m = re.exec(t))) for (const d of parseDisciplines(m[1])) note.reassessment[d] = m[2].trim();
-  const day = /^\s*(Mo|Tu|We|Th|Fr|Sa|Su)[a-z]*\s*[-–:]\s*(.+)$/gim;
+  const day = /^\s*(Mo|Tu|We|Th|Fr|Sa|Su)[a-z]*\.?\s*[-–:]\s*(.+)$/gim;
   while ((m = day.exec(t))) note.days.push({ day: m[1], who: m[2].trim() });
   const freq = /(\d+)\s*x\s*\/?\s*w(?:ee)?k\s*(PT|OT|SLP|ST|Speech)?/gi;
   while ((m = freq.exec(note.weeklySchedule || ''))) {
@@ -199,7 +219,7 @@ const ITEMS = [
  * Returns the 9 checklist items, each { key, label, status, notes[] } where status
  * is 'ok' | 'problem' (must be fixed) | 'check' (a person should look).
  */
-function reviewChart(pages, { today = new Date(), providers = [], visits = [], weekStarts = [] } = {}) {
+function reviewChart(pages, { today = new Date(), providers = [], visits = [], weekStarts = [], weeks = null } = {}) {
   today = new Date(today.getFullYear(), today.getMonth(), today.getDate());
   const items = Object.fromEntries(ITEMS.map(([key, label]) => [key, { key, label, status: 'ok', notes: [] }]));
   const flag = (key, status, note) => {
@@ -220,7 +240,7 @@ function reviewChart(pages, { today = new Date(), providers = [], visits = [], w
   if (!pages.pinnedNote || !note.found) flag('pinnedNote', 'problem', 'No pinned note found (or it has no "Services:" line).');
   else {
     if (!services.length) flag('pinnedNote', 'problem', 'Pinned note doesn\'t list the services (Services: PT / OT / SLP).');
-    if (!note.referralExpires) flag('pinnedNote', 'problem', 'Pinned note has no "MD Referral Expires" date.');
+    if (!note.referralExpires) flag('pinnedNote', 'problem', 'Pinned note has no MD referral expiration date.');
     if (!note.documentationType) flag('pinnedNote', 'problem', 'Pinned note has no "Documentation Type" (basic note or insurance note).');
     else if (!/basic|insurance/i.test(note.documentationType)) flag('pinnedNote', 'check', `Documentation Type is "${note.documentationType}" — expected basic note or insurance note.`);
     if (!note.weeklySchedule && !note.days.length) flag('pinnedNote', 'problem', 'Pinned note has no weekly schedule (the Mo–Su mini calendar).');
@@ -230,9 +250,9 @@ function reviewChart(pages, { today = new Date(), providers = [], visits = [], w
   // 4) Plan of care — one MD-signed POC per service, dated, and on file.
   for (const d of services) {
     const v = note.poc[d];
-    if (v == null) flag('planOfCare', 'problem', `Pinned note has no "MD Signed POC for ${d}".`);
-    else if (!parseLooseDate(v)) flag('planOfCare', 'problem', `"MD Signed POC for ${d}" has no signed date ("${v || 'blank'}").`);
-    else if (!parseLooseDate(v).complete) flag('planOfCare', 'check', `"MD Signed POC for ${d}: ${v}" — not a complete date (month/day/year).`);
+    if (v == null) flag('planOfCare', 'problem', `Pinned note has no MD-signed plan of care line for ${d}.`);
+    else if (/\b(sent|pending|waiting|awaiting|faxed|requested)\b/i.test(v) && !/\bsigned\b/i.test(v)) flag('planOfCare', 'problem', `${d} plan of care isn't signed yet ("${v}") — follow up with the MD.`);
+    else if (!parseLooseDate(v, today) && !/\bsigned\b/i.test(v)) flag('planOfCare', 'problem', `${d} plan of care has no signed date ("${v || 'blank'}").`);
   }
   const docs = pages.documents == null ? null : lines(pages.documents);
   if (docs == null) unread('planOfCare', 'the Documents page');
@@ -241,8 +261,8 @@ function reviewChart(pages, { today = new Date(), providers = [], visits = [], w
   // 5) Reassessments — one per service, not overdue.
   for (const d of services) {
     const v = note.reassessment[d];
-    const pd = parseLooseDate(v);
-    if (v == null) flag('reassessments', 'problem', `Pinned note has no "${d} Reassessment due" date.`);
+    const pd = parseLooseDate(v, today);
+    if (v == null) flag('reassessments', 'problem', `Pinned note has no ${d} reassessment due date.`);
     else if (!pd) flag('reassessments', 'problem', `"${d} Reassessment due" has no date ("${v || 'blank'}").`);
     else {
       const n = daysFrom(today, pd.date);
@@ -252,7 +272,7 @@ function reviewChart(pages, { today = new Date(), providers = [], visits = [], w
   }
 
   // Referral — on file, not expired, and the pinned note matches the document.
-  const ref = parseLooseDate(note.referralExpires);
+  const ref = parseLooseDate(note.referralExpires, today);
   if (note.referralExpires && !ref) flag('referral', 'problem', `"MD Referral Expires: ${note.referralExpires}" isn't a date.`);
   if (ref) {
     const n = daysFrom(today, ref.date);
@@ -263,7 +283,7 @@ function reviewChart(pages, { today = new Date(), providers = [], visits = [], w
   else {
     const refDocs = docs.filter((l) => /referral/i.test(l));
     if (!refDocs.length) flag('referral', 'problem', 'No referral on file in Documents.');
-    const docDates = refDocs.map((l) => parseLooseDate((/expir\w*\s*:?\s*([\d/]+)/i.exec(l) || [])[1])).filter(Boolean);
+    const docDates = refDocs.map((l) => parseLooseDate((/exp\w*\.?\s*:?\s*([\d/.-]+)/i.exec(l) || [])[1], today)).filter(Boolean);
     if (ref && docDates.length && !docDates.some((d) => sameDay(d.date, ref.date))) {
       const latest = docDates.sort((a, b) => b.date - a.date)[0];
       flag('referral', 'problem', `Pinned note says the referral expires ${ref.text}, but the referral in Documents says ${fmt(latest.date)} — update the pinned note.`);
@@ -302,7 +322,7 @@ function reviewChart(pages, { today = new Date(), providers = [], visits = [], w
       if (p.preferredCount > 1) flag('careTeam', 'problem', `${p.preferredCount} preferred providers — only one can be preferred; the others should be backup providers.`);
       if (!p.hasReferring) flag('careTeam', 'problem', 'No referring provider on the care team.');
       if (pages.encounters != null) {
-        const since = new Date(today - 120 * DAY);
+        const since = addDays(today, -120);
         const seen = new Map();
         for (const e of parseEncounters(pages.encounters)) {
           if (e.date < since) continue;
@@ -315,23 +335,28 @@ function reviewChart(pages, { today = new Date(), providers = [], visits = [], w
     }
   }
 
-  // 8) Schedule — this week and next, every active service, at its frequency.
-  if (weekStarts.length) {
+  // 8) Schedule — each week of the range, every active service, at its frequency.
+  // A week only partly inside the range is checked for "any visit" (if it has 3+
+  // weekdays in range), and for the full frequency only when all 5 weekdays are in.
+  const wks = weeks || weekStarts.map((ws, wi) => ({ start: ws, end: addDays(ws, 7), weekdays: 5, label: wi === 0 ? 'this week' : 'next week' }));
+  if (wks.length) {
     const wanted = services.length ? services : [...new Set(visits.map((v) => v.discipline).filter(Boolean))];
-    weekStarts.forEach((ws, wi) => {
-      const we = new Date(ws.getTime() + 7 * DAY);
-      const inWeek = visits.filter((v) => v.date >= ws && v.date < we);
-      const label = wi === 0 ? 'this week' : 'next week';
-      if (!inWeek.length) { flag('schedule', 'problem', `Not scheduled ${label} (week of ${fmt(ws)}).`); return; }
+    for (const w of wks) {
+      if (w.weekdays < 3) continue;
+      const inWeek = visits.filter((v) => v.date >= w.start && v.date < w.end);
+      const label = w.label || `the week of ${fmt(w.start)}`;
+      if (!inWeek.length) { flag('schedule', 'problem', `Not scheduled ${label}${w.label && /this|next/.test(w.label) ? ` (week of ${fmt(w.start)})` : ''}.`); continue; }
+      const unknown = inWeek.filter((v) => !v.discipline).length;
       for (const d of wanted) {
         const n = inWeek.filter((v) => v.discipline === d).length;
         const f = note.frequency[d];
-        if (!n) flag('schedule', 'problem', `No ${d} visit ${label}${f ? ` (pinned note says ${f}x/wk)` : ''}.`);
-        else if (f && n < f) flag('schedule', 'check', `${n} of ${f} ${d} visits scheduled ${label}.`);
+        if (!n && unknown) flag('schedule', 'check', `Couldn't tell whether ${label}'s ${unknown === 1 ? 'visit is' : `${unknown} visits are`} ${d} — the therapist isn't on Doctors & Codes.`);
+        else if (!n) flag('schedule', 'problem', `No ${d} visit ${label}${f ? ` (pinned note says ${f}x/wk)` : ''}.`);
+        else if (f && n < f && w.weekdays >= 5) flag('schedule', 'check', `${n} of ${f} ${d} visits scheduled ${label}.`);
       }
       const extra = [...new Set(inWeek.map((v) => v.discipline).filter((d) => d && services.length && !services.includes(d)))];
       if (extra.length) flag('schedule', 'check', `${extra.join(', ')} scheduled ${label} but not in the pinned note's services.`);
-    });
+    }
   }
 
   return ITEMS.map(([key]) => items[key]);
@@ -380,24 +405,37 @@ const PF_CHART_LIST = 'https://static.practicefusion.com/apps/ehr/index.html#/PF
 const CHART_ID_RE = /\/charts\/patients\/([0-9a-f-]{20,})/i;
 const patientKey = (name) => normalizeName(name).split(' ').filter(Boolean).sort().join(' ');
 
-/** Visible text of the main page, without the advertisement column. */
+/** Visible text of the page, minus the advertisement column. The ad column is
+ *  the narrow box around the "Advertisement" label — measured, so the main page
+ *  is never mistaken for it (1.8.0 hid the label's parent, which on the real
+ *  Practice Fusion page was the whole page: every read came back empty). */
 async function pageText(page) {
   return page.evaluate(() => {
-    const ads = [...document.querySelectorAll('*')].filter((e) => /^advertisement$/i.test((e.textContent || '').trim()));
-    const hide = ads.map((a) => a.parentElement).filter(Boolean);
-    hide.forEach((h) => { h.dataset.__psHide = h.style.display; h.style.display = 'none'; });
     const t = document.body ? document.body.innerText : '';
-    hide.forEach((h) => { h.style.display = h.dataset.__psHide || ''; });
-    return t;
+    const W = window.innerWidth || 1200;
+    const drop = new Set();
+    for (const el of document.querySelectorAll('*')) {
+      if (el.children.length > 2 || !/^advertisement$/i.test((el.textContent || '').trim())) continue;
+      // Climb while the box stays narrow (the ad column); the label's own
+      // siblings in a wide parent are the ad content when there's no column box.
+      let rail = el, up = el.parentElement;
+      while (up && up !== document.body && up.getBoundingClientRect().width < W * 0.4) { rail = up; up = up.parentElement; }
+      const boxes = rail === el && el.parentElement
+        ? [el, ...[...el.parentElement.children].filter((c) => c !== el && c.getBoundingClientRect().width < W * 0.4 && c.getBoundingClientRect().left >= el.getBoundingClientRect().left - 2)]
+        : [rail];
+      for (const b of boxes) for (const line of (b.innerText || '').split('\n')) if (line.trim()) drop.add(line.trim());
+    }
+    if (!drop.size) return t;
+    return t.split('\n').filter((line) => !drop.has(line.trim())).join('\n');
   }).catch(() => null);
 }
 
 /** Wait until a page's text contains one of `marks` and stops changing. */
-async function settledText(page, marks, timeoutMs = 20000) {
+async function settledText(page, marks, timeoutMs = 12000) {
   const end = Date.now() + timeoutMs;
   let last = '', steady = 0;
   while (Date.now() < end) {
-    await sleep(700);
+    await sleep(350);
     const t = await pageText(page);
     if (t == null) continue;
     const ready = marks.some((m) => (m instanceof RegExp ? m.test(t) : t.includes(m)));
@@ -522,9 +560,10 @@ async function readChart(page, id) {
   pages.intakes = await go('timeline/intakes', [/intake form/i, /no intake/i, 'TYPE/SOURCE']);
   pages.encounters = await go('timeline/encounter', ['TYPE/SOURCE', /no encounters/i]);
   await page.goto(PF_BASE + id + '/documents', { waitUntil: 'domcontentloaded' }).catch(() => {});
-  await settledText(page, ['TITLE', /no documents/i]);
+  const firstDocs = await settledText(page, ['TITLE', /no documents/i]);
   const filter = await showAllDocuments(page);
-  pages.documents = await settledText(page, ['TITLE', /no documents/i]);
+  // Only re-read when the list was switched from "Pending" to all documents.
+  pages.documents = filter === 'all' ? (await settledText(page, ['TITLE', /no documents/i])) || firstDocs : firstDocs;
   pages.documentsFilter = filter;
   pages.profile = await go('profile', ['Contact', 'Care team']);
   if (pages.profile) {
@@ -538,21 +577,55 @@ async function readChart(page, id) {
 /** Monday 00:00 of the week holding `d`. */
 function mondayOf(d) {
   const x = new Date(d.getFullYear(), d.getMonth(), d.getDate());
-  const dow = (x.getDay() + 6) % 7;
-  return new Date(x.getTime() - dow * DAY);
+  return addDays(x, -((x.getDay() + 6) % 7));
+}
+
+/** Local midnight Date from "MM/DD/YYYY" (or a Date). */
+function toDay(x) {
+  if (x instanceof Date) return new Date(x.getFullYear(), x.getMonth(), x.getDate());
+  const m = /^(\d{1,2})\/(\d{1,2})\/(\d{4})$/.exec(String(x || '').trim());
+  if (m) return new Date(+m[3], +m[1] - 1, +m[2]);
+  const iso = /^(\d{4})-(\d{2})-(\d{2})$/.exec(String(x || '').trim());
+  return iso ? new Date(+iso[1], +iso[2] - 1, +iso[3]) : null;
+}
+const mdyOf = (d) => `${String(d.getMonth() + 1).padStart(2, '0')}/${String(d.getDate()).padStart(2, '0')}/${d.getFullYear()}`;
+
+/** The Mon–Sun weeks a date range touches, each clipped to the range, with how
+ *  many weekdays (Mon–Fri) of it are inside the range. */
+function weeksInRange(start, end, today = new Date()) {
+  const out = [];
+  const thisMon = mondayOf(today);
+  for (let mon = mondayOf(start); mon <= end; mon = addDays(mon, 7)) {
+    const s = mon < start ? start : mon;
+    const sun = addDays(mon, 7);
+    const endNext = addDays(end, 1);
+    const e = sun < endNext ? sun : endNext;
+    let weekdays = 0;
+    for (let d = new Date(s); d < e; d = addDays(d, 1)) if (d.getDay() >= 1 && d.getDay() <= 5) weekdays += 1;
+    const wk = Math.round(daysFrom(thisMon, mon) / 7);
+    out.push({ start: s, end: e, weekdays, label: wk === 0 ? 'this week' : wk === 1 ? 'next week' : '' });
+  }
+  return out;
 }
 
 /**
  * The whole review. `readSchedule(dates)` returns Practice Fusion visits for those
  * days ([{ patientName, doctorName, date: 'MM/DD/YYYY', href }]) — supplied by the
- * caller so the schedule reading stays in one place.
+ * caller so the schedule reading stays in one place. `pages` are the browser tabs
+ * to use; clients are reviewed on all of them at once (the first also reads the
+ * schedule). Default range: this week and next.
  */
-async function runChartReview({ page, readSchedule, providers = [], mainDoctors = [], onStep = () => {}, onResult = () => {}, today = new Date(), only = null }) {
+async function runChartReview({ pages: tabs, page, readSchedule, providers = [], mainDoctors = [], onStep = () => {}, onResult = () => {}, today = new Date(), only = null, start = null, end = null }) {
   const say = (m) => { try { onStep(m); } catch {} };
-  const ws0 = mondayOf(today), ws1 = new Date(ws0.getTime() + 7 * DAY);
+  tabs = tabs && tabs.length ? tabs : [page];
+  const t0 = toDay(today);
+  const from = toDay(start) || mondayOf(t0);
+  const to = toDay(end) || addDays(mondayOf(t0), 13);
+  if (to < from) return [];
   const dates = [];
-  for (let i = 0; i < 14; i++) { const d = new Date(ws0.getTime() + i * DAY); dates.push(`${String(d.getMonth() + 1).padStart(2, '0')}/${String(d.getDate()).padStart(2, '0')}/${d.getFullYear()}`); }
-  say(`Reading the Practice Fusion schedule for this week and next (${dates[0]} → ${dates[13]})…`);
+  for (let d = from; d <= to; d = addDays(d, 1)) dates.push(mdyOf(d));
+  const weeks = weeksInRange(from, to, t0);
+  say(`Reading the Practice Fusion schedule, ${dates[0]} → ${dates[dates.length - 1]} (${dates.length} day${dates.length === 1 ? '' : 's'})…`);
   const visits = await readSchedule(dates);
   const DISC = { GP: 'PT', GO: 'OT', GN: 'SLP' };
   const clients = new Map();
@@ -562,41 +635,44 @@ async function runChartReview({ page, readSchedule, providers = [], mainDoctors 
     if (only && !only.includes(k)) continue;
     const { provider } = matchProvider(v.doctorName, providers);
     const discipline = provider ? (DISC[mainCodeFor(provider.mainDoctor, mainDoctors)] || parseDisciplines(provider.discipline)[0] || '') : '';
-    const [mm, dd, yy] = String(v.date).split('/').map(Number);
     const c = clients.get(k) || { patientKey: k, patientName: v.patientName, href: '', visits: [] };
-    c.visits.push({ date: new Date(yy, mm - 1, dd), discipline });
+    c.visits.push({ date: toDay(v.date), discipline });
     if (!c.href && v.href) c.href = v.href;
     clients.set(k, c);
   }
-  say(`${clients.size} client${clients.size === 1 ? '' : 's'} scheduled — reviewing each chart.`);
+  const queue = [...clients.values()];
+  const total = queue.length;
+  say(`${total} client${total === 1 ? '' : 's'} scheduled — reviewing ${Math.min(tabs.length, total) > 1 ? `${Math.min(tabs.length, total)} charts at a time` : 'each chart'}.`);
   const results = [];
-  let i = 0;
-  for (const c of clients.values()) {
-    i += 1;
-    say(`(${i}/${clients.size}) ${c.patientName}…`);
+  let done = 0;
+  const reviewOne = async (tab, c) => {
     let r;
     try {
-      const id = await findChartId(page, c.patientName, c.href, say);
+      const id = await findChartId(tab, c.patientName, c.href, say);
       if (!id) r = { ok: false, patientKey: c.patientKey, patientName: c.patientName, error: 'Couldn\'t find this chart in Practice Fusion.' };
       else {
-        const pages = await readChart(page, id);
-        const items = reviewChart(pages, { today, providers, visits: c.visits, weekStarts: [ws0, ws1] });
-        if (pages.documentsFilter === 'pending-only') items.find((x) => x.key === 'referral').notes.push('Only "Pending" documents could be listed — signed ones weren\'t checked.');
-        r = { ok: true, patientKey: c.patientKey, patientName: c.patientName, chartId: id, items };
-        const bad = items.filter((x) => x.status !== 'ok').length;
-        say(`  ${bad ? `${bad} item${bad === 1 ? '' : 's'} to fix` : 'all 9 items OK ✓'}`);
+        const pg = await readChart(tab, id);
+        const items = reviewChart(pg, { today: t0, providers, visits: c.visits, weeks });
+        if (pg.documentsFilter === 'pending-only') items.find((x) => x.key === 'referral').notes.push('Only "Pending" documents could be listed — signed ones weren\'t checked.');
+        r = { ok: true, patientKey: c.patientKey, patientName: c.patientName, chartId: id, items, pinnedNote: (pg.pinnedNote || '').slice(0, 3000) };
       }
     } catch (e) {
       r = { ok: false, patientKey: c.patientKey, patientName: c.patientName, error: (e && e.message) || String(e) };
     }
     r.reviewedAt = new Date().toISOString();
+    done += 1;
+    const bad = r.ok ? r.items.filter((x) => x.status !== 'ok').length : 0;
+    say(`(${done}/${total}) ${c.patientName} — ${!r.ok ? `couldn't review: ${r.error}` : bad ? `${bad} item${bad === 1 ? '' : 's'} to fix` : 'all 9 items OK ✓'}`);
     results.push(r);
     try { onResult(r); } catch {}
-  }
+  };
+  await Promise.all(tabs.slice(0, Math.max(1, Math.min(tabs.length, total))).map(async (tab) => {
+    for (let c = queue.shift(); c; c = queue.shift()) await reviewOne(tab, c);
+  }));
   return results;
 }
 
 module.exports = {
   ITEMS, parseLooseDate, parseDisciplines, parseDiagnoses, parsePinnedNote, parseProfile,
-  parseEncounters, therapistsIn, toggleState, reviewChart, mergeFollowUps, runChartReview, mondayOf, patientKey,
+  pageText, parseEncounters, therapistsIn, toggleState, reviewChart, mergeFollowUps, runChartReview, mondayOf, patientKey, weeksInRange, toDay,
 };

@@ -194,6 +194,17 @@ async function pfNavigateToDate(page, target, onStep) {
   return false;
 }
 
+/** Wait for a day's appointment rows to load and stop changing (an empty day is fine). */
+async function waitForDayRows(page) {
+  let last = -1, steady = 0;
+  for (let i = 0; i < 20 && steady < 2; i++) {
+    await sleep(300);
+    const n = await page.$$eval(presets.PF.selectors.rowSelector, (r) => r.length).catch(() => 0);
+    steady = n === last ? steady + 1 : 0;
+    last = n;
+  }
+}
+
 /**
  * Read the Practice Fusion schedule for each day, for the chart review: every
  * visit with its patient, therapist and the patient's chart link (the name is a
@@ -201,12 +212,18 @@ async function pfNavigateToDate(page, target, onStep) {
  */
 async function readPfSchedule(page, dates, onStep) {
   const out = [];
+  // Open the schedule ONCE and walk forward a day at a time (the dates are
+  // consecutive) — reopening it from today for every day was the slow part.
+  await page.goto(presets.PF.scheduleUrl, { waitUntil: 'domcontentloaded' }).catch(() => {});
+  await login.dismissPopups(page);
   for (const date of dates) {
-    await page.goto(presets.PF.scheduleUrl, { waitUntil: 'domcontentloaded' }).catch(() => {});
-    await login.dismissPopups(page);
-    if (!(await pfNavigateToDate(page, date, onStep))) { say(onStep, `  ⚠︎ Couldn't open the Practice Fusion schedule on ${date} — skipped.`); continue; }
-    try { await page.waitForSelector(presets.PF.selectors.rowSelector, { timeout: 8000 }); } catch {}
-    await sleep(900); await login.dismissPopups(page);
+    if (!(await pfNavigateToDate(page, date, onStep))) {
+      // Lost the schedule (a popup, a reload) — reopen it once and try again.
+      await page.goto(presets.PF.scheduleUrl, { waitUntil: 'domcontentloaded' }).catch(() => {});
+      await login.dismissPopups(page);
+      if (!(await pfNavigateToDate(page, date, onStep))) { say(onStep, `  ⚠︎ Couldn't open the Practice Fusion schedule on ${date} — skipped.`); continue; }
+    }
+    await waitForDayRows(page);
     const html = await page.content();
     const doc = new JSDOM(html).window.document;
     const rows = extractVisits(doc, presets.PF.selectors, 400);

@@ -171,7 +171,7 @@ const run = (pages, visits = visits3x) => Object.fromEntries(cr.reviewChart(page
   check('referral: pinned 9/19/26 vs document 11/27/26 → update the pinned note', r.referral.status === 'problem' && r.referral.notes.some((x) => /9\/19\/26.*11\/27\/26.*update the pinned note/.test(x)));
   check('referral also flagged as expired (9/19/26 is past)', r.referral.notes.some((x) => /expired 9\/19\/26/.test(x)));
   check('PT reassessment 10/17/26 overdue', r.reassessments.status === 'problem' && /PT reassessment was due 10\/17\/26/.test(r.reassessments.notes[0]));
-  check('POC "Signed 4/24" → not a complete date (check)', r.planOfCare.status === 'check');
+  check('POC "Signed 4/24" → OK (signed, with a date)', !r.planOfCare.notes.some((x) => /4\/24/.test(x)));
   check('contact details + reminders OK', r.contact.status === 'ok');
   const r2 = run({ ...base, profile: PROFILE_SMS_OFF });
   check('Text/SMS OFF → turn it on', r2.contact.status === 'problem' && r2.contact.notes.some((x) => /Text\/SMS reminders are OFF/.test(x)));
@@ -198,7 +198,7 @@ const run = (pages, visits = visits3x) => Object.fromEntries(cr.reviewChart(page
   r = run({ ...base, encounters: 'Office Visit\nJessica Trujillo OT\nSOAP Note\n01/05/2026' });
   check('…but not one last seen over 4 months ago', !r.careTeam.notes.some((x) => /Jessica Trujillo/.test(x)));
   r = run({ ...base, pinnedNote: PINNED.replace('Services: PT', 'Services: PT, OT') });
-  check('OT service without OT POC / reassessment → flagged', r.planOfCare.notes.some((x) => /POC for OT/.test(x)) && r.reassessments.notes.some((x) => /OT Reassessment/.test(x)));
+  check('OT service without OT POC / reassessment → flagged', r.planOfCare.notes.some((x) => /plan of care line for OT/.test(x)) && r.reassessments.notes.some((x) => /no OT reassessment/.test(x)));
   check('…and no OT visits scheduled → flagged', r.schedule.notes.some((x) => /No OT visit this week/.test(x)));
   r = run(base, visits3x.filter((v) => v.date < ws1));
   check('not scheduled next week → flagged', r.schedule.status === 'problem' && r.schedule.notes.some((x) => /next week/.test(x)));
@@ -224,5 +224,65 @@ const run = (pages, visits = visits3x) => Object.fromEntries(cr.reviewChart(page
   check('a fixed item is closed automatically on the next review', sms && sms.resolvedAt === 'T3' && sms.resolvedBy === 'review');
 })();
 
-console.log(`${passed} passed, ${failed} failed`);
-process.exit(failed ? 1 : 0);
+(function testRealNotes() {
+  console.log('# The way staff actually write the pinned note (from the first real run)');
+  const sent = cr.parsePinnedNote('Services: PT\nMD Referral Expires: 10/15\nMD Signed POC for PT: Sent on PF 10/20 LS\nPT Reassessment due: 11/8/26');
+  let r = run({ ...base, pinnedNote: PINNED.replace('MD Signed POC for PT: Signed 4/24', 'MD Signed POC for PT: Sent on PF 10/20 LS') });
+  check('"Sent on PF 10/20 LS" → PT plan of care not signed yet', r.planOfCare.notes.some((x) => /PT plan of care isn't signed yet/.test(x)));
+  check('"10/15" with no year → Oct 15 2026, not 2015', cr.parseLooseDate(sent.referralExpires, today).date.getFullYear() === 2026);
+  r = run({ ...base, pinnedNote: PINNED.replace('MD Referral Expires: 9/19/26', 'MD Referral Expires: 10/15') });
+  check('…so it says "expired 10/15 (15 days ago)"', r.referral.notes.some((x) => /expired 10\/15/.test(x)));
+  const alt = cr.parsePinnedNote(`Services: PT, OT, ST
+Referral exp: 12/1/26
+PT POC: signed 9/2/26
+OT POC - signed 9/3/26
+Plan of Care (ST): signed 9/4/26
+PT re-eval due: 12/2/26
+OT Re-assessment due 12/3/26
+ST reassess: 12/4/26
+Documentation type: Insurance note`);
+  check('3 services incl. ST → SLP', alt.services.join() === 'PT,OT,SLP');
+  check('"Referral exp: 12/1/26" is the referral date', alt.referralExpires === '12/1/26');
+  check('"PT POC:", "OT POC -", "Plan of Care (ST):" all read', alt.poc.PT && alt.poc.OT && alt.poc.SLP);
+  check('"re-eval due", "Re-assessment due", "reassess:" all read', alt.reassessment.PT === '12/2/26' && /12\/3\/26/.test(alt.reassessment.OT) && alt.reassessment.SLP === '12/4/26');
+  check('"Documentation type:" lower case read', /Insurance/.test(alt.documentationType));
+  r = run({ ...base, pinnedNote: 'Services: PT\nMD Referral Expires: 11/27/26\nMD Signed POC for PT: Signed 4/24\nPT Reassessment due: 12/17/26\nDocumentation Type: Basic note\nWeekly Schedule: 3x/wk PT\nMo - Caryn' }, visits3x.map((v) => ({ ...v, discipline: '' })));
+  check('visits whose discipline couldn\'t be told → "couldn\'t tell", not "No PT visit"', !r.schedule.notes.some((x) => /^No PT visit/.test(x)) && r.schedule.notes.some((x) => /Couldn't tell/.test(x)));
+})();
+
+(function testDaylightSaving() {
+  console.log('# Clocks change Sun Nov 1, 2026');
+  const w = cr.weeksInRange(day(2026, 10, 26), day(2026, 11, 8), today);
+  check('next week starts Mon 11/2, not "11/1"', w[1].start.getDate() === 2 && w[1].start.getMonth() === 10);
+  check('Monday of a week after the change is a Monday', cr.mondayOf(day(2026, 11, 4)).getDay() === 1 && cr.mondayOf(day(2026, 11, 4)).getDate() === 2);
+})();
+
+(function testRanges() {
+  console.log('# Date ranges');
+  const w = cr.weeksInRange(day(2026, 10, 26), day(2026, 11, 8), today);
+  check('this + next week → 2 full weeks, labelled', w.length === 2 && w[0].weekdays === 5 && w[1].weekdays === 5 && w[0].label === 'this week' && w[1].label === 'next week');
+  const p = cr.weeksInRange(day(2026, 10, 30), day(2026, 11, 28), today);
+  check('Fri 10/30 → Sat 11/28: first week has 1 weekday, then 3 full weeks + 1 partial', p.length === 5 && p[0].weekdays === 1 && p[1].weekdays === 5 && p[4].weekdays === 5);
+  const r = Object.fromEntries(cr.reviewChart(base, { today, providers, visits: visits3x.filter((v) => v.date >= day(2026, 10, 30)), weeks: cr.weeksInRange(day(2026, 10, 30), day(2026, 11, 8), today) }).map((i) => [i.key, i]));
+  check('a 1-weekday partial week isn\'t judged on frequency', r.schedule.status === 'ok');
+  const later = cr.reviewChart(base, { today, providers, visits: visits3x, weeks: cr.weeksInRange(day(2026, 11, 9), day(2026, 11, 22), today) }).find((i) => i.key === 'schedule');
+  check('weeks with no visits later in the range → "not scheduled the week of 11/9/26"', later.status === 'problem' && later.notes.some((x) => /week of 11\/9\/26/.test(x)));
+})();
+
+(async function testParallel() {
+  console.log('# Several charts at once');
+  let open = 0, peak = 0;
+  const fakeTab = () => ({
+    goto: async () => { open += 1; peak = Math.max(peak, open); await new Promise((r) => setTimeout(r, 15)); open -= 1; },
+    evaluate: async () => 'Diagnoses\nTYPE/SOURCE\nTITLE\nContact\nCare team', evaluateHandle: async () => null, $: async () => null, keyboard: { press: async () => {} }, url: () => '',
+  });
+  const visits = Array.from({ length: 8 }, (_, i) => ({ patientName: `Test Client${i}`, doctorName: 'Gianna G', date: '11/02/2026', href: `#/PF/charts/patients/00000000-0000-0000-0000-00000000000${i}/summary` }));
+  let asked = [];
+  await cr.runChartReview({ pages: [fakeTab()], readSchedule: async (d) => { asked = d; return []; }, providers, today, start: '10/30/2026', end: '11/03/2026' });
+  check('days across the clock change: 10/30, 10/31, 11/01, 11/02, 11/03 — none twice, none skipped', asked.join(' ') === '10/30/2026 10/31/2026 11/01/2026 11/02/2026 11/03/2026');
+  const res = await cr.runChartReview({ pages: [fakeTab(), fakeTab(), fakeTab(), fakeTab()], readSchedule: async () => visits, providers, mainDoctors: m.DEMO_MAIN_DOCTORS, today, start: '11/02/2026', end: '11/02/2026' });
+  check('all 8 clients reviewed, each once', res.length === 8 && new Set(res.map((r) => r.patientKey)).size === 8);
+  check('up to 4 at the same time', peak > 1 && peak <= 4);
+  console.log(`${passed} passed, ${failed} failed`);
+  process.exit(failed ? 1 : 0);
+})();

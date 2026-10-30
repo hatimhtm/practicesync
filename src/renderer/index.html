@@ -218,7 +218,7 @@
       <section class="view hidden" data-view="charts">
         <header class="view-head">
           <h1>Chart Review</h1>
-          <p class="muted">The Client Chart Review Guide, run on every client scheduled this week and next week. It only <strong>reads</strong> Practice Fusion — it never changes a chart. Fix what it lists, then run it again: fixed items close by themselves.</p>
+          <p class="muted">The Client Chart Review Guide, run on every client scheduled in the dates you pick. It only <strong>reads</strong> Practice Fusion — it never changes a chart. Fix what it lists, then run it again: fixed items close by themselves.</p>
         </header>
 
         <div class="status-card">
@@ -230,6 +230,19 @@
             </div>
           </div>
           <button class="btn btn-primary" id="crRunBtn">Run chart review</button>
+        </div>
+
+        <div class="card cr-range">
+          <div class="cr-range-row">
+            <label class="cr-date"><span>From</span><input type="date" id="crFrom" /></label>
+            <label class="cr-date"><span>To</span><input type="date" id="crTo" /></label>
+            <div class="seg seg-sm" id="crPresets">
+              <button data-p="week">This week</button>
+              <button data-p="two" class="active">This + next week</button>
+              <button data-p="30">Next 30 days</button>
+            </div>
+          </div>
+          <p class="muted cr-range-note" id="crRangeNote"></p>
         </div>
 
         <div class="card live-card hidden" id="crLiveCard">
