@@ -141,9 +141,10 @@
 
         <div class="card">
           <div class="card-k">Your doctors</div>
-          <p class="muted" style="font-size:13px;margin:2px 0 12px">One row per doctor: their name, their discipline (PT / OT / SLP…), the main doctor they bill under, and their standard codes. <strong>A client's own code list comes first</strong>; the standard codes are only used when that list doesn't name this therapist, and the visit is then flagged on <button class="link" data-goto="alerts">Alerts</button> to check.</p>
+          <p class="muted" style="font-size:13px;margin:2px 0 12px">One row per doctor: their name, their discipline (PT / OT / SLP…), the main doctor they bill under, their standard codes, and the SimplePractice service their <strong>private-pay</strong> visits get. <strong>A client's own code list comes first</strong>; the standard codes are only used when that list doesn't name this therapist, and the visit is then flagged on <button class="link" data-goto="alerts">Alerts</button> to check.</p>
+          <p class="muted" style="font-size:13px;margin:-4px 0 12px"><strong>Private-pay service</strong>: what this therapist's private visits are booked as (Massage, Personal Training, Physical Therapy…), written as SimplePractice names the service. Left blank, a private visit keeps the service preset on the client in SimplePractice. A client's own line (for example <strong>Jade: Massage</strong>) wins over this.</p>
           <div class="roster-head hidden" id="rosterGridHead">
-            <div>Doctor</div><div>Discipline</div><div>Main doctor</div><div>Standard codes (backup)</div><div></div>
+            <div>Doctor</div><div>Discipline</div><div>Main doctor</div><div>Standard codes (backup)</div><div>Private-pay service</div><div></div>
           </div>
           <div id="providerList"></div>
           <div class="row" style="margin-top:10px">
@@ -420,7 +421,7 @@
       <section class="view hidden" data-view="alerts">
         <header class="view-head">
           <h1>Alerts</h1>
-          <p class="muted">Every visit a sync couldn't book, with the therapist and the reason, so it can be booked by hand or fixed for next time. Also visits that were booked but need a check (backup codes, a clinician that couldn't be changed). Agency and contracted rows are never booked and never show up here.</p>
+          <p class="muted">Every visit a sync couldn't book, with the therapist and the reason, so it can be booked by hand or fixed for next time. Also visits that were booked but need a check (backup codes, a clinician that couldn't be changed, a late cancel), cancelled visits still on the SimplePractice calendar, and new clients to add on the Clients screen. Visits cancelled CX&gt;24 or Therapist CX are never added; a cancelled visit with none of CX&gt;24, CX&lt;24 or Therapist CX is held here. Agency and contracted rows are never booked and never show up here.</p>
         </header>
 
         <div class="card">
@@ -656,7 +657,7 @@
               <span class="payer-choice-d">Booked with the codes listed below for each therapist.</span></label>
             <label class="payer-choice"><input type="radio" name="clientPayer" value="private" />
               <span class="payer-badge payer-private">Private</span>
-              <span class="payer-choice-d">Booked to the client's Self Pay record and saved, with no codes.</span></label>
+              <span class="payer-choice-d">Booked to the client's Self Pay record with no codes, as the therapist's private-pay service (or the client's preset).</span></label>
             <label class="payer-choice"><input type="radio" name="clientPayer" value="contracted" />
               <span class="payer-badge payer-contracted">Contracted</span>
               <span class="payer-choice-d">Billed through the contract and never added to SimplePractice.</span></label>
@@ -664,8 +665,8 @@
         </div>
         <label class="field" id="clientCodesField">
           <span>Codes for each therapist</span>
-          <textarea id="clientCodes" rows="5" spellcheck="false" placeholder="One therapist per line, as on the payer sheet:&#10;Caryn: 97112 x 2 (GP), 97530 x 2 (GP, 59)&#10;Jessica/Danielle: 97112 x 2 (GO), 97530 x 2 (GO, 59)&#10;Jade: $165   ← that therapist's visits are private pay"></textarea>
-          <small class="muted" id="clientCodesHint">Each visit gets the codes on its therapist's line. A therapist who isn't listed gets the same-discipline line if there's only one, otherwise their standard codes, and the visit is flagged on Alerts.</small>
+          <textarea id="clientCodes" rows="5" spellcheck="false" placeholder="One therapist per line, as on the payer sheet:&#10;Caryn: 97112 x 2 (GP), 97530 x 2 (GP, 59)&#10;Jessica/Danielle: 97112 x 2 (GO), 97530 x 2 (GO, 59)&#10;Jade: Massage   ← private pay with Jade, booked as Massage, no codes&#10;Ron: $165   ← private pay with Ron, his usual private service"></textarea>
+          <small class="muted" id="clientCodesHint">Each visit gets the codes on its therapist's line. A line with a service name and no codes (<strong>Jade: Massage</strong>) makes that therapist's visits with this client private pay, booked as that service with no codes; write the service as SimplePractice names it. A therapist who isn't listed gets the same-discipline line if there's only one, otherwise their standard codes, and the visit is flagged on Alerts.</small>
         </label>
         <p class="modal-err hidden" id="clientErr"></p>
         <div class="modal-actions">

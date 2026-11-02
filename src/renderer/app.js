@@ -84,7 +84,7 @@ async function refresh() {
   renderChartReview();
   if (!draftMains.length) draftMains = (settings.mainDoctors || []).map(normMain);
   if (!draftProviders.length && providers.length) {
-    draftProviders = providers.map((p) => ({ name: p.name, discipline: p.discipline || '', mainDoctor: p.mainDoctor, codes: formatCodes(p.codes) }));
+    draftProviders = providers.map((p) => ({ name: p.name, discipline: p.discipline || '', mainDoctor: p.mainDoctor, codes: formatCodes(p.codes), privateService: p.privateService || '' }));
   }
   renderMains();
   renderProviders();
@@ -162,8 +162,8 @@ function renderMains() {
     const row = document.createElement('div');
     row.className = 'main-row';
     row.innerHTML = `
-      <input class="main-name" data-i="${i}" value="${escapeHtml(m.name)}" placeholder="e.g. Caryn McAllister" />
-      <input class="main-code" data-i="${i}" value="${escapeHtml(m.code)}" maxlength="3" placeholder="GP" />
+      <input type="text" class="main-name" data-i="${i}" value="${escapeHtml(m.name)}" placeholder="e.g. Caryn McAllister" />
+      <input type="text" class="main-code" data-i="${i}" value="${escapeHtml(m.code)}" maxlength="3" placeholder="GP" />
       <button class="btn prov-del main-del" data-i="${i}" title="Remove">✕</button>`;
     wrap.appendChild(row);
   });
@@ -185,10 +185,11 @@ function renderProviders() {
     row.className = 'roster-row';
     const opts = ['', ...mains].map((m) => `<option value="${escapeHtml(m)}"${m === p.mainDoctor ? ' selected' : ''}>${escapeHtml(m || '— choose —')}</option>`).join('');
     row.innerHTML = `
-      <input class="prov-name" data-i="${i}" value="${escapeHtml(p.name)}" placeholder="e.g. Dr. Alan Patel" />
-      <input class="prov-disc" data-i="${i}" value="${escapeHtml(p.discipline || '')}" placeholder="PT / OT / SLP" />
+      <input type="text" class="prov-name" data-i="${i}" value="${escapeHtml(p.name)}" placeholder="e.g. Dr. Alan Patel" />
+      <input type="text" class="prov-disc" data-i="${i}" value="${escapeHtml(p.discipline || '')}" placeholder="PT / OT / SLP" />
       <select class="prov-main" data-i="${i}">${opts}</select>
-      <input class="prov-codes" data-i="${i}" value="${escapeHtml(formatCodes(p.codes))}" placeholder="97112 x2, 97530 x2 (59)" />
+      <input type="text" class="prov-codes" data-i="${i}" value="${escapeHtml(formatCodes(p.codes))}" placeholder="${p.codes && p.codes.length ? '' : 'none'}" />
+      <input type="text" class="prov-private" data-i="${i}" value="${escapeHtml(p.privateService || '')}" placeholder="keep preset" title="The SimplePractice service this therapist's private-pay visits are booked as. Blank: the client's preset service." />
       <button class="btn prov-del" data-i="${i}" title="Remove this doctor">✕</button>`;
     wrap.appendChild(row);
   });
@@ -197,10 +198,12 @@ function renderProviders() {
   $$('.prov-disc').forEach((el) => el.addEventListener('input', () => { draftProviders[+el.dataset.i].discipline = el.value; }));
   $$('.prov-main').forEach((el) => el.addEventListener('change', () => { draftProviders[+el.dataset.i].mainDoctor = el.value; }));
   $$('.prov-codes').forEach((el) => el.addEventListener('input', () => { draftProviders[+el.dataset.i].codes = el.value; }));
+  $$('.prov-private').forEach((el) => el.addEventListener('input', () => { draftProviders[+el.dataset.i].privateService = el.value; }));
   $$('.prov-del').forEach((el) => el.addEventListener('click', () => { draftProviders.splice(+el.dataset.i, 1); renderProviders(); }));
 }
 
-$('#addDoctorBtn').addEventListener('click', () => { draftProviders.push({ name: '', discipline: '', mainDoctor: '', codes: '' }); renderProviders(); });
+$('#addDoctorBtn').addEventListener('click', () => { draftProviders.push({ name: '', discipline: '', mainDoctor: '', codes: '', privateService: '' }); renderProviders(); });
+
 
 $('#interpretBtn').addEventListener('click', async () => {
   const text = $('#rosterText').value.trim();
@@ -210,7 +213,7 @@ $('#interpretBtn').addEventListener('click', async () => {
   const res = await window.api.parseRoster(text);
   $('#interpretBtn').disabled = false;
   $('#interpretBtn').textContent = 'Interpret with AI';
-  draftProviders = (res.providers || []).map((p) => ({ name: p.name, discipline: p.discipline || '', mainDoctor: p.mainDoctor, codes: formatCodes(p.codes) }));
+  draftProviders = (res.providers || []).map((p) => ({ name: p.name, discipline: p.discipline || '', mainDoctor: p.mainDoctor, codes: formatCodes(p.codes), privateService: p.privateService || '' }));
   // Fold in any detected big-doctor 2-letter codes (e.g. "under Heather - GO").
   if (res.mainCodeHints) {
     for (const [name, code] of Object.entries(res.mainCodeHints)) {
@@ -337,6 +340,7 @@ async function saveClients(msg) {
   clients.sort((a, b) => a.name.localeCompare(b.name, undefined, { sensitivity: 'base' }));
   await window.api.saveSettings({ clientPayers: clients });
   renderClients();
+  loadAlerts(); // a new client's reminder goes once they're on the list
   if (msg) toast(msg);
 }
 
@@ -393,9 +397,9 @@ function openModal(id) { $(id).classList.remove('hidden'); }
 function closeModal(id) { $(id).classList.add('hidden'); }
 function modalError(id, msg) { const e = $(id); e.textContent = msg || ''; e.classList.toggle('hidden', !msg); }
 
-function openClientModal(i = -1) {
+function openClientModal(i = -1, prefillName = '') {
   clientEditIdx = i;
-  const c = i >= 0 ? clients[i] : { name: '', status: '', id: '', codes: '' };
+  const c = i >= 0 ? clients[i] : { name: prefillName, status: '', id: '', codes: '' };
   $('#clientModalTitle').textContent = i >= 0 ? 'Edit Client' : 'Add Client';
   $('#clientSave').textContent = i >= 0 ? 'Save Changes' : 'Add Client';
   $('#clientName').value = c.name;
@@ -407,6 +411,12 @@ function openClientModal(i = -1) {
   setTimeout(() => $('#clientName').focus(), 30);
 }
 $('#addClientBtn').addEventListener('click', () => openClientModal(-1));
+/** From a "new client" reminder on Alerts: the Clients screen, with the Add dialog filled in. */
+function addClientFromAlert(name) {
+  showView('clients');
+  const at = clients.findIndex((c) => clientKey(c.name) === clientKey(name));
+  openClientModal(at, at >= 0 ? '' : name);
+}
 $('#clientCancel').addEventListener('click', () => closeModal('#clientModal'));
 $('#clientSave').addEventListener('click', async () => {
   const name = $('#clientName').value.trim().replace(/\s+/g, ' ');
@@ -896,8 +906,16 @@ const ALERT_LABEL = {
   failed: 'Not booked · couldn’t be saved',
   unverified: 'Not booked · calendar couldn’t be checked',
   possible_duplicate: 'Not booked · may already be on the calendar',
+  cancel_unclear: 'Not booked · cancelled without CX>24, CX<24 or Therapist CX',
+  cancelled_on_calendar: 'Cancelled · delete it in SimplePractice',
+  record: 'Not booked · which SimplePractice record?',
+  service: 'Not booked · private-pay service',
+  codes: 'Not booked · codes',
+  new_client: 'New client · add them with their codes',
   check: 'Booked · check it',
 };
+// Amber, not red: nothing failed, there's something to do.
+const ALERT_TODO = new Set(['check', 'new_client']);
 function renderAlertRows(alerts) {
   const list = $('#alertsList');
   const badge = $('#alertsBadge');
@@ -911,11 +929,14 @@ function renderAlertRows(alerts) {
   alerts.forEach((a) => {
     const kind = a.kind || 'client_not_found';
     const row = document.createElement('div');
-    row.className = `alert-row alert-${kind === 'check' ? 'check' : 'problem'}`;
+    row.className = `alert-row alert-${ALERT_TODO.has(kind) ? 'check' : 'problem'}`;
     const who = [a.therapist, a.discipline && `(${a.discipline})`].filter(Boolean).join(' ');
     row.innerHTML = `<div class="alert-top"><span class="alert-kind">${escapeHtml(ALERT_LABEL[kind] || 'Needs a look')}</span><span class="muted">${a.date ? escapeHtml(a.date) + ' · ' : ''}found ${fmtTime(a.at)}</span></div>
       <div class="alert-who"><b>${escapeHtml(a.patientName || '(unnamed)')}</b>${who ? ` <span class="muted">—</span> ${escapeHtml(who)}` : ''}${a.billingProvider && kind !== 'unmatched' ? ` <span class="muted">· bills under ${escapeHtml(a.billingProvider)}</span>` : ''}</div>
-      ${a.reason || kind === 'client_not_found' ? `<div class="alert-why">${escapeHtml(a.reason || 'Not found in SimplePractice\'s client search — nothing was booked.')}</div>` : ''}`;
+      ${a.reason || kind === 'client_not_found' ? `<div class="alert-why">${escapeHtml(a.reason || 'Not found in SimplePractice\'s client search — nothing was booked.')}</div>` : ''}
+      ${kind === 'new_client' ? '<div class="alert-actions"><button class="btn btn-sm alert-add-client">Add to Clients…</button></div>' : ''}`;
+    const add = row.querySelector('.alert-add-client');
+    if (add) add.addEventListener('click', () => addClientFromAlert(a.patientName || ''));
     list.appendChild(row);
   });
 }

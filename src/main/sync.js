@@ -98,7 +98,67 @@ function outcome(appt, status, reason = '', warnings = []) {
   };
 }
 
-const PROBLEM = new Set(['unmatched', 'client_not_found', 'clinician', 'failed', 'unverified', 'possible_duplicate']);
+const PROBLEM = new Set(['unmatched', 'client_not_found', 'clinician', 'failed', 'unverified', 'possible_duplicate', 'cancel_unclear', 'cancelled_on_calendar', 'record', 'service', 'codes']);
+/** Not a failure, but something for the office to do (a new client to add to the list). */
+const REMINDER = new Set(['new_client']);
+/** Booking results that are their own kind on the Alerts screen. */
+const BOOK_REASONS = new Set(['client_not_found', 'clinician', 'record', 'service', 'codes']);
+
+/**
+ * Sort one day's planned visits by their Practice Fusion cancellation (see
+ * model.cancellationOf), in the office's rule:
+ *   CX>24 / Therapist CX → never added ('cancelled', kept to check the calendar)
+ *   CX<24                → added like any visit, flagged as a late cancel
+ *   cancelled / no-show with no term, or two terms → held for the office
+ * → { keep: [...plans to book or report], cancelled: [...], outcomes: [...] }
+ */
+function sortCancellations(planned) {
+  const keep = [], cancelled = [], outcomes = [];
+  for (const p of planned) {
+    const c = p.cancel || { kind: 'none' };
+    if (c.kind === 'over24' || c.kind === 'therapist') {
+      cancelled.push(p);
+      outcomes.push(outcome(p, 'cancelled', `${c.term} in Practice Fusion — not added to SimplePractice`));
+    } else if (c.kind === 'no_term' || c.kind === 'conflict') {
+      outcomes.push(outcome(p, 'cancel_unclear', c.kind === 'conflict'
+        ? `Practice Fusion has two cancellation terms on this visit (${c.term}), so it wasn't added. Leave just one (CX>24, CX<24 or Therapist CX) and sync again.`
+        : `Practice Fusion shows "${c.status}" but none of CX>24, CX<24 or Therapist CX, so it wasn't added. Add the term to the visit in Practice Fusion; the next sync adds it if it's CX<24.`));
+    } else {
+      if (c.kind === 'under24') p.warnings = [...(p.warnings || []), 'Late cancel (CX<24) in Practice Fusion. Added to SimplePractice as the office asked; check it\'s billed as a late cancel.'];
+      keep.push(p);
+    }
+  }
+  return { keep, cancelled, outcomes };
+}
+
+/** One reminder per client who isn't on the Clients list yet (never for a visit that won't be added). */
+function newClientReminders(plans, already = new Set()) {
+  const out = [];
+  for (const p of plans) {
+    const k = normalizeName(p.patientName).split(' ').filter(Boolean).sort().join(' ');
+    if (!p.newClient || !k || already.has(k)) continue;
+    already.add(k);
+    out.push(outcome({ ...p, therapist: '', discipline: '', mainDoctor: '' }, 'new_client', 'New client: not on the Clients list yet. Add them there with their payer type and their codes for each therapist, so their visits get the right codes.'));
+  }
+  return out;
+}
+
+/**
+ * After a day is booked: a visit cancelled CX>24 / Therapist CX that is STILL on
+ * the SimplePractice calendar (it was added before it was cancelled). Never
+ * deleted by the app — the office removes it. `pool` holds the calendar entries
+ * the day's real visits didn't account for.
+ */
+function cancelledStillBooked(pool, cancelled) {
+  const out = [];
+  for (const p of cancelled) {
+    const disc = String(p.discipline || '').toLowerCase();
+    if (takeExistingFrom(pool, p.patientName, /^(pt|ot|slp)$/.test(disc) ? disc : '', p.mainDoctor || '')) {
+      out.push(outcome(p, 'cancelled_on_calendar', `${(p.cancel && p.cancel.term) || 'Cancelled'} in Practice Fusion, but it's on the SimplePractice calendar (it was added before it was cancelled). Delete it in SimplePractice so it isn't billed.`));
+    }
+  }
+  return out;
+}
 
 /** "Toby Fakename — Nardeen Abdelsayed (PT)" */
 function visitLabel(o) {
@@ -295,6 +355,8 @@ async function runFullSync({ secrets, dates, providers, mainDoctors, selfPayClie
 
     // 2) Read + plan each date.
     const all = [];
+    const cancelledByDate = {};
+    const remindedClients = new Set();
     for (const date of dates) {
       say(onStep, `Reading Practice Fusion for ${date}…`);
       await page.goto(presets.PF.scheduleUrl, { waitUntil: 'domcontentloaded' }).catch(() => {});
@@ -314,11 +376,23 @@ async function runFullSync({ secrets, dates, providers, mainDoctors, selfPayClie
         if (payerStatusFor(v.patientName, clientPayers) === 'contracted') { result.skipped += 1; result.outcomes.push(outcome({ ...v, therapist: v.doctorName }, 'contracted', 'contracted — billed through the contract')); say(onStep, `Skip ${v.patientName} — contracted (not added to SimplePractice)`); return false; }
         return true;
       });
-      const planned = planAppointments(visits, providers, mainDoctors, selfPayClients, clientPayers);
+      const plannedAll = planAppointments(visits, providers, mainDoctors, selfPayClients, clientPayers);
+      plannedAll.forEach((p) => { p.date = date; });
+      // Cancellations first: CX>24 / Therapist CX are never added, a cancellation
+      // with no term is held, CX<24 goes on like any visit.
+      const sorted = sortCancellations(plannedAll);
+      for (const o of sorted.outcomes) {
+        result.outcomes.push(o);
+        if (o.status === 'cancelled') { result.skipped += 1; say(onStep, `Skip ${o.patientName}${o.therapist ? ` (${o.therapist})` : ''} on ${date} — ${o.reason}`); }
+        else { result.failed += 1; say(onStep, `Not booked: ${visitLabel(o)} on ${date} — ${o.reason}`); }
+      }
+      if (sorted.cancelled.length) cancelledByDate[date] = sorted.cancelled.filter((p) => p.matched);
+      const planned = sorted.keep;
+      result.outcomes.push(...newClientReminders(planned, remindedClients));
       const matched = planned.filter((p) => p.matched);
       result.unmatched += planned.length - matched.length;
-      matched.forEach((p) => { p.date = date; all.push(p); });
-      say(onStep, `  ${date}: ${planned.length} visit${planned.length === 1 ? '' : 's'} read, ${matched.length} matched to a therapist`);
+      matched.forEach((p) => { all.push(p); });
+      say(onStep, `  ${date}: ${plannedAll.length} visit${plannedAll.length === 1 ? '' : 's'} read${sorted.outcomes.length ? ` (${sorted.outcomes.length} cancelled)` : ''}, ${matched.length} matched to a therapist`);
       // Name every visit whose therapist isn't recognized — never just a count.
       for (const p of planned.filter((x) => !x.matched)) {
         p.date = date;
@@ -328,7 +402,8 @@ async function runFullSync({ secrets, dates, providers, mainDoctors, selfPayClie
       }
     }
     result.planned = all;
-    if (!all.length) { say(onStep, 'No matched appointments to book.'); reportProblems(result, onStep); return result; }
+    const hasCancelled = Object.values(cancelledByDate).some((l) => l.length);
+    if (!all.length && !hasCancelled) { say(onStep, 'No matched appointments to book.'); reportProblems(result, onStep); return result; }
 
     // 3) SimplePractice login.
     const sp = await login.loginSimplePractice(page, secrets.simplePractice, { onStep });
@@ -337,8 +412,10 @@ async function runFullSync({ secrets, dates, providers, mainDoctors, selfPayClie
     // 4) Book per date, skipping clients already on that day's calendar.
     const byDate = {};
     for (const p of all) (byDate[p.date] = byDate[p.date] || []).push(p);
+    // Days with only cancelled visits are still opened, to catch one already on the calendar.
+    for (const d of Object.keys(cancelledByDate)) if (cancelledByDate[d].length && !byDate[d]) byDate[d] = [];
     const ledger = new Set((bookedVisits || []).map((b) => (typeof b === 'string' ? b : b && b.key)).filter(Boolean));
-    for (const date of Object.keys(byDate)) {
+    for (const date of dates.filter((d) => byDate[d])) {
       // Never book a day we couldn't check: if the calendar won't open on this
       // date, or its appointments can't be read, book NOTHING for the day — an
       // unread calendar looks empty, and that is how a visit gets billed twice.
@@ -427,8 +504,8 @@ async function runFullSync({ secrets, dates, providers, mainDoctors, selfPayClie
           for (const w of warnings) say(onStep, `⚠︎ Check ${appt.patientName}: ${w}`);
         } else {
           result.failed += 1;
-          const status = r.reason === 'client_not_found' ? 'client_not_found' : r.reason === 'clinician' ? 'clinician' : 'failed';
-          const why = status === 'client_not_found' ? `“${appt.patientName}” wasn't found in SimplePractice's client search` : r.error;
+          const status = BOOK_REASONS.has(r.reason) ? r.reason : 'failed';
+          const why = status === 'client_not_found' ? `“${appt.patientName}” wasn't found in SimplePractice's client search.${/search showed/.test(r.error || '') ? ` ${String(r.error).replace(/^.*?(SimplePractice's search showed)/, '$1')}` : ''}` : r.error;
           result.outcomes.push(outcome(appt, status, why, warnings));
           say(onStep, `Could not book ${appt.patientName} (${appt.therapist}): ${r.error}`);
           if (status === 'client_not_found') {
@@ -437,6 +514,12 @@ async function runFullSync({ secrets, dates, providers, mainDoctors, selfPayClie
             if (typeof onMissingPatient === 'function') { try { onMissingPatient(appt.patientName, appt.date); } catch {} }
           }
         }
+      }
+      // A visit cancelled CX>24 / Therapist CX that's still on the calendar (it
+      // was added before the cancellation): the office deletes it.
+      for (const o of cancelledStillBooked(existingPool, cancelledByDate[date] || [])) {
+        result.outcomes.push(o);
+        say(onStep, `⚠︎ ${visitLabel(o)} on ${date} — ${o.reason}`);
       }
     }
     say(onStep, `Done — ${result.booked} booked, ${result.skipped} skipped (already there / not a patient), ${result.failed} failed, ${result.unmatched} unrecognized.`);
@@ -451,16 +534,26 @@ async function runFullSync({ secrets, dates, providers, mainDoctors, selfPayClie
 
 /** End of a run: every visit that was NOT booked, and every booking to check, by name. */
 function reportProblems(result, onStep) {
-  const problems = result.outcomes.filter((o) => PROBLEM.has(o.status));
+  const onCalendar = result.outcomes.filter((o) => o.status === 'cancelled_on_calendar');
+  const problems = result.outcomes.filter((o) => PROBLEM.has(o.status) && o.status !== 'cancelled_on_calendar');
   const checks = result.outcomes.filter((o) => (o.status === 'booked' || o.status === 'would-book') && o.warnings.length);
+  const newClients = result.outcomes.filter((o) => o.status === 'new_client');
   if (problems.length) {
     say(onStep, `Not booked (${problems.length}) — these need a look:`);
     for (const o of problems) say(onStep, `• ${visitLabel(o)} on ${o.date} — ${o.reason}`);
+  }
+  if (onCalendar.length) {
+    say(onStep, `Cancelled, but on SimplePractice (${onCalendar.length}) — delete these there:`);
+    for (const o of onCalendar) say(onStep, `• ${visitLabel(o)} on ${o.date} — ${o.reason}`);
   }
   if (checks.length) {
     say(onStep, `Booked, but check (${checks.length}):`);
     for (const o of checks) say(onStep, `• ${visitLabel(o)} on ${o.date} — ${o.warnings.join(' · ')}`);
   }
+  if (newClients.length) {
+    say(onStep, `New clients to add on the Clients screen (${newClients.length}):`);
+    for (const o of newClients) say(onStep, `• ${o.patientName} (first seen ${o.date})`);
+  }
 }
 
-module.exports = { runFullSync, readPfSchedule, expandDates, pfNavigateToDate, PROBLEM, takeExistingFrom, unmatchedReason, looseSameClient, ledgerKey, findLooseExisting, spreadSessions, strayEntry };
+module.exports = { runFullSync, readPfSchedule, expandDates, pfNavigateToDate, PROBLEM, REMINDER, takeExistingFrom, unmatchedReason, looseSameClient, ledgerKey, findLooseExisting, spreadSessions, strayEntry, sortCancellations, newClientReminders, cancelledStillBooked };

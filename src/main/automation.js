@@ -1,6 +1,6 @@
 'use strict';
 
-const { matchProvider, mainCodeFor, isSelfPay, isSelfPayClient, clientFor, parseCodeBank, patientCodesFor, formatServices } = require('./model');
+const { matchProvider, mainCodeFor, isSelfPay, isSelfPayClient, clientFor, parseCodeBank, patientCodesFor, formatServices, cancellationOf } = require('./model');
 const liveEngine = require('./liveEngine');
 
 /** Trim + drop blanks + drop case-insensitive duplicates, keeping first seen. */
@@ -76,7 +76,7 @@ function planAppointments(visits, providers, mainDoctors = [], selfPayClients = 
       return {
         patientName: v.patientName, date: v.date || '', doctorName: v.doctorName || '',
         matched: false, mainDoctor: null, mainCode: '', codes: [], services: [],
-        confidence: 0,
+        confidence: 0, cancel: { kind: 'none', term: '', status: '' },
         reason: v.noVisits ? 'found, but no visits could be read (check the Practice Fusion screen was taught right)' : 'patient not found in Practice Fusion',
         key: visitKey(v),
       };
@@ -102,18 +102,28 @@ function planAppointments(visits, providers, mainDoctors = [], selfPayClients = 
     let selfPay = payer === 'private' ? true
       : payer === 'insurance' ? false
       : (isSelfPay(v.type) || isSelfPayClient(v.patientName, selfPayClients));
+    // Private pay the office SAID (client list or a private line), not a guess
+    // from the appointment type: such a visit never takes an insurance record or code.
+    let privateDefinite = payer === 'private';
     // The patient's own code list (from the practice's payer sheet) beats the
-    // therapist's standard codes; a "$" line makes that therapist's visits private.
+    // therapist's standard codes; a "$" line or a service name ("Jade: Massage")
+    // makes that therapist's visits private, with that service.
     let services = standard;
     let codeSource = 'standard';
+    let privateService = '';
+    let serviceFrom = '';
     const warnings = [];
     const bank = client && client.codes ? parseCodeBank(client.codes) : [];
-    if (provider && bank.length && payer !== 'private') {
+    if (provider && bank.length) {
       const pick = patientCodesFor(bank, provider, mainCode);
       const disc = DISC_LABEL[mainCode] || provider.discipline || '';
       if (pick.entry && pick.entry.private) {
         selfPay = true;
+        privateDefinite = true;
         codeSource = 'patient';
+        if (pick.entry.service) { privateService = pick.entry.service; serviceFrom = 'client'; }
+      } else if (payer === 'private') {
+        // A private client's codes are never used; their lines only name services.
       } else if (pick.entry) {
         services = pick.entry.codes.map((c) => ({ code: c.code, units: c.units || 1, modifiers: c.modifiers.slice() }));
         codeSource = pick.source;
@@ -122,15 +132,29 @@ function planAppointments(visits, providers, mainDoctors = [], selfPayClients = 
         warnings.push(`${provider.name} isn't on ${v.patientName}'s code list — used ${provider.name}'s standard codes (${formatServices(standard) || 'none'})`);
       }
     }
+    // Private pay with no service on the client's line: the therapist's own
+    // private-pay service (Doctors & Codes), e.g. Jade → Massage.
+    if (selfPay && !privateService && provider && provider.privateService) { privateService = provider.privateService; serviceFrom = 'therapist'; }
     return {
       patientName: v.patientName,
       date: v.date,
       time: v.time || '',
       doctorName: v.doctorName,
       type: v.type || '',
-      // Self-pay (private pay): book the patient's "Self Pay" record with its preset
-      // service + fee — NO CPT codes. Decided by the Practice Fusion appointment type.
+      // Cancelled in Practice Fusion? (CX>24 / Therapist CX are never added, CX<24 is.)
+      cancel: cancellationOf(v),
+      // A client who isn't on the Clients list yet (only once there IS a list):
+      // the office is reminded to add them with their codes.
+      newClient: !client && Array.isArray(clientPayers) && clientPayers.length > 0,
+      // Self-pay (private pay): no CPT codes; the service is the client line's or
+      // the therapist's private-pay service, else the client's preset in SimplePractice.
       selfPay,
+      privateDefinite,
+      privateService,
+      serviceFrom,
+      // The therapist's own private-pay service, for a visit SimplePractice's
+      // preset turns out to be private (a client who isn't on the list).
+      therapistService: provider ? (provider.privateService || '') : '',
       payer,
       patientId: client && client.id ? String(client.id) : '',
       therapist: provider ? provider.name : (v.doctorName || ''),

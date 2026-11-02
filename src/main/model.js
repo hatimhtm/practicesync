@@ -87,13 +87,68 @@ function formatCodes(codes) {
  *  `discipline` (PT/OT/SLP/…) is a free-text label the user can see and edit; it
  *  doesn't affect booking (the modifier comes from the big doctor), but it keeps
  *  the roster readable and matches how the practice organizes its therapists. */
-function makeProvider({ name, mainDoctor, codes, discipline }) {
+function makeProvider({ name, mainDoctor, codes, discipline, privateService }) {
   return {
     name: String(name || '').trim(),
     mainDoctor: String(mainDoctor || '').trim(),
     discipline: String(discipline || '').trim(),
     codes: parseCodes(codes),
+    // The SimplePractice service this therapist's PRIVATE-PAY visits get
+    // ("Massage", "Personal Training"). Blank = keep the client's preset service.
+    privateService: String(privateService || '').trim(),
   };
+}
+
+/** The private-pay service a discipline clearly means, for the roster's blanks:
+ *  a massage therapist (LMT) does Massage, a personal trainer (CPT) Personal
+ *  Training. Anything mixed or unclear ("LMT/CPT", "PT") → '' (the office sets it). */
+function suggestPrivateService(discipline) {
+  const d = String(discipline || '').trim().toUpperCase().replace(/\s+/g, ' ');
+  if (/^LMT$/.test(d)) return 'Massage';
+  if (/^(NASM ?- ?)?CPT$/.test(d)) return 'Personal Training';
+  return '';
+}
+
+/* ------------------------------ cancellations ------------------------------ */
+// The office's rule (Nov 2026 review): every cancelled visit carries one of
+// three terms in Practice Fusion, extra words allowed around it:
+//   CX>24         cancelled more than 24 h ahead → never added to SimplePractice
+//   Therapist CX  the therapist cancelled         → never added
+//   CX<24         a late cancel                   → added to SimplePractice
+// A visit Practice Fusion shows as cancelled (or no-show) WITHOUT one of the
+// terms is held for the office: guessing would either bill a cancelled visit or
+// lose a late-cancel fee.
+const CX_OVER = /\bc\s*x\s*(?:>=?|&gt;|more\s+than|over)\s*24/i;
+const CX_UNDER = /\bc\s*x\s*(?:<=?|&lt;|less\s+than|under|within)\s*24/i;
+const CX_THERAPIST = /\btherapist\s*-?\s*(?:cx|canc[a-z]*)\b|\b(?:cx|canc[a-z]*)\s*(?:by\s+)?(?:the\s+)?therapist\b/i;
+const CANCELLED_STATUS = /\bcancel/i;
+const NO_SHOW_STATUS = /\bno[\s-]?show\b|\bresched/i;
+const CX_LABEL = { over24: 'CX>24', under24: 'CX<24', therapist: 'Therapist CX' };
+
+/**
+ * Is this Practice Fusion visit cancelled, and how? Reads the visit's status,
+ * chief complaint (note), confirmation and appointment type.
+ * → { kind, term, status }
+ *   kind: 'none'      not cancelled — book as usual
+ *         'over24' | 'therapist'   never added
+ *         'under24'   late cancel — added
+ *         'no_term'   cancelled / no-show with none of the three terms — held
+ *         'conflict'  two different terms — held
+ */
+function cancellationOf(v) {
+  const status = String((v && v.status) || '').replace(/\s+/g, ' ').trim();
+  const where = [v && v.note, v && v.confirmation, v && v.type, status].map((s) => String(s || '')).join(' \n ');
+  const found = [];
+  if (CX_OVER.test(where)) found.push('over24');
+  if (CX_UNDER.test(where)) found.push('under24');
+  if (CX_THERAPIST.test(where)) found.push('therapist');
+  if (found.length > 1) return { kind: 'conflict', term: found.map((k) => CX_LABEL[k]).join(' + '), status };
+  if (found.length === 1) return { kind: found[0], term: CX_LABEL[found[0]], status };
+  const marked = [status, v && v.confirmation].map((s) => String(s || ''));
+  // Practice Fusion's status badge reads "CX" (cancelled) or "NS" (no show) in front of the label.
+  if (marked.some((s) => CANCELLED_STATUS.test(s)) || /^cx\b/i.test(status)) return { kind: 'no_term', term: '', status: status || 'Cancelled' };
+  if (marked.some((s) => NO_SHOW_STATUS.test(s)) || /^ns\b/i.test(status)) return { kind: 'no_term', term: '', status: status || 'No show' };
+  return { kind: 'none', term: '', status };
 }
 
 // A client split by discipline is stored in SimplePractice with the tag baked
@@ -184,8 +239,10 @@ function clientFor(name, list) {
 //   Caryn: 97112 x 2 (GP), 97530 x 2 (GP, 59)
 //   Jessica/Danielle/Heather: 97112 x 2 (GO), 97530 x 2 (GO, 59)
 //   Jade: $165                       ← that therapist's visits are private pay
+//   Jade: Massage                    ← private pay, booked as the Massage service
 // A patient's own list wins over a therapist's standard codes. Modifiers are
-// used exactly as written (the sheet spells out GP/GO/GN and 59 per line).
+// used exactly as written (the sheet spells out GP/GO/GN and 59 per line). A
+// line with a service name and no codes is private pay with that service.
 
 const G_MOD = /^G[PON]$/;
 // "Name:" / "Name/Name :" / "Nicole Williams:" — the label in front of each list.
@@ -212,7 +269,27 @@ function parseBankCodes(text) {
   });
 }
 
-/** A client's code-list text → [{ names:[...], codes:[...], private:boolean, raw }]. */
+/**
+ * The private-pay service named in a line's text, or '': "Massage", "Personal
+ * Training", "$165 Massage, no code" → "Massage". Prices, "private", "self pay"
+ * and "no code" are dropped. A broken code line ("x 2 (GP)") is never a service.
+ */
+function bankService(body) {
+  const s = String(body || '');
+  if (/\b(\d{5}|[A-Z]\d{4})\b/.test(s) || /\(\s*(G[PON]|\d{2})\b/i.test(s) || /\bx\s*\d/i.test(s)) return '';
+  const name = s
+    .replace(/\(\s*\$?\s*\d[\d.,]*\s*\)/g, ' ')
+    .replace(/\$\s*\d[\d.,]*/g, ' ')
+    .replace(/\b(?:no|without|don'?t\s+add|do\s+not\s+add)\s+(?:cpt\s+)?codes?\b/gi, ' ')
+    .replace(/\b(?:private(?:\s+pay)?|self[\s-]?pay|cash)\b/gi, ' ')
+    .replace(/^[\s,;:.\-–—]+|[\s,;:.\-–—]+$/g, '')
+    .replace(/\s*[,;]\s*[,;\s]*/g, ', ')
+    .replace(/\s+/g, ' ')
+    .trim();
+  return /[A-Za-z].*[A-Za-z].*[A-Za-z]/.test(name) ? name : '';
+}
+
+/** A client's code-list text → [{ names:[...], codes:[...], private:boolean, service, raw }]. */
 function parseCodeBank(text) {
   const out = [];
   for (const line of String(text || '').split(/\r?\n/)) {
@@ -223,8 +300,11 @@ function parseCodeBank(text) {
     labels.forEach((l, i) => {
       const body = line.slice(l.end, i + 1 < labels.length ? labels[i + 1].start : line.length).trim();
       const names = l.label.split('/').map((n) => n.trim()).filter(Boolean);
-      const isPrivate = /\$\s*\d|\b(private|self[\s-]?pay)\b/i.test(body);
-      out.push({ names, codes: isPrivate ? [] : parseBankCodes(body), private: isPrivate, raw: `${l.label.trim()}: ${body}`.trim() });
+      const codes = parseBankCodes(body);
+      const service = bankService(body);
+      // "$165", "private", "self pay" → private pay; so is a service name with no codes ("Massage").
+      const isPrivate = /\$\s*\d|\b(private|self[\s-]?pay)\b/i.test(body) || (!codes.length && !!service);
+      out.push({ names, codes: isPrivate ? [] : codes, private: isPrivate, service: isPrivate ? service : '', raw: `${l.label.trim()}: ${body}`.trim() });
     });
   }
   return out;
@@ -258,7 +338,11 @@ function patientCodesFor(bank, provider, mainCode) {
   const fits = (e) => { const d = bankDiscipline(e.codes); return !d || !mainCode || d === mainCode; };
   const named = entries.find((e) => (e.private || e.codes.length) && e.names.some((n) => labelNames(n, provider)) && fits(e));
   if (named) return { source: 'patient', entry: named };
-  if (mainCode) {
+  // Borrowing another therapist's same-discipline line is only for therapists who
+  // bill codes themselves: a massage therapist or nurse under Caryn (no codes of
+  // their own) is not PT, so never gets the PT line.
+  const bills = provider && Array.isArray(provider.codes) && provider.codes.length > 0;
+  if (mainCode && bills) {
     const same = entries.filter((e) => !e.private && e.codes.length && bankDiscipline(e.codes) === mainCode);
     const sets = new Set(same.map((e) => formatServices(e.codes)));
     if (sets.size === 1) return { source: 'discipline', entry: same[0] };
@@ -273,7 +357,7 @@ function formatServices(codes) {
 
 /** The therapists a code list names, for a short summary ("Caryn, Jessica/Danielle"). */
 function codeBankSummary(text) {
-  return parseCodeBank(text).map((e) => e.names.join('/') + (e.private ? ' (private)' : '')).join(', ');
+  return parseCodeBank(text).map((e) => e.names.join('/') + (e.private ? ` (${e.service || 'private'})` : '')).join(', ');
 }
 
 /** Look up a big doctor's 2-letter modifier code from the configured list. */
@@ -386,7 +470,21 @@ const OLD_SPEECH_CODES = '92507 x1, 97550 x2';
 const THERAPY_DISCIPLINE = /\b(PT|PTA|DPT|CPT|OT|COTA|SOT|SLP|SLPA|CF|Cognition)\b/i;
 function seedProvider(name, discipline, mainDoctor) {
   const codes = THERAPY_DISCIPLINE.test(discipline) ? (UNIT_CODES[mainDoctor] || '') : '';
-  return makeProvider({ name, discipline, mainDoctor, codes });
+  return makeProvider({ name, discipline, mainDoctor, codes, privateService: suggestPrivateService(discipline) });
+}
+
+/** Fill each therapist's blank private-pay service from their discipline (once,
+ *  at startup). A service the office typed is never changed. */
+function seedPrivateServices(providers) {
+  const filled = [];
+  const out = (Array.isArray(providers) ? providers : []).map((p) => {
+    if (!p || String(p.privateService || '').trim()) return p;
+    const s = suggestPrivateService(p.discipline);
+    if (!s) return p;
+    filled.push(`${p.name}: ${s}`);
+    return { ...p, privateService: s };
+  });
+  return { providers: out, filled };
 }
 
 // The client's roster, from their October 2026 "Billing Providers for AI App"
@@ -514,6 +612,10 @@ module.exports = {
   clientFor,
   parseCodeBank,
   parseBankCodes,
+  bankService,
+  cancellationOf,
+  suggestPrivateService,
+  seedPrivateServices,
   bankDiscipline,
   labelNames,
   patientCodesFor,

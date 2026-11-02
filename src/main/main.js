@@ -17,10 +17,10 @@ if (process.env.PS_DATA_DIR) app.setPath('userData', process.env.PS_DATA_DIR);
 const store = require('./store');
 const { runSync } = require('./automation');
 const { parseRoster, appleIntelligenceAvailable, detectEngines, appleHelperPath } = require('./ai');
-const { DEMO_MAIN_DOCTORS, DEMO_PROVIDERS, UNIT_CODES, OLD_SPEECH_CODES, parseCodes, formatCodes, makeProvider, makeMainDoctor, ROSTER_VERSION, mergeRoster, normalizeName } = require('./model');
+const { DEMO_MAIN_DOCTORS, DEMO_PROVIDERS, UNIT_CODES, OLD_SPEECH_CODES, parseCodes, formatCodes, makeProvider, makeMainDoctor, ROSTER_VERSION, mergeRoster, normalizeName, seedPrivateServices, clientFor } = require('./model');
 const liveEngine = require('./liveEngine');
 const { teach, runSiteDemo } = liveEngine;
-const { runFullSync, readPfSchedule, expandDates, PROBLEM } = require('./sync');
+const { runFullSync, readPfSchedule, expandDates, PROBLEM, REMINDER } = require('./sync');
 const chartReview = require('./chartReview');
 const presets = require('./presets');
 const { loginSimplePractice, loginPracticeFusion } = require('./login');
@@ -57,10 +57,22 @@ const ALERT_KIND = {
   failed: 'Could not be saved',
   unverified: 'Not booked — calendar could not be checked',
   possible_duplicate: 'Not booked — may already be on the calendar',
+  cancel_unclear: 'Not booked — cancelled without CX>24, CX<24 or Therapist CX',
+  cancelled_on_calendar: 'Cancelled — still on SimplePractice',
+  record: 'Not booked — which SimplePractice record',
+  service: 'Not booked — private-pay service',
+  codes: 'Not booked — codes',
+  new_client: 'New client — add their codes',
   check: 'Booked — check it',
 };
 function alertKey(a) {
+  // A new-client reminder is one per client, whatever the day or therapist.
+  if (a.kind === 'new_client') return ['', normalizeName(a.patientName).split(' ').sort().join(' '), '', 'new_client'].join('|');
   return [a.date || '', normalizeName(a.patientName), normalizeName(a.therapist), a.kind || 'client_not_found'].join('|');
+}
+/** New-client reminders whose client is on the Clients list now are done: drop them. */
+function withoutResolvedReminders(alerts, clientPayers) {
+  return (alerts || []).filter((a) => !(a && a.kind === 'new_client' && clientFor(a.patientName, clientPayers)));
 }
 /** Save each booking the moment it's made (not at the end of the run), so a crash
  *  or quit mid-run can never lose the record and lead to a second booking.
@@ -75,6 +87,9 @@ function recordBooking(key) {
   } catch {}
 }
 
+// Alerts that aren't "not booked": a booking to check, a cancelled visit to delete
+// from SimplePractice, a new client to add to the list.
+const TODO_KINDS = new Set(['check', 'cancelled_on_calendar', 'new_client']);
 function recordRunAlerts(res) {
   if (!res || res.dryRun || !Array.isArray(res.outcomes)) return [];
   const settings = store.load();
@@ -83,9 +98,10 @@ function recordRunAlerts(res) {
   const fresh = [];
   const at = nowISO();
   for (const o of res.outcomes) {
-    const problem = PROBLEM.has(o.status);
+    const problem = PROBLEM.has(o.status) || REMINDER.has(o.status);
     const check = o.status === 'booked' && o.warnings && o.warnings.length;
     if (!problem && !check) continue;
+    if (o.status === 'new_client' && clientFor(o.patientName, settings.clientPayers || [])) continue;
     const a = {
       id: 'al_' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6),
       kind: problem ? o.status : 'check', patientName: o.patientName, patientId: o.patientId || '',
@@ -99,7 +115,7 @@ function recordRunAlerts(res) {
   if (!fresh.length) return [];
   store.save({ alerts: [...fresh, ...existing].slice(0, MAX_ALERTS) });
   sendToRenderer('alert-added', fresh[0]);
-  const notBooked = fresh.filter((a) => a.kind !== 'check').length;
+  const notBooked = fresh.filter((a) => !TODO_KINDS.has(a.kind)).length;
   const checks = fresh.length - notBooked;
   if (settings.alertOnMissingPatient !== false) {
     notify([notBooked && `${notBooked} visit${notBooked === 1 ? '' : 's'} not booked`, checks && `${checks} to check`].filter(Boolean).join(' · ') + ' — see Alerts.');
@@ -115,13 +131,17 @@ async function emailRunAlerts(alerts) {
   try {
     const settings = store.load();
     const config = mailer.configFrom(settings, store.getCreds().smtp);
-    const notBooked = alerts.filter((a) => a.kind !== 'check');
+    const notBooked = alerts.filter((a) => !TODO_KINDS.has(a.kind));
     const checks = alerts.filter((a) => a.kind === 'check');
-    const line = (a) => `• ${a.date} — ${a.patientName}${a.therapist ? ` — ${a.therapist}${a.discipline ? ` (${a.discipline})` : ''}` : ''}\n  ${a.reason}`;
+    const onCalendar = alerts.filter((a) => a.kind === 'cancelled_on_calendar');
+    const newClients = alerts.filter((a) => a.kind === 'new_client');
+    const line = (a) => `• ${a.date ? `${a.date} — ` : ''}${a.patientName}${a.therapist ? ` — ${a.therapist}${a.discipline ? ` (${a.discipline})` : ''}` : ''}\n  ${a.reason}`;
     const parts = [];
     if (notBooked.length) parts.push(`NOT BOOKED (${notBooked.length}) — nothing was added to SimplePractice for these:\n\n${notBooked.map(line).join('\n\n')}`);
+    if (onCalendar.length) parts.push(`CANCELLED, BUT ON SIMPLEPRACTICE (${onCalendar.length}) — delete these there:\n\n${onCalendar.map(line).join('\n\n')}`);
     if (checks.length) parts.push(`BOOKED, BUT CHECK (${checks.length}):\n\n${checks.map(line).join('\n\n')}`);
-    const subject = `Hope Billing Assistant: ${[notBooked.length && `${notBooked.length} not booked`, checks.length && `${checks.length} to check`].filter(Boolean).join(', ')}`;
+    if (newClients.length) parts.push(`NEW CLIENTS TO ADD ON THE CLIENTS SCREEN (${newClients.length}):\n\n${newClients.map((a) => `• ${a.patientName}`).join('\n')}`);
+    const subject = `Hope Billing Assistant: ${[notBooked.length && `${notBooked.length} not booked`, onCalendar.length && `${onCalendar.length} cancelled to delete`, checks.length && `${checks.length} to check`, newClients.length && `${newClients.length} new client${newClients.length === 1 ? '' : 's'}`].filter(Boolean).join(', ')}`;
     const body = `${parts.join('\n\n\n')}\n\nThe same list is on the Alerts screen in Hope Billing Assistant.`;
     await mailer.send({ subject, body, config });
     store.save({ emailLastSentAt: nowISO(), emailLastError: null, emailLastErrorAt: null });
@@ -442,7 +462,13 @@ function registerIpc() {
   });
 
   // Alerts screen: patients the SimplePractice search couldn't find while booking.
-  ipcMain.handle('alerts:list', () => store.load().alerts || []);
+  ipcMain.handle('alerts:list', () => {
+    const s = store.load();
+    const alerts = s.alerts || [];
+    const kept = withoutResolvedReminders(alerts, s.clientPayers || []);
+    if (kept.length !== alerts.length) store.save({ alerts: kept });
+    return kept;
+  });
   ipcMain.handle('alerts:clear', () => { store.save({ alerts: [] }); return []; });
 
   // Email alerts (same mailbox-of-your-own approach as Hope Reminder). The
@@ -486,7 +512,6 @@ function registerIpc() {
       { key: 'modifierField', label: 'The first MODIFIER box — where GP / GO / GN goes' },
       { key: 'modifier2Field', label: 'The SECOND modifier box — where “59” goes (Skip if you don’t use it)', optional: true },
       { key: 'clinicianPick', label: 'The CLINICIAN field — to pick the main doctor (Skip if it’s already set)', optional: true },
-      { key: 'locationPick', label: 'The LOCATION field (Skip if it’s already correct)', optional: true },
     ];
     try {
       const res = await teach({
@@ -782,6 +807,15 @@ app.whenReady().then(() => {
       const providers = (cur.providers || []).map((p) =>
         formatCodes(parseCodes(p.codes)) === oldSpeech ? { ...p, codes: newSpeech } : p);
       store.save({ providers, billingVersion: 2 });
+    } catch {}
+  }
+  // Nov 2026 (once): each therapist's private-pay service, from their discipline
+  // where it's clear (LMT → Massage, CPT → Personal Training). Blanks only.
+  if (!store.load().privateServicesSeeded) {
+    try {
+      const cur = store.load();
+      const seeded = seedPrivateServices(cur.providers || []);
+      store.save({ providers: seeded.providers, privateServicesSeeded: true, privateServicesNote: seeded.filled });
     } catch {}
   }
   // Earlier chart reviews misread pages (the "Go to…" dropdown was taken for the

@@ -100,6 +100,16 @@ function text(el) {
   return el ? String(el.textContent || '').replace(/\s+/g, ' ').trim() : '';
 }
 
+/** Tooltip text on an element or the first child that has one (a long chief
+ *  complaint is cut short on screen, its whole text is in the title). */
+function titleOf(el) {
+  if (!el) return '';
+  const own = String(el.getAttribute && el.getAttribute('title') || '').trim();
+  if (own) return own.replace(/\s+/g, ' ');
+  const inner = el.querySelector && el.querySelector('[title]');
+  return inner ? String(inner.getAttribute('title') || '').replace(/\s+/g, ' ').trim() : '';
+}
+
 /**
  * Read visits off a dashboard document using taught selectors.
  * @param {Document} doc
@@ -130,11 +140,24 @@ function extractVisits(doc, sel, limit = 10) {
     // Appointment TYPE (e.g. "Physical Therapy", "Follow-Up Visit") — decides
     // self-pay vs insurance billing.
     const type = text(sel.typeSelector ? row.querySelector(sel.typeSelector) : null);
+    // Status ("Pending arrival", "Cancelled", "No show"), the chief complaint and
+    // the confirmation: where a cancellation and its CX term show (see
+    // model.cancellationOf). The status is a dropdown, so only its CHOSEN value is read.
+    const statusEl = sel.statusSelector ? row.querySelector(sel.statusSelector) : null;
+    const chosen = statusEl ? (statusEl.querySelector('.composable-select__selection') || statusEl) : null;
+    const statusText = text(chosen);
+    const statusTitle = titleOf(chosen);
+    const status = (statusTitle && !statusText.toLowerCase().includes(statusTitle.toLowerCase()) ? `${statusText} ${statusTitle}` : statusText).trim();
+    const noteEl = sel.noteSelector ? row.querySelector(sel.noteSelector) : null;
+    const noteText = text(noteEl);
+    const noteTitle = titleOf(noteEl);
+    const note = (noteTitle && !noteText.toLowerCase().includes(noteTitle.toLowerCase()) ? `${noteText} ${noteTitle}` : noteText).trim();
+    const confirmation = text(sel.confirmationSelector ? row.querySelector(sel.confirmationSelector) : null);
     const patientName = rowPatient || headerName;
     const date = rowDate || headerDate;
     // Push a row when it carries its OWN patient (day schedule) or its own
     // doctor/date (patient chart) — never an empty inherited-only row.
-    if (rowPatient || doctorName || rowDate) out.push({ patientName, date, doctorName, time, type });
+    if (rowPatient || doctorName || rowDate) out.push({ patientName, date, doctorName, time, type, status, note, confirmation });
   }
   return out;
 }

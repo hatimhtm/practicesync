@@ -339,10 +339,14 @@ textarea:focus { border-color: var(--accent); box-shadow: 0 0 0 3px rgba(61,123,
 .main-row { margin-bottom: 8px; }
 .main-code { text-transform: uppercase; font-family: ui-monospace, "SF Mono", Menlo, monospace; text-align: center; }
 
-/* Three-column doctor grid: doctor | main doctor | codes | (remove) */
+/* Doctor grid: doctor | discipline | main doctor | codes | private-pay service | (remove) */
 .roster-head, .roster-row {
-  display: grid; grid-template-columns: 1.2fr 0.8fr 1.2fr 1.7fr 38px; gap: 8px; align-items: center;
+  display: grid; grid-template-columns: 1.55fr 0.62fr 1fr 1.35fr 1.05fr 34px; gap: 6px; align-items: center;
 }
+/* Every column shrinks to the card (inputs keep their own minimum width otherwise). */
+.roster-row > *, .main-row > * { min-width: 0; }
+.roster-row input, .roster-row select, .main-row input { width: 100%; box-sizing: border-box; padding-left: 8px; padding-right: 8px; text-overflow: ellipsis; }
+.roster-row input, .roster-row select { font-size: 12.5px; }
 .roster-head { margin-bottom: 8px; }
 .roster-head > div { font-size: 11px; text-transform: uppercase; letter-spacing: 0.5px; color: var(--muted); font-weight: 600; }
 .roster-row { margin-bottom: 8px; }
@@ -619,6 +623,7 @@ input[type="number"]::-webkit-outer-spin-button { -webkit-appearance: none; marg
 .alert-check .alert-kind { color: var(--warn); }
 .alert-who { font-size: 13.5px; }
 .alert-why { font-size: 12.5px; color: var(--muted); margin-top: 3px; line-height: 1.45; }
+.alert-actions { margin-top: 8px; }
 
 /* ------------------------------ Chart Review ------------------------------ */
 .cr-dot { display: inline-block; width: 10px; height: 10px; border-radius: 50%; background: var(--line); flex: 0 0 auto; }

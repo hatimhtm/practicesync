@@ -45,8 +45,16 @@ const PF = {
     patientSelector: 'a[data-element="cell-name"]',
     doctorSelector: 'td[data-element^="cell-provider-name-"]',
     timeSelector: '[data-element="start-time"]', // per-row appointment time, e.g. "12:00 PM"
-    typeSelector: 'td[data-element^="cell-appointment-type-"]', // "Physical Therapy" / "Follow-Up Visit" — self-pay vs insurance
+    // On the real schedule the type's marker sits on a <p> inside the cell (it was
+    // td-only before, so the type was never read): any element matches now.
+    typeSelector: '[data-element^="cell-appointment-type-"]', // "Physical Therapy" / "Follow-Up Visit"
     dateSelector: '[data-element="scheduler-selected-date"]',
+    // Cancellations (Nov 2026): the Status column is a dropdown showing the
+    // chosen status with its badge ("PN Pending arrival"; cancelled = "CX …");
+    // the chief complaint and confirmation cells are where a CX term can be typed.
+    statusSelector: '[data-element^="intake-status-select-"]',
+    noteSelector: 'td[data-element^="cell-chief-complaint-"]',
+    confirmationSelector: 'td[data-element^="cell-confirmation-"] [data-element="status"]',
   },
 };
 
@@ -60,8 +68,9 @@ const SP = {
     password: ['#user_password', 'input[type="password"]', 'input[name="user[password]"]'],
     submit: ['#submitBtn', 'button[type="submit"]', 'input[type="submit"]'],
   },
-  // The default location for the real practice (not selectable in the demo).
-  defaultLocation: 'High Quality Home Therapy LLC',
+  // No default location: the office presets each client's place of service in
+  // SimplePractice (some authorizations are for one place of service only), so
+  // booking never touches the Location field (Nov 2026 review).
   // The calendar is FullCalendar; each appointment block carries the client name
   // in data-appt-title — used to navigate days and to de-dup (skip clients
   // already booked on a date).
