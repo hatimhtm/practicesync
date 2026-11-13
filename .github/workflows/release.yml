@@ -15,21 +15,38 @@ jobs:
     permissions:
       contents: write
     steps:
+      # A release published with both installers already on it is complete — don't
+      # rebuild it: replacing a file takes minutes, and while it's replaced the
+      # download link is dead (the app's "Check for updates" then hit a 404).
+      - name: Skip if the release already has its installers
+        id: have
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          names=$(gh release view "${GITHUB_REF_NAME}" -R "${GITHUB_REPOSITORY}" --json assets --jq '.assets[].name' 2>/dev/null || true)
+          if echo "$names" | grep -qx 'HopeBillingAssistant-Installer.dmg'; then echo "skip=true" >> "$GITHUB_OUTPUT"; else echo "skip=false" >> "$GITHUB_OUTPUT"; fi
+
       - uses: actions/checkout@v4
+        if: steps.have.outputs.skip != 'true'
 
       - uses: actions/setup-node@v4
+        if: steps.have.outputs.skip != 'true'
         with:
           node-version: 20
 
       - run: npm ci
+        if: steps.have.outputs.skip != 'true'
 
       - name: Rebuild the icon
+        if: steps.have.outputs.skip != 'true'
         run: npm run icon
 
       - name: Build the Apple Intelligence helper (on-device, macOS 26+)
+        if: steps.have.outputs.skip != 'true'
         run: npm run apple-helper
 
       - name: Build & publish to GitHub Releases
+        if: steps.have.outputs.skip != 'true'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           # --- To ship a SIGNED + NOTARIZED build that auto-updates on the
@@ -40,4 +57,9 @@ jobs:
           # APPLE_ID: ${{ secrets.APPLE_ID }}
           # APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
           # APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
-        run: npx electron-builder --mac --arm64 --publish always
+        run: |
+          npx electron-builder --mac --arm64 --publish always
+          # Intel Macs get their own installer (the app's updater picks by chip).
+          npx electron-builder --mac --x64 --publish never
+          cp dist/HopeBillingAssistant-Installer.dmg dist/HopeBillingAssistant-Intel-Installer.dmg
+          gh release upload "${GITHUB_REF_NAME}" dist/HopeBillingAssistant-Intel-Installer.dmg -R "${GITHUB_REPOSITORY}" --clobber

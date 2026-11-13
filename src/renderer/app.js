@@ -1163,8 +1163,13 @@ window.api.onUpdateStatus((s) => {
       if (sb) sb.textContent = 'Finish in Finder →';
       break;
     case 'error':
-      if (ubBtn) { ubBtn.disabled = false; ubBtn.textContent = 'Try update again'; }
+      if (ubBtn) { ubBtn.disabled = false; ubBtn.textContent = 'Try again'; }
       updateReady = false;
+      if (s.error && /uploaded|download|release/i.test(s.error)) {
+        ubTitle.textContent = 'The update isn\'t ready yet';
+        ubSub.textContent = s.error;
+        banner.classList.remove('hidden');
+      }
       if (sb) sb.textContent = 'Check for updates';
       break;
     default:

@@ -48,7 +48,17 @@ function cmpVer(a, b) {
   return 0;
 }
 
-let downloadUrl = null; // the .dmg (or release page) for the newest version
+let downloadUrl = null; // the .dmg for the newest version, for this Mac's chip
+let downloadSize = 0;    // its size, to know the whole file arrived
+let releasePage = null;  // the release's page — always there, unlike a file mid-upload
+
+/** This Mac's installer in a release: "…-Intel-…" for Intel Macs, the other one
+ *  for Apple Silicon. Never the other chip's — that one wouldn't run. */
+function installerFor(rel) {
+  const dmgs = ((rel && rel.assets) || []).filter((a) => /\.dmg$/i.test(a.name || '') && (!a.state || a.state === 'uploaded'));
+  const intel = (a) => /intel|x64/i.test(a.name || '');
+  return dmgs.find((a) => intel(a) === (process.arch === 'x64')) || null;
+}
 
 async function check({ onStatus, quiet } = {}) {
   // On the launch check (quiet) we only speak up if there's actually an update —
@@ -60,11 +70,16 @@ async function check({ onStatus, quiet } = {}) {
     const latest = rel.tag_name || rel.name || '';
     const current = app.getVersion();
     if (latest && cmpVer(latest, current) > 0) {
-      // One installer per chip: "…-Intel-…" for Intel Macs, the other for Apple Silicon.
-      const dmgs = (rel.assets || []).filter((a) => /\.dmg$/i.test(a.name || ''));
-      const intel = (a) => /intel|x64/i.test(a.name || '');
-      const dmg = dmgs.find((a) => intel(a) === (process.arch === 'x64')) || dmgs[0];
-      downloadUrl = (dmg && dmg.browser_download_url) || rel.html_url || null;
+      const dmg = installerFor(rel);
+      releasePage = rel.html_url || null;
+      if (!dmg) {
+        // The release is out but this Mac's installer is still being uploaded.
+        downloadUrl = null;
+        say({ phase: 'error', error: `Version ${latest.replace(/^v/i, '')} is still being uploaded — try again in a few minutes.` });
+        return;
+      }
+      downloadUrl = dmg.browser_download_url;
+      downloadSize = dmg.size || 0;
       say({ phase: 'available', version: latest.replace(/^v/i, '') });
     } else {
       say({ phase: 'none', version: current });
@@ -107,19 +122,37 @@ function download(url, dest, onProgress) {
  */
 async function downloadAndOpen({ onStatus } = {}) {
   const say = (s) => { try { onStatus && onStatus(s); } catch {} };
-  if (!downloadUrl) { say({ phase: 'error', error: 'Nothing to download yet — check for updates first.' }); return; }
-  // Not a direct .dmg (e.g. a release page) → just open it in the browser.
-  if (!/\.dmg(\?|$)/i.test(downloadUrl)) { try { shell.openExternal(downloadUrl); } catch {} say({ phase: 'opening' }); return; }
-  const dest = path.join(os.tmpdir(), 'Hope Billing Assistant-Update.dmg');
+  // Ask GitHub again right before downloading: the check may be minutes old, and a
+  // release's files can be replaced in the meantime.
   try {
-    say({ phase: 'downloading', percent: 0 });
-    await download(downloadUrl, dest, (p) => say({ phase: 'downloading', percent: p }));
-    say({ phase: 'opening' });
-    try { await shell.openPath(dest); } catch { shell.openExternal(downloadUrl); }
-  } catch (e) {
-    try { shell.openExternal(downloadUrl); } catch {} // browser fallback
-    say({ phase: 'opening' });
+    const rel = await getLatestRelease();
+    const dmg = installerFor(rel);
+    releasePage = rel.html_url || releasePage;
+    if (dmg) { downloadUrl = dmg.browser_download_url; downloadSize = dmg.size || 0; }
+    else if (cmpVer(rel.tag_name || '', app.getVersion()) > 0) downloadUrl = null;
+  } catch {}
+  if (!downloadUrl) {
+    say({ phase: 'error', error: 'The new version is still being uploaded — try again in a few minutes.' });
+    return;
   }
+  const dest = path.join(os.tmpdir(), 'Hope Billing Assistant-Update.dmg');
+  for (let attempt = 1; attempt <= 3; attempt++) {
+    try {
+      say({ phase: 'downloading', percent: 0 });
+      await download(downloadUrl, dest, (p) => say({ phase: 'downloading', percent: p }));
+      if (downloadSize && fs.statSync(dest).size !== downloadSize) throw new Error('incomplete download');
+      say({ phase: 'opening' });
+      await shell.openPath(dest);
+      return;
+    } catch {
+      try { fs.unlinkSync(dest); } catch {}
+      if (attempt < 3) await new Promise((r) => setTimeout(r, 15000));
+    }
+  }
+  // Still nothing: the release PAGE (never a file link that can be missing), where
+  // the installers can be downloaded by hand.
+  if (releasePage) { try { shell.openExternal(releasePage); } catch {} }
+  say({ phase: 'error', error: 'The download didn\'t go through. The release page is open in your browser — download the installer for this Mac from there.' });
 }
 
 /** Quiet check on launch — only surfaces if there's something newer. */
@@ -127,4 +160,4 @@ function initAutoUpdates({ onStatus } = {}) {
   check({ onStatus, quiet: true }).catch(() => {});
 }
 
-module.exports = { check, downloadAndOpen, initAutoUpdates };
+module.exports = { installerFor, check, downloadAndOpen, initAutoUpdates };
