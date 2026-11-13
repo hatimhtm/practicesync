@@ -24,6 +24,7 @@ const book = require('./book');
 const { extractVisits } = require('./extract');
 const { planAppointments } = require('./automation');
 const { isNonPatient, sameName, payerStatusFor, normalizeName } = require('./model');
+const { encounterState } = require('./notesFollowUp');
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const say = (onStep, m) => { try { if (typeof onStep === 'function') onStep(m); } catch {} };
@@ -317,11 +318,17 @@ async function readPfSchedule(page, dates, onStep) {
     const html = await page.content();
     const doc = new JSDOM(html).window.document;
     const rows = extractVisits(doc, presets.PF.selectors, 400);
-    const links = [...doc.querySelectorAll(presets.PF.selectors.rowSelector)].map((row) => {
+    const rowEls = [...doc.querySelectorAll(presets.PF.selectors.rowSelector)];
+    const links = rowEls.map((row) => {
       const a = row.querySelector(presets.PF.selectors.patientSelector);
       return (a && (a.getAttribute('href') || '')) || '';
     });
-    rows.forEach((v, i) => out.push({ patientName: (v.patientName || '').trim(), doctorName: (v.doctorName || '').trim(), date, href: links[i] || '' }));
+    rows.forEach((v, i) => out.push({
+      patientName: (v.patientName || '').trim(), doctorName: (v.doctorName || '').trim(), date, href: links[i] || '',
+      time: v.time || '', status: v.status || '',
+      // "View in encounter" / "Start Encounter" — whether the visit has a note (notes follow-up).
+      encounter: rowEls[i] ? encounterState(rowEls[i].textContent) : '',
+    }));
     say(onStep, `  ${date}: ${rows.length} visit${rows.length === 1 ? '' : 's'}`);
   }
   return out;

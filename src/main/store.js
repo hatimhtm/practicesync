@@ -38,6 +38,18 @@ const DEFAULTS = {
   bookedKeys: [],           // visit keys already booked, so live runs never double-book
   chartReview: null,        // last chart review: { at, results:[{ patientName, items:[9 checks] }] }
   chartFollowUps: [],       // chart-review follow-ups, tracked until resolved
+  // Notes follow-up: Seen visits need a note within 24 hours; reminders go to each
+  // therapist (to notesTestTo while notesTestMode is on).
+  notesCheck: null,         // last check: { at, start, end, trigger, notes:[{ date, time, patientName, therapist, note, dueAt, overdue }] }
+  notesDaily: false,        // run the check automatically every day at notesDailyTime
+  notesDailyTime: '17:30',
+  notesLookbackDays: 7,     // the daily check covers today and the days before it
+  notesTestMode: true,
+  notesTestTo: 'nabil@highqualityhometherapy.com',
+  therapistEmails: {},      // { 'Therapist name': 'email' }
+  notesEmailLog: [],        // reminders sent (newest first)
+  notesLastDailyRun: '',    // YYYY-MM-DD the daily check last finished
+  notesLastDailyError: null,
   bookedVisits: [],         // [{ key, at }] every visit saved in SimplePractice by this Mac — never booked twice
   workflows: [],            // recorded workflows: [{ id, name, steps:[...], createdAt }]
   schedule: 'off',          // 'off' | '6h' | 'daily'

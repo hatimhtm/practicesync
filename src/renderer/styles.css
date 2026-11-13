@@ -669,3 +669,38 @@ input[type="number"]::-webkit-outer-spin-button { -webkit-appearance: none; marg
 .cr-note { margin-top: 6px; font-size: 12.5px; }
 .cr-note summary { cursor: pointer; color: var(--accent-ink); font-weight: 600; }
 .cr-note pre { white-space: pre-wrap; font-family: inherit; font-size: 12.5px; background: var(--bg); border: 1px solid var(--line); border-radius: 8px; padding: 10px 12px; margin: 6px 0 0; max-height: 260px; overflow: auto; }
+
+/* Notes follow-up */
+.nf-help { font-size: 12.5px; line-height: 1.5; margin: 0; }
+.nf-daily { display: flex; gap: 16px; align-items: flex-start; justify-content: space-between; }
+.nf-daily .seg { margin-bottom: 0; flex: 0 0 auto; }
+.nf-daily-opts { gap: 14px; align-items: flex-end; margin-top: 12px; flex-wrap: wrap; }
+.nf-daily-opts input[type="time"], .nf-daily-opts input[type="number"] {
+  font-family: inherit; font-size: 13.5px; color: var(--text); width: 110px; box-sizing: border-box;
+  background: var(--bg-2); border: 1px solid var(--line); border-radius: 10px; padding: 8px 10px; outline: none;
+}
+.nf-daily-opts #nfDailyStatus { flex: 1 1 200px; align-self: center; }
+#nfPresets, #nfTabs { margin-bottom: 0; }
+#nfTabs { margin: 16px 0 12px; }
+.nf-row { display: grid; grid-template-columns: 150px 1fr auto; gap: 12px; align-items: baseline; padding: 6px 8px; border-radius: 8px; font-size: 13px; line-height: 1.45; }
+.nf-row:hover { background: var(--bg); }
+.nf-when { color: var(--muted); font-variant-numeric: tabular-nums; }
+.nf-client { font-weight: 600; overflow-wrap: anywhere; }
+.nf-badge { font-size: 12px; font-weight: 600; padding: 2px 9px; border-radius: 99px; white-space: nowrap; }
+.nf-badge.due { background: rgba(251, 191, 36, 0.16); color: var(--warn); }
+.nf-badge.late { background: rgba(220, 38, 38, 0.12); color: var(--bad); white-space: normal; }
+.nf-badge.ok { background: rgba(47, 122, 78, 0.14); color: var(--good); }
+.nf-badge.unk { background: var(--bg-2); color: var(--muted); }
+.nf-noemail { color: var(--bad); }
+.nf-test { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; margin-bottom: 6px; }
+.nf-test input[type="text"] { flex: 1 1 240px; }
+.nf-check { display: inline-flex; gap: 8px; align-items: center; font-size: 13.5px; cursor: pointer; }
+.nf-check input { accent-color: var(--accent); margin: 0; }
+.nf-emails { display: grid; grid-template-columns: repeat(auto-fill, minmax(320px, 1fr)); gap: 6px 18px; max-height: 420px; overflow-y: auto; }
+.nf-email { display: grid; grid-template-columns: 140px 1fr; gap: 10px; align-items: center; font-size: 13px; }
+.nf-email input { font-family: inherit; font-size: 13px; color: var(--text); background: var(--bg-2); border: 1px solid var(--line); border-radius: 8px; padding: 6px 9px; outline: none; min-width: 0; }
+.nf-email input:focus, .nf-test input:focus { border-color: var(--accent); }
+@media (max-width: 720px) {
+  .nf-row { grid-template-columns: 1fr auto; }
+  .nf-when { grid-column: 1 / -1; }
+}

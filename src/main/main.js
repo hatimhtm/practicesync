@@ -29,10 +29,14 @@ const recorder = require('./recorder');
 const { Scheduler } = require('./scheduler');
 const updater = require('./updater');
 const mailer = require('./mailer');
+const notes = require('./notesFollowUp');
 
 let mainWindow = null;
 let tray = null;
 const scheduler = new Scheduler();
+// Practice Fusion runs share one Chrome profile, so only one opens it at a time.
+let chartReviewRunning = false;
+let notesRunning = false;
 const APP_NAME = 'Hope Billing Assistant'; // display name (see INTERNAL_NAME above)
 
 function nowISO() { return new Date().toISOString(); }
@@ -281,6 +285,113 @@ async function performWindowSync(trigger = 'manual') {
   }
 }
 
+/* ---------------------------- notes follow-up ---------------------------- */
+/**
+ * Read the Practice Fusion schedule for `dates` and list every Seen visit with
+ * whether its note is there; with `send`, email each therapist their missing
+ * notes. Read only in Practice Fusion.
+ */
+async function performNotesCheck({ dates, send = false, trigger = 'manual' }) {
+  if (notesRunning) return { ok: false, error: 'A notes check is already running.' };
+  if (chartReviewRunning || scheduler.isRunning) return { ok: false, error: 'Practice Fusion is busy with another run — try again when it finishes.', busy: true };
+  const creds = store.getCreds();
+  if (!creds.practiceFusion.password) return { ok: false, error: 'Add your Practice Fusion login first (Connection).' };
+  notesRunning = true;
+  const step = (text) => sendToRenderer('notes-step', { text, at: nowISO() });
+  sendToRenderer('notes-step', { text: `${trigger === 'daily' ? 'Daily notes check' : 'Notes check'} — ${dates[0]}${dates.length > 1 ? ` → ${dates[dates.length - 1]}` : ''}…`, at: nowISO(), reset: true });
+  let context = null;
+  try {
+    const r = await liveEngine.openAutomationContext({ headless: false });
+    if (r.error) return { ok: false, error: r.error.error || r.error };
+    context = r.context;
+    const page = context.pages()[0] || (await context.newPage());
+    const pf = await loginPracticeFusion(page, creds.practiceFusion, { onStep: step });
+    if (!pf.ok) return { ok: false, error: pf.error };
+    const visits = await readPfSchedule(page, dates, step);
+    const s = store.load();
+    const providers = (s.providers && s.providers.length) ? s.providers : DEMO_PROVIDERS;
+    const list = notes.findNotes(visits, { providers, now: new Date() });
+    const missing = list.filter((n) => n.note === 'missing');
+    const unknown = list.filter((n) => n.note === 'unknown').length;
+    step(`${list.length} visit${list.length === 1 ? '' : 's'} marked Seen · ${missing.length} without a note${unknown ? ` · ${unknown} couldn't be told` : ''}.`);
+    store.save({ notesCheck: { at: nowISO(), start: dates[0], end: dates[dates.length - 1], trigger, notes: list } });
+    sendToRenderer('notes-result', {});
+    let sent = null;
+    if (send) sent = await sendNoteReminders(list, trigger);
+    return { ok: true, seen: list.length, missing: missing.length, sent };
+  } catch (e) {
+    return { ok: false, error: (e && e.message) || String(e) };
+  } finally {
+    notesRunning = false;
+    if (context) { try { await context.close(); } catch {} }
+    sendToRenderer('notes-finished', {});
+  }
+}
+
+/** One email per therapist with missing notes (all to the test address while
+ *  test mode is on). Every attempt is logged on the Notes page. */
+async function sendNoteReminders(list, trigger = 'manual') {
+  const s = store.load();
+  const testMode = s.notesTestMode !== false;
+  const plan = notes.planReminders(list, { emails: s.therapistEmails || {}, testMode, testTo: s.notesTestTo || notes.DEFAULT_TEST_TO });
+  if (!plan.length) return { ok: true, sent: 0, skipped: 0 };
+  const step = (text) => sendToRenderer('notes-step', { text, at: nowISO() });
+  const log = [];
+  let sent = 0, skipped = 0;
+  for (const r of plan) {
+    const entry = { at: nowISO(), trigger, therapist: r.therapist, to: r.to, intendedTo: r.intendedTo, count: r.items.length, overdue: r.items.filter((i) => i.overdue).length, test: testMode };
+    if (!r.to) {
+      skipped += 1;
+      log.push({ ...entry, ok: false, error: 'No email on file for this therapist.' });
+      step(`  ✉︎ ${r.therapist}: no email on file — not sent.`);
+      continue;
+    }
+    try {
+      const config = mailer.configFrom(s, store.getCreds().smtp, r.to);
+      const mail = notes.reminderEmail({ therapist: r.therapist, items: r.items, intendedTo: r.intendedTo, test: testMode });
+      await mailer.send({ subject: mail.subject, body: mail.text, html: mail.html, fromName: 'High Quality Home Therapy', config });
+      sent += 1;
+      log.push({ ...entry, ok: true });
+      step(`  ✉︎ ${r.therapist}: reminder sent to ${r.to} (${r.items.length} note${r.items.length === 1 ? '' : 's'}).`);
+    } catch (e) {
+      const error = (e && e.message) || String(e);
+      log.push({ ...entry, ok: false, error });
+      step(`  ⚠︎ ${r.therapist}: email not sent — ${error}`);
+      if (e && e.kind === 'notConfigured') { skipped += plan.length - log.length; break; }
+    }
+  }
+  const prev = store.load().notesEmailLog || [];
+  store.save({ notesEmailLog: [...log.reverse(), ...prev].slice(0, 300) });
+  sendToRenderer('notes-result', {});
+  return { ok: true, sent, skipped, failed: log.filter((l) => !l.ok).length };
+}
+
+/** The daily check at the chosen time (default 5:30 PM): looks back over the
+ *  last days so overdue notes keep getting reminded until they're written. A
+ *  minute tick (not one long timer) so a Mac that slept through 5:30 still runs
+ *  it when it wakes — until 9 PM. A busy or failed run is retried every 10 minutes. */
+let notesTimer = null;
+let notesLastTry = 0;
+function startNotesTimer() {
+  if (notesTimer) return;
+  notesTimer = setInterval(async () => {
+    const s = store.load();
+    const now = new Date();
+    if (!s.notesDaily || notesRunning || !notes.dailyDue(now, { time: s.notesDailyTime, lastDay: s.notesLastDailyRun })) return;
+    if (Date.now() - notesLastTry < 10 * 60e3) return;
+    notesLastTry = Date.now();
+    const r = await performNotesCheck({ dates: notes.lookbackDates(now, s.notesLookbackDays), send: true, trigger: 'daily' });
+    if (r.ok) {
+      store.save({ notesLastDailyRun: notes.dayKey(now), notesLastDailyError: null });
+      const sent = r.sent ? r.sent.sent : 0;
+      notify(r.missing ? `Notes check: ${r.missing} visit${r.missing === 1 ? '' : 's'} without a note — ${sent} reminder${sent === 1 ? '' : 's'} emailed.` : 'Notes check: every Seen visit has its note ✓');
+    } else {
+      store.save({ notesLastDailyError: r.error, notesLastDailyErrorAt: nowISO() });
+    }
+    sendToRenderer('notes-result', {});
+  }, 60e3);
+}
+
 /* ------------------------------- the window ------------------------------ */
 function createWindow() {
   mainWindow = new BrowserWindow({
@@ -352,10 +463,8 @@ function registerIpc() {
 
   ipcMain.handle('settings:save', (_e, patch) => {
     const next = store.save(patch || {});
-    if (patch && typeof patch.schedule === 'string') {
-      scheduler.setMode(patch.schedule);
-      applyLoginItem(patch.schedule);
-    }
+    if (patch && typeof patch.schedule === 'string') scheduler.setMode(patch.schedule);
+    if (patch && (typeof patch.schedule === 'string' || 'notesDaily' in patch)) applyLoginItem();
     refreshTray();
     return next;
   });
@@ -560,10 +669,10 @@ function registerIpc() {
 
   // CHART REVIEW — the practice's Client Chart Review Guide on every client
   // scheduled this week and next. Read only: nothing in Practice Fusion is changed.
-  let chartReviewRunning = false;
   const CHART_TABS = 3; // charts reviewed at the same time
   ipcMain.handle('chart:run', async (_e, opts = {}) => {
     if (chartReviewRunning) return { ok: false, error: 'A chart review is already running.' };
+    if (notesRunning) return { ok: false, error: 'A notes check is using Practice Fusion — try again when it finishes.' };
     const creds = store.getCreds();
     if (!creds.practiceFusion.password) return { ok: false, error: 'Add your Practice Fusion login first (Connection).' };
     chartReviewRunning = true;
@@ -625,6 +734,21 @@ function registerIpc() {
       sendToRenderer('chart-finished', {});
     }
   });
+  // NOTES FOLLOW-UP — Seen visits with no note yet; reminders to each therapist.
+  ipcMain.handle('notes:run', async (_e, opts = {}) => {
+    const dates = expandDates(opts.start, opts.end || opts.start);
+    if (!dates.length) return { ok: false, error: 'Pick a date (or a start–end range) first.' };
+    return performNotesCheck({ dates, send: !!opts.send, trigger: 'manual' });
+  });
+  ipcMain.handle('notes:send', async () => {
+    const last = store.load().notesCheck;
+    if (!last || !last.notes) return { ok: false, error: 'Run a check first.' };
+    // Re-judge "overdue" against now — the check may have run hours ago.
+    const now = new Date();
+    const fresh = last.notes.map((n) => ({ ...n, overdue: !!(n.dueAt && now >= new Date(n.dueAt)) }));
+    return sendNoteReminders(fresh, 'manual');
+  });
+
   ipcMain.handle('bookings:forget', () => { store.save({ bookedVisits: [] }); return { ok: true }; });
   ipcMain.handle('chart:followup', (_e, { id, done }) => {
     const s = store.load();
@@ -691,9 +815,12 @@ function registerIpc() {
   });
 }
 
-function applyLoginItem(schedule) {
+/** Open at login whenever something runs on its own (the sync schedule or the
+ *  daily notes check), so a restart doesn't quietly switch it off. */
+function applyLoginItem() {
+  const s = store.load();
   try {
-    app.setLoginItemSettings({ openAtLogin: schedule === '6h' || schedule === 'daily', openAsHidden: true });
+    app.setLoginItemSettings({ openAtLogin: s.schedule === '6h' || s.schedule === 'daily' || !!s.notesDaily, openAsHidden: true });
   } catch {}
 }
 
@@ -824,7 +951,8 @@ app.whenReady().then(() => {
     try { store.save({ chartReview: null, chartFollowUps: [], chartReviewVersion: 3 }); } catch {}
   }
   scheduler.setMode(settings.schedule || 'off');
-  applyLoginItem(settings.schedule || 'off');
+  applyLoginItem();
+  startNotesTimer();
 
   createTray();
   createWindow();

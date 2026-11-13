@@ -40,9 +40,10 @@ function normalizePassword(raw) {
 }
 
 /** Build a ready-to-send Config from settings + the smtp creds, or throw a
- *  SendError describing exactly what's missing (never guess). */
-function configFrom(settings, smtpCreds) {
-  const recipients = parseRecipients(settings.alertEmailRecipients);
+ *  SendError describing exactly what's missing (never guess). `to` replaces the
+ *  alert recipients (the notes reminders go to each therapist). */
+function configFrom(settings, smtpCreds, to = null) {
+  const recipients = parseRecipients(to == null ? settings.alertEmailRecipients : to);
   if (!recipients.length) throw new SendError('add at least one recipient', 'notConfigured');
   const username = String((smtpCreds && smtpCreds.username) || '').trim();
   if (!username.includes('@')) throw new SendError('add the sending email address', 'notConfigured');
@@ -57,19 +58,33 @@ function configFrom(settings, smtpCreds) {
   };
 }
 
-/** RFC 5322 message. CRLF line endings are not optional. */
-function compose({ from, to, subject, body }) {
+/** Non-ASCII subjects (dashes, accents) need RFC 2047 encoding. */
+function encodeSubject(subject) {
+  const s = String(subject || '');
+  return /^[\x20-\x7e]*$/.test(s) ? s : `=?UTF-8?B?${Buffer.from(s, 'utf8').toString('base64')}?=`;
+}
+
+/** RFC 5322 message. CRLF line endings are not optional. With `html`, the
+ *  message carries both versions (multipart/alternative): mail apps show the
+ *  designed one, and the plain text is there for the rest. */
+function compose({ from, fromName = 'Hope Billing Assistant', to, subject, body, html = '' }) {
   const date = new Date().toUTCString().replace('GMT', '+0000');
+  const crlf = (t) => String(t || '').replace(/\r?\n/g, '\r\n');
   const headers = [
-    `From: Hope Billing Assistant <${from}>`,
+    `From: ${fromName} <${from}>`,
     `To: ${to.join(', ')}`,
-    `Subject: ${subject}`,
+    `Subject: ${encodeSubject(subject)}`,
     `Date: ${date}`,
     'MIME-Version: 1.0',
-    'Content-Type: text/plain; charset=utf-8',
-    'Content-Transfer-Encoding: 8bit',
   ];
-  return headers.join('\r\n') + '\r\n\r\n' + String(body || '').replace(/\n/g, '\r\n');
+  if (!html) {
+    headers.push('Content-Type: text/plain; charset=utf-8', 'Content-Transfer-Encoding: 8bit');
+    return headers.join('\r\n') + '\r\n\r\n' + crlf(body);
+  }
+  const boundary = `hope-${crypto.randomUUID()}`;
+  headers.push(`Content-Type: multipart/alternative; boundary="${boundary}"`);
+  const part = (type, content) => `--${boundary}\r\nContent-Type: ${type}; charset=utf-8\r\nContent-Transfer-Encoding: 8bit\r\n\r\n${crlf(content)}\r\n`;
+  return headers.join('\r\n') + '\r\n\r\n' + part('text/plain', body) + part('text/html', html) + `--${boundary}--\r\n`;
 }
 
 function curlArguments(config, messageFile) {
@@ -92,9 +107,9 @@ function friendlyCurlError(code, detail) {
 
 /** Send one email now. `config` is from configFrom(). Rejects with a
  *  SendError carrying a friendly message on any failure. */
-function send({ subject, body, config }) {
+function send({ subject, body, html, fromName, config }) {
   return new Promise((resolve, reject) => {
-    const message = compose({ from: config.username, to: config.recipients, subject, body });
+    const message = compose({ from: config.username, fromName, to: config.recipients, subject, body, html });
     const tmp = path.join(os.tmpdir(), `hope-mail-${crypto.randomUUID()}.eml`);
     fs.writeFileSync(tmp, message, 'utf8');
     const cleanup = () => { try { fs.unlinkSync(tmp); } catch {} };

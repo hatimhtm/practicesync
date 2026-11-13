@@ -42,4 +42,9 @@ contextBridge.exposeInMainWorld('api', {
   onChartStep: (cb) => ipcRenderer.on('chart-step', (_e, s) => cb(s)),
   onChartResult: (cb) => ipcRenderer.on('chart-result', (_e, r) => cb(r)),
   onChartFinished: (cb) => ipcRenderer.on('chart-finished', (_e, r) => cb(r)),
+  notesRun: (opts) => ipcRenderer.invoke('notes:run', opts || {}),
+  notesSend: () => ipcRenderer.invoke('notes:send'),
+  onNotesStep: (cb) => ipcRenderer.on('notes-step', (_e, s) => cb(s)),
+  onNotesResult: (cb) => ipcRenderer.on('notes-result', (_e, r) => cb(r)),
+  onNotesFinished: (cb) => ipcRenderer.on('notes-finished', (_e, r) => cb(r)),
 });

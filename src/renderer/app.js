@@ -82,6 +82,7 @@ async function refresh() {
   clients = (settings.clientPayers || []).slice();
   renderClients();
   renderChartReview();
+  renderNotes();
   if (!draftMains.length) draftMains = (settings.mainDoctors || []).map(normMain);
   if (!draftProviders.length && providers.length) {
     draftProviders = providers.map((p) => ({ name: p.name, discipline: p.discipline || '', mainDoctor: p.mainDoctor, codes: formatCodes(p.codes), privateService: p.privateService || '' }));
@@ -1285,6 +1286,186 @@ window.api.onChartStep((s) => {
 });
 window.api.onChartResult(async () => { settings = await window.api.getSettings(); renderChartReview(); });
 window.api.onChartFinished(() => { const c = $('#crLog .live-line.cur'); if (c) c.classList.remove('cur'); });
+
+/* ---------------------------- notes follow-up ---------------------------- */
+const NF = { tab: 'missing', running: false };
+const nfDay = (iso) => new Date(iso).toLocaleDateString(undefined, { weekday: 'short', month: 'short', day: 'numeric' });
+const nfClock = (iso) => new Date(iso).toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' });
+function nfDue(n) {
+  if (!n.dueAt) return '<span class="muted">due within 24 h</span>';
+  const late = Date.now() >= new Date(n.dueAt).getTime();
+  return late ? `<span class="nf-badge late">Overdue since ${nfDay(n.dueAt)}, ${nfClock(n.dueAt)}</span>` : `<span class="nf-badge due">Due by ${nfDay(n.dueAt)}, ${nfClock(n.dueAt)}</span>`;
+}
+function nfVisit(n) { return n.apptAt ? `${nfDay(n.apptAt)} · ${nfClock(n.apptAt)}` : escapeHtml(n.date); }
+function nfTherapistNames() {
+  const names = new Set((settings.providers || []).map((p) => p.name).filter(Boolean));
+  Object.keys(settings.therapistEmails || {}).forEach((n) => names.add(n));
+  return [...names].sort((a, b) => a.localeCompare(b));
+}
+function nfEmailOf(name) {
+  const key = (x) => String(x || '').toLowerCase().replace(/[^a-z]/g, '');
+  const hit = Object.entries(settings.therapistEmails || {}).find(([n]) => key(n) === key(name));
+  return hit ? hit[1] : '';
+}
+function nfGroups(list) {
+  const groups = {};
+  list.forEach((n) => { (groups[n.therapist || 'Unknown therapist'] = groups[n.therapist || 'Unknown therapist'] || []).push(n); });
+  return Object.keys(groups).sort((a, b) => a.localeCompare(b)).map((t) => ({ therapist: t, items: groups[t].sort((a, b) => String(a.apptAt).localeCompare(String(b.apptAt))) }));
+}
+function renderNotes() {
+  const check = settings.notesCheck || null;
+  const list = (check && check.notes) || [];
+  const missing = list.filter((n) => n.note === 'missing');
+  const unknown = list.filter((n) => n.note === 'unknown');
+  const badge = $('#notesBadge');
+  badge.textContent = missing.length; badge.classList.toggle('hidden', !missing.length);
+  $('#nfMissingCount').textContent = missing.length ? `(${missing.length})` : '';
+  if (!NF.running) {
+    $('#nfIcon').textContent = check ? (missing.length ? '⚠️' : '✅') : '📝';
+    $('#nfTitle').textContent = check ? (missing.length ? `${missing.length} Seen visit${missing.length === 1 ? '' : 's'} without a note` : `All ${list.length} Seen visit${list.length === 1 ? ' has its' : 's have their'} note`) : 'No notes check yet';
+    $('#nfSub').textContent = check ? `Checked ${fmtTime(check.at)} · ${check.start}${check.end && check.end !== check.start ? ` → ${check.end}` : ''}${check.trigger === 'daily' ? ' · daily check' : ''}${unknown.length ? ` · ${unknown.length} couldn't be told` : ''}` : 'Reads the Practice Fusion schedule for the days you pick. Takes a few seconds per day.';
+  }
+  $('#nfSendBtn').disabled = NF.running || !missing.length;
+  $('#nfSendBtn').textContent = settings.notesTestMode !== false ? 'Email reminders (test)' : 'Email reminders';
+  ['missing', 'all', 'emails', 'log'].forEach((t) => $(`#nf${{ missing: 'Missing', all: 'All', emails: 'Emails', log: 'Log' }[t]}Card`).classList.toggle('hidden', NF.tab !== t));
+  $$('#nfTabs button').forEach((b) => b.classList.toggle('active', b.dataset.tab === NF.tab));
+
+  // Daily
+  const dailyOn = settings.notesDaily ? 'on' : 'off';
+  $$('#nfDailySeg button').forEach((b) => b.classList.toggle('active', b.dataset.val === dailyOn));
+  if (document.activeElement !== $('#nfDailyTime')) $('#nfDailyTime').value = settings.notesDailyTime || '17:30';
+  if (document.activeElement !== $('#nfLookback')) $('#nfLookback').value = settings.notesLookbackDays || 7;
+  $('#nfDailyStatus').textContent = !settings.notesDaily ? 'Off: checks only run when you press Check notes.'
+    : settings.notesLastDailyError ? `Last daily check failed: ${settings.notesLastDailyError}`
+    : settings.notesLastDailyRun ? `Last daily check: ${settings.notesLastDailyRun}.` : 'On: the first daily check runs today at that time.';
+
+  // Missing notes, by therapist
+  const missingGroups = nfGroups(missing);
+  $('#nfMissingList').innerHTML = missingGroups.length ? missingGroups.map((g) => `
+    <div class="cr-group">
+      <div class="cr-group-head">${escapeHtml(g.therapist)} <span class="muted">· ${g.items.length} note${g.items.length === 1 ? '' : 's'}${nfEmailOf(g.therapist) ? ` · ${escapeHtml(nfEmailOf(g.therapist))}` : ' · <span class="nf-noemail">no email on file</span>'}</span></div>
+      ${g.items.map((n) => `<div class="nf-row"><span class="nf-when">${nfVisit(n)}</span><span class="nf-client">${escapeHtml(n.patientName)}</span>${nfDue(n)}</div>`).join('')}
+    </div>`).join('')
+    : `<div class="client-empty"><strong>${check ? 'No missing notes' : 'No check yet'}</strong><span>${check ? 'Every visit marked Seen in these days has its note.' : 'Pick the days and press Check notes.'}</span></div>`;
+
+  // All Seen visits
+  const label = { done: '<span class="nf-badge ok">Note there</span>', unknown: '<span class="nf-badge unk">Couldn\'t tell</span>' };
+  const allGroups = nfGroups(list);
+  $('#nfAllList').innerHTML = allGroups.length ? allGroups.map((g) => `
+    <div class="cr-group">
+      <div class="cr-group-head">${escapeHtml(g.therapist)} <span class="muted">· ${g.items.length}</span></div>
+      ${g.items.map((n) => `<div class="nf-row"><span class="nf-when">${nfVisit(n)}</span><span class="nf-client">${escapeHtml(n.patientName)}</span>${n.note === 'missing' ? nfDue(n) : label[n.note]}</div>`).join('')}
+    </div>`).join('') : '<div class="client-empty"><strong>No Seen visits</strong><span>Visits show here once a check finds them marked Seen.</span></div>';
+
+  // Therapist emails
+  $('#nfTestMode').checked = settings.notesTestMode !== false;
+  if (document.activeElement !== $('#nfTestTo')) $('#nfTestTo').value = settings.notesTestTo || 'nabil@highqualityhometherapy.com';
+  $('#nfTestNote').textContent = settings.notesTestMode !== false
+    ? 'While test mode is on, therapists get nothing: every reminder comes to this address, and each one says which therapist it was for.'
+    : 'Test mode is off: each therapist gets their own reminder at the email below. Therapists without an email are skipped and listed under Sent.';
+  window.api.credsStatus().then((st) => setCredPill($('#nfMailPill'), st && st.smtp, 'Email set up', 'Not set up')).catch(() => {});
+  const q = ($('#nfEmailSearch').value || '').toLowerCase();
+  const names = nfTherapistNames();
+  const withEmail = names.filter((n) => nfEmailOf(n)).length;
+  $('#nfEmailCount').textContent = `${withEmail} of ${names.length} have an email`;
+  if (!$('#nfEmailList').contains(document.activeElement)) {
+    $('#nfEmailList').innerHTML = names.filter((n) => !q || n.toLowerCase().includes(q)).map((n) => `
+      <label class="nf-email"><span>${escapeHtml(n)}</span><input type="email" data-name="${escapeHtml(n)}" value="${escapeHtml(nfEmailOf(n))}" placeholder="name@highqualityhometherapy.com" /></label>`).join('')
+      || '<div class="client-empty"><strong>No therapists</strong><span>Add them on Doctors &amp; Codes.</span></div>';
+    $$('#nfEmailList input').forEach((inp) => inp.addEventListener('change', async () => {
+      const emails = { ...(settings.therapistEmails || {}) };
+      const v = inp.value.trim();
+      if (v && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(v)) { toast('That email doesn\'t look right.'); return; }
+      Object.keys(emails).forEach((k) => { if (k.toLowerCase().replace(/[^a-z]/g, '') === inp.dataset.name.toLowerCase().replace(/[^a-z]/g, '')) delete emails[k]; });
+      if (v) emails[inp.dataset.name] = v;
+      settings = await window.api.saveSettings({ therapistEmails: emails });
+      renderNotes();
+    }));
+  }
+
+  // Sent
+  const log = settings.notesEmailLog || [];
+  $('#nfLogList').innerHTML = log.length ? log.slice(0, 120).map((l) => `
+    <div class="nf-row nf-log"><span class="nf-when">${fmtTime(l.at)}</span>
+      <span class="nf-client">${escapeHtml(l.therapist)} <span class="muted">· ${l.count} note${l.count === 1 ? '' : 's'}${l.overdue ? `, ${l.overdue} overdue` : ''}${l.trigger === 'daily' ? ' · daily' : ''}</span></span>
+      ${l.ok ? `<span class="nf-badge ok">${l.test ? 'Test → ' : 'Sent → '}${escapeHtml(l.to)}</span>` : `<span class="nf-badge late">${escapeHtml(l.error || 'Not sent')}</span>`}</div>`).join('')
+    : '<div class="client-empty"><strong>No reminders sent yet</strong></div>';
+}
+$$('#nfTabs button').forEach((b) => b.addEventListener('click', () => { NF.tab = b.dataset.tab; renderNotes(); }));
+$('#nfEmailSearch').addEventListener('input', () => { $('#nfEmailList').innerHTML = ''; renderNotes(); });
+$$('#nfDailySeg button').forEach((b) => b.addEventListener('click', async () => {
+  settings = await window.api.saveSettings({ notesDaily: b.dataset.val === 'on' });
+  renderNotes();
+  toast(settings.notesDaily ? `Daily notes check on, at ${settings.notesDailyTime || '17:30'}.` : 'Daily notes check off.');
+}));
+$('#nfDailyTime').addEventListener('change', async () => { if ($('#nfDailyTime').value) { settings = await window.api.saveSettings({ notesDailyTime: $('#nfDailyTime').value }); renderNotes(); } });
+$('#nfLookback').addEventListener('change', async () => {
+  const n = Math.max(1, Math.min(31, parseInt($('#nfLookback').value, 10) || 7));
+  settings = await window.api.saveSettings({ notesLookbackDays: n }); renderNotes();
+});
+$('#nfTestMode').addEventListener('change', async () => { settings = await window.api.saveSettings({ notesTestMode: $('#nfTestMode').checked }); renderNotes(); });
+$('#nfTestTo').addEventListener('change', async () => {
+  const v = $('#nfTestTo').value.trim();
+  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(v)) { toast('Enter one email address for test mode.'); return; }
+  settings = await window.api.saveSettings({ notesTestTo: v }); renderNotes();
+});
+// Range — "Today" by default; remembered on this Mac.
+function nfPreset(p) {
+  const t = new Date(); t.setHours(0, 0, 0, 0);
+  let a = new Date(t), b = new Date(t);
+  if (p === 'yesterday') { a.setDate(t.getDate() - 1); b = new Date(a); }
+  if (p === '7') a.setDate(t.getDate() - 6);
+  $('#nfFrom').value = isoDay(a); $('#nfTo').value = isoDay(b);
+  $$('#nfPresets button').forEach((x) => x.classList.toggle('active', x.dataset.p === p));
+  nfRangeNote();
+}
+function nfRangeNote() {
+  const a = $('#nfFrom').value, b = $('#nfTo').value;
+  const days = a && b ? Math.round((new Date(b) - new Date(a)) / 86400000) + 1 : 0;
+  $('#nfRangeNote').textContent = days > 31 ? 'Pick up to 31 days.' : days > 0 ? `Checks every visit marked Seen in ${days === 1 ? 'this day' : `these ${days} days`}.` : 'Pick a start date on or before the end date.';
+  $('#nfRunBtn').disabled = NF.running || days <= 0 || days > 31;
+}
+$$('#nfPresets button').forEach((b) => b.addEventListener('click', () => nfPreset(b.dataset.p)));
+['#nfFrom', '#nfTo'].forEach((id) => $(id).addEventListener('change', () => { $$('#nfPresets button').forEach((x) => x.classList.remove('active')); nfRangeNote(); }));
+nfPreset('today');
+$('#nfRunBtn').addEventListener('click', async () => {
+  if (NF.running) return;
+  NF.running = true;
+  $('#nfRunBtn').disabled = true; $('#nfSendBtn').disabled = true; $('#nfRunBtn').textContent = 'Checking…';
+  $('#nfIcon').textContent = '⏳'; $('#nfTitle').textContent = 'Checking notes…';
+  $('#nfSub').textContent = 'Practice Fusion is open in Chrome. Leave it running.';
+  const r = await window.api.notesRun({ start: isoToMDY($('#nfFrom').value), end: isoToMDY($('#nfTo').value) });
+  NF.running = false;
+  $('#nfRunBtn').textContent = 'Check notes';
+  nfRangeNote();
+  if (!r || !r.ok) toast(r && r.error ? r.error : 'The notes check stopped.');
+  else NF.tab = 'missing';
+  await refresh();
+});
+$('#nfSendBtn').addEventListener('click', async () => {
+  const missing = ((settings.notesCheck && settings.notesCheck.notes) || []).filter((n) => n.note === 'missing');
+  const therapists = new Set(missing.map((n) => n.therapist)).size;
+  const test = settings.notesTestMode !== false;
+  if (!confirm(test ? `Send ${therapists} test reminder${therapists === 1 ? '' : 's'} to ${settings.notesTestTo || 'nabil@highqualityhometherapy.com'}?` : `Email ${therapists} therapist${therapists === 1 ? '' : 's'} about ${missing.length} missing note${missing.length === 1 ? '' : 's'}?`)) return;
+  $('#nfSendBtn').disabled = true; $('#nfSendBtn').textContent = 'Sending…';
+  $('#nfLiveCard').classList.remove('hidden');
+  const r = await window.api.notesSend();
+  await refresh();
+  if (!r || !r.ok) toast(r && r.error ? r.error : 'Couldn\'t send the reminders.');
+  else { toast(`${r.sent} reminder${r.sent === 1 ? '' : 's'} sent${r.failed ? ` · ${r.failed} not sent (see Sent)` : ''}.`); NF.tab = 'log'; renderNotes(); }
+});
+window.api.onNotesStep((s) => {
+  if (!s) return;
+  const log = $('#nfLog');
+  if (s.reset) { log.innerHTML = ''; $('#nfLiveCard').classList.remove('hidden'); }
+  const prev = log.querySelector('.live-line.cur'); if (prev) prev.classList.remove('cur');
+  const line = document.createElement('div');
+  line.className = 'live-line cur';
+  line.innerHTML = `<span class="t">${fmtClock(s.at)}</span><span>${escapeHtml(s.text || '')}</span>`;
+  log.appendChild(line); log.scrollTop = log.scrollHeight;
+});
+window.api.onNotesResult(async () => { settings = await window.api.getSettings(); renderNotes(); });
+window.api.onNotesFinished(() => { const c = $('#nfLog .live-line.cur'); if (c) c.classList.remove('cur'); });
 
 /* -------------------------------- events -------------------------------- */
 function fmtClock(iso) {

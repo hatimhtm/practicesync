@@ -31,6 +31,7 @@
         <button class="nav-item" data-view="doctors"><span class="dot"></span> Doctors &amp; Codes</button>
         <button class="nav-item" data-view="clients"><span class="dot"></span> Clients <span class="nav-count" id="clientsCount"></span></button>
         <button class="nav-item" data-view="charts"><span class="dot"></span> Chart Review <span class="nav-badge hidden" id="chartBadge">0</span></button>
+        <button class="nav-item" data-view="notes"><span class="dot"></span> Notes Follow-up <span class="nav-badge hidden" id="notesBadge">0</span></button>
         <button class="nav-item" data-view="connect"><span class="dot"></span> Connection</button>
         <button class="nav-item" data-view="ai"><span class="dot"></span> AI Engine</button>
         <button class="nav-item" data-view="schedule"><span class="dot"></span> Schedule</button>
@@ -271,6 +272,86 @@
           <div class="cr-legend"><span class="cr-dot ok"></span> OK <span class="cr-dot check"></span> Look at it <span class="cr-dot problem"></span> Fix it</div>
           <div id="crClientList"></div>
         </div>
+      </section>
+
+      <section class="view hidden" data-view="notes">
+        <header class="view-head">
+          <h1>Notes Follow-up</h1>
+          <p class="muted">Every visit marked <strong>Seen</strong> in Practice Fusion needs its note within <strong>24 hours</strong> of the appointment (a 10:30 AM visit is due by 10:30 AM the next day). Insurance needs the notes to pay. This page finds the Seen visits with no note yet and emails each therapist a short reminder. It only <strong>reads</strong> Practice Fusion.</p>
+        </header>
+
+        <div class="status-card">
+          <div class="status-main">
+            <div class="status-icon" id="nfIcon">📝</div>
+            <div>
+              <div class="status-title" id="nfTitle">No notes check yet</div>
+              <div class="status-sub muted" id="nfSub">Reads the Practice Fusion schedule for the days you pick. Takes a few seconds per day.</div>
+            </div>
+          </div>
+          <div class="row" style="gap:8px;margin:0">
+            <button class="btn" id="nfSendBtn" disabled>Email reminders</button>
+            <button class="btn btn-primary" id="nfRunBtn">Check notes</button>
+          </div>
+        </div>
+
+        <div class="card cr-range">
+          <div class="cr-range-row">
+            <label class="cr-date"><span>From</span><input type="date" id="nfFrom" /></label>
+            <label class="cr-date"><span>To</span><input type="date" id="nfTo" /></label>
+            <div class="seg seg-sm" id="nfPresets">
+              <button data-p="today" class="active">Today</button>
+              <button data-p="yesterday">Yesterday</button>
+              <button data-p="7">Last 7 days</button>
+            </div>
+          </div>
+          <p class="muted cr-range-note" id="nfRangeNote"></p>
+        </div>
+
+        <div class="card">
+          <div class="nf-daily">
+            <div>
+              <div class="card-k" style="margin-bottom:4px">Check every day</div>
+              <p class="muted nf-help">Checks automatically each day and emails every therapist who still has a note missing. It looks back over the last days too, so an overdue note keeps getting a reminder until it's written. The app has to be open (it starts with the Mac when this is on). If the Mac is asleep at that time, it runs when it wakes, until 9 PM.</p>
+            </div>
+            <div class="seg seg-sm" id="nfDailySeg"><button data-val="on">On</button><button data-val="off">Off</button></div>
+          </div>
+          <div class="row nf-daily-opts">
+            <label class="cr-date"><span>Time</span><input type="time" id="nfDailyTime" value="17:30" /></label>
+            <label class="cr-date"><span>Look back (days)</span><input type="number" id="nfLookback" min="1" max="31" value="7" /></label>
+            <span class="muted nf-help" id="nfDailyStatus"></span>
+          </div>
+        </div>
+
+        <div class="card live-card hidden" id="nfLiveCard">
+          <div class="card-k">Live</div>
+          <div class="live-log" id="nfLog"></div>
+        </div>
+
+        <div class="seg seg-sm" id="nfTabs">
+          <button class="active" data-tab="missing">Missing notes <span id="nfMissingCount"></span></button>
+          <button data-tab="all">All Seen visits</button>
+          <button data-tab="emails">Therapist emails</button>
+          <button data-tab="log">Sent</button>
+        </div>
+
+        <div class="card" id="nfMissingCard"><div id="nfMissingList"></div></div>
+        <div class="card hidden" id="nfAllCard"><div id="nfAllList"></div></div>
+
+        <div class="card hidden" id="nfEmailsCard">
+          <div class="nf-test">
+            <label class="nf-check"><input type="checkbox" id="nfTestMode" checked /> <span><b>Test mode</b>: send every reminder to</span></label>
+            <input type="text" id="nfTestTo" placeholder="nabil@highqualityhometherapy.com" />
+          </div>
+          <p class="muted nf-help" id="nfTestNote"></p>
+          <p class="muted nf-help">Reminders are sent from the mailbox set up on the <a href="#" class="link" data-goto="alerts">Alerts</a> page <span class="pill pill-todo" id="nfMailPill">Not set up</span></p>
+          <div class="client-toolbar" style="margin-top:12px">
+            <input type="text" id="nfEmailSearch" placeholder="Search therapist" autocomplete="off" />
+            <span class="muted nf-help" id="nfEmailCount"></span>
+          </div>
+          <div id="nfEmailList" class="nf-emails"></div>
+        </div>
+
+        <div class="card hidden" id="nfLogCard"><div id="nfLogList"></div></div>
       </section>
 
       <section class="view hidden" data-view="connect">

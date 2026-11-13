@@ -60,7 +60,10 @@ async function check({ onStatus, quiet } = {}) {
     const latest = rel.tag_name || rel.name || '';
     const current = app.getVersion();
     if (latest && cmpVer(latest, current) > 0) {
-      const dmg = (rel.assets || []).find((a) => /\.dmg$/i.test(a.name || ''));
+      // One installer per chip: "…-Intel-…" for Intel Macs, the other for Apple Silicon.
+      const dmgs = (rel.assets || []).filter((a) => /\.dmg$/i.test(a.name || ''));
+      const intel = (a) => /intel|x64/i.test(a.name || '');
+      const dmg = dmgs.find((a) => intel(a) === (process.arch === 'x64')) || dmgs[0];
       downloadUrl = (dmg && dmg.browser_download_url) || rel.html_url || null;
       say({ phase: 'available', version: latest.replace(/^v/i, '') });
     } else {
