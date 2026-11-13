@@ -692,7 +692,10 @@ function registerIpc() {
   ipcMain.handle('email:test', async () => {
     try {
       const settings = store.load();
-      const config = mailer.configFrom(settings, store.getCreds().smtp);
+      // No alert recipients yet: test with the notes test address instead, so the
+      // test checks the mailbox (address + app password), not an empty list.
+      const to = mailer.parseRecipients(settings.alertEmailRecipients).length ? null : (settings.notesTestTo || notes.DEFAULT_TEST_TO);
+      const config = mailer.configFrom(settings, store.getCreds().smtp, to);
       await mailer.send({
         subject: 'Hope Billing Assistant: test email',
         body: 'This is a test message — email alerts are working.\n\nAfter each sync, you will get one email listing any visits it couldn\'t book, with the therapist and the reason.',

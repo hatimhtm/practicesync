@@ -56,6 +56,13 @@ const check = (n, ok) => { console.log(`${ok ? '  ok  ' : '  FAIL'}  ${n}`); ok 
   check('no bare LFs left (mail servers reject them)', !message.replace(/\r\n/g, '').includes('\n'));
 })();
 
+(function testPortPicksTlsMode() {
+  console.log('# curlArguments — 465 is TLS from the start, 587 switches to TLS');
+  const base = { host: 'smtp.gmail.com', username: 'a@x.com', password: 'pw', recipients: ['b@x.com'] };
+  check('465 → smtps://', curlArguments({ ...base, port: 465 }, '/tmp/m').includes('smtps://smtp.gmail.com:465'));
+  check('587 → smtp:// + --ssl-reqd (STARTTLS)', curlArguments({ ...base, port: 587 }, '/tmp/m').includes('smtp://smtp.gmail.com:587') && curlArguments({ ...base, port: 587 }, '/tmp/m').includes('--ssl-reqd'));
+})();
+
 (function testCurlArgumentsCarryEveryRecipient() {
   console.log('# curlArguments — one --mail-rcpt per recipient, SMTPS + TLS');
   const args = curlArguments({ host: 'smtp.gmail.com', port: 465, username: 'u@example.com', password: 'secret', recipients: ['a@example.com', 'b@example.com'] }, '/tmp/m.eml');

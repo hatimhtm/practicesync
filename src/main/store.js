@@ -126,12 +126,17 @@ function hasAIKey() {
  */
 function setCreds(obj) {
   const cur = getCreds();
+  // Only what was typed replaces what's saved: the password boxes are empty after
+  // every save, and saving again with them empty used to erase the password.
+  const typed = (o) => Object.fromEntries(Object.entries(o || {}).filter(([, v]) => typeof v === 'string' && v.trim() !== ''));
   const next = {
-    practiceFusion: { ...cur.practiceFusion, ...(obj.practiceFusion || {}) },
-    simplePractice: { ...cur.simplePractice, ...(obj.simplePractice || {}) },
-    smtp: { ...cur.smtp, ...(obj.smtp || {}) },
+    practiceFusion: { ...cur.practiceFusion, ...typed(obj.practiceFusion) },
+    simplePractice: { ...cur.simplePractice, ...typed(obj.simplePractice) },
+    smtp: { ...cur.smtp, ...typed(obj.smtp) },
   };
-  if (!safeStorage.isEncryptionAvailable()) throw new Error('Secure storage unavailable.');
+  if (!safeStorage.isEncryptionAvailable()) {
+    throw new Error('This Mac\'s Keychain didn\'t let the app save it. Quit Hope Billing Assistant, open it again, and click "Always Allow" when macOS asks about "Hope Assistant Safe Storage".');
+  }
   fs.writeFileSync(credsPath(), safeStorage.encryptString(JSON.stringify(next)), { mode: 0o600 });
   return next;
 }
@@ -152,6 +157,9 @@ function credsStatus() {
     spEmail: c.simplePractice.email || '',
     smtp: !!(c.smtp.username && c.smtp.password),
     smtpUsername: c.smtp.username || '',
+    smtpPasswordSaved: !!c.smtp.password,
+    pfPasswordSaved: !!c.practiceFusion.password,
+    spPasswordSaved: !!c.simplePractice.password,
   };
 }
 

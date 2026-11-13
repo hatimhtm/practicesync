@@ -88,7 +88,10 @@ function compose({ from, fromName = 'Hope Billing Assistant', to, subject, body,
 }
 
 function curlArguments(config, messageFile) {
-  const args = ['--url', `smtps://${config.host}:${config.port}`, '--ssl-reqd', '--mail-from', config.username];
+  // 465 is TLS from the start (smtps); 587/25 start plain and switch to TLS
+  // (STARTTLS) — --ssl-reqd refuses to send unless that switch happens.
+  const scheme = Number(config.port) === 587 || Number(config.port) === 25 ? 'smtp' : 'smtps';
+  const args = ['--url', `${scheme}://${config.host}:${config.port}`, '--ssl-reqd', '--mail-from', config.username];
   for (const r of config.recipients) args.push('--mail-rcpt', r);
   args.push('--user', `${config.username}:${config.password}`, '--upload-file', messageFile, '--silent', '--show-error', '--max-time', '45');
   return args;

@@ -624,6 +624,11 @@ async function refreshCreds() {
     setCredPill($('#credsSp'), st.sp, 'SP login saved', 'SP needs login');
     if ($('#smtpUser') && !$('#smtpUser').value) $('#smtpUser').value = st.smtpUsername || '';
     setCredPill($('#emailStatusPill'), st.smtp, 'Email set up', 'Not set up');
+    // Say when a password is saved — an empty box doesn't mean there's none.
+    const saved = (id, yes) => { if ($(id)) $(id).placeholder = yes ? 'Saved — type a new one to replace it' : '••••••••'; };
+    saved('#smtpPass', st.smtpPasswordSaved);
+    saved('#pfPass', st.pfPasswordSaved);
+    saved('#spPass', st.spPasswordSaved);
   } catch {}
 }
 function setCredPill(el, ok, goodText, todoText) {
@@ -654,13 +659,14 @@ if ($('#saveEmailBtn')) $('#saveEmailBtn').addEventListener('click', async () =>
     smtpPort: parseInt($('#smtpPort').value, 10) || 465,
   });
   const smtpUser = $('#smtpUser').value.trim();
-  const smtpPass = $('#smtpPass').value;
+  const smtpPass = $('#smtpPass').value.replace(/\s+/g, '');
+  if (smtpUser && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(smtpUser)) { toast('The sending email doesn\'t look right.'); return; }
   if (smtpUser || smtpPass) {
     const r = await window.api.saveCreds({ smtp: { username: smtpUser, password: smtpPass } });
     if (!(r && r.ok)) { toast(r && r.error ? r.error : 'Could not save the email account.'); return; }
     $('#smtpPass').value = '';
   }
-  toast('Email settings saved ✓');
+  toast(smtpPass ? 'Email settings and the new app password saved ✓ — press Send test email to check.' : 'Email settings saved ✓ (the saved app password was kept)');
   refreshCreds();
   await refresh();
 });
