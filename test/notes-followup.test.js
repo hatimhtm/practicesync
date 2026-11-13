@@ -123,5 +123,25 @@ const providers = [
   check('encounter read per row', nf.encounterState(els[0].textContent) === 'started' && nf.encounterState(els[1].textContent) === 'none');
 })();
 
+(function timeline() {
+  console.log('# the note on the client\'s Timeline → Encounters');
+  const t = [
+    'TYPE/SOURCE', 'DETAILS', 'STATUS',
+    'Office Visit', 'Jessica Trujillo', 'SOAP Note', 'CC: *BF (Cover for Dr. caryn) (Appt time: 11/13/2026 10:30:00 AM) (Arrival time: 11:18 AM)', '11/13/2026',
+    'Office Visit', 'Jessica Trujillo', 'SOAP Note', 'CC: * (Appt time: 11/5/2026 10:00:00 AM) (Arrival time: 11:03 AM)', '11/05/2026',
+    'Office Visit', 'Caryn McAllister PT, DPT', 'SOAP Note', 'CC: *', '11/04/2026',
+  ].join('\n');
+  const v = (date, time, therapist) => ({ date, time, therapist });
+  check('same appointment date + time = note there', nf.noteInTimeline(t, v('11/13/2026', '10:30 AM', 'Jessica Trujillo')));
+  check('same day, other time = no note for this visit', !nf.noteInTimeline(t, v('11/13/2026', '01:30 PM', 'Jessica Trujillo')));
+  check('a one-digit day in Appt time still matches', nf.noteInTimeline(t, v('11/05/2026', '10:00 AM', 'Someone Else')));
+  check('no Appt time: the day + the therapist named = note there', nf.noteInTimeline(t, v('11/04/2026', '09:00 AM', 'Caryn McAllister')));
+  check('no Appt time, a different therapist = not this visit\'s note', !nf.noteInTimeline(t, v('11/04/2026', '09:00 AM', 'Jessica Trujillo')));
+  check('a day with no encounter = no note', !nf.noteInTimeline(t, v('11/12/2026', '10:00 AM', 'Jessica Trujillo')));
+  check('"No encounters" page = no note', !nf.noteInTimeline('TYPE/SOURCE\nNo encounters', v('11/13/2026', '10:30 AM', 'Jessica Trujillo')));
+  const rows = require(path.join(__dirname, '..', 'src', 'main', 'chartReview')).parseEncounters(t);
+  check('encounter rows keep their therapist when the CC has an Appt time', rows.length === 3 && rows[0].chunk.includes('Jessica Trujillo') && rows[1].chunk.includes('Jessica Trujillo'));
+})();
+
 console.log(`\n${pass} passed, ${fails.length} failed`);
 if (fails.length) process.exit(1);

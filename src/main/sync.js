@@ -285,14 +285,23 @@ async function pfNavigateToDate(page, target, onStep) {
   return false;
 }
 
-/** Wait for a day's appointment rows to load and stop changing (an empty day is fine). */
+/** Wait for a day's appointment rows to load (up to 15 s): until there are as many
+ *  rows as the "35 Appointments" count above the schedule, or — with no count
+ *  shown — until rows appear and stop changing. "0 Appointments" returns at once.
+ *  (Stopping at the first steady count read a still-loading day as empty.) */
 async function waitForDayRows(page) {
   let last = -1, steady = 0;
-  for (let i = 0; i < 20 && steady < 2; i++) {
+  const end = Date.now() + 15000;
+  while (Date.now() < end) {
     await sleep(300);
-    const n = await page.$$eval(presets.PF.selectors.rowSelector, (r) => r.length).catch(() => 0);
+    const { n, expected } = await page.evaluate((sel) => {
+      const m = /(\d+)\s+Appointments?\b/i.exec(document.body ? document.body.innerText : '');
+      return { n: document.querySelectorAll(sel).length, expected: m ? Number(m[1]) : null };
+    }, presets.PF.selectors.rowSelector).catch(() => ({ n: 0, expected: null }));
     steady = n === last ? steady + 1 : 0;
     last = n;
+    if (expected != null && n >= expected && steady >= 1) return;
+    if (expected == null && n > 0 && steady >= 2) return;
   }
 }
 

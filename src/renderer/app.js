@@ -1344,7 +1344,7 @@ function renderNotes() {
   $('#nfMissingList').innerHTML = missingGroups.length ? missingGroups.map((g) => `
     <div class="cr-group">
       <div class="cr-group-head">${escapeHtml(g.therapist)} <span class="muted">· ${g.items.length} note${g.items.length === 1 ? '' : 's'}${nfEmailOf(g.therapist) ? ` · ${escapeHtml(nfEmailOf(g.therapist))}` : ' · <span class="nf-noemail">no email on file</span>'}</span></div>
-      ${g.items.map((n) => `<div class="nf-row"><span class="nf-when">${nfVisit(n)}</span><span class="nf-client">${escapeHtml(n.patientName)}</span>${nfDue(n)}</div>`).join('')}
+      ${g.items.map((n) => `<div class="nf-row"><span class="nf-when">${nfVisit(n)}</span><span class="nf-client">${escapeHtml(n.patientName)}${n.source === 'schedule' ? ' <span class="muted" title="The chart couldn\'t be opened, so this went by the schedule\'s Start Encounter / View in encounter link.">· by schedule</span>' : ''}</span>${nfDue(n)}</div>`).join('')}
     </div>`).join('')
     : `<div class="client-empty"><strong>${check ? 'No missing notes' : 'No check yet'}</strong><span>${check ? 'Every visit marked Seen in these days has its note.' : 'Pick the days and press Check notes.'}</span></div>`;
 
@@ -1354,7 +1354,7 @@ function renderNotes() {
   $('#nfAllList').innerHTML = allGroups.length ? allGroups.map((g) => `
     <div class="cr-group">
       <div class="cr-group-head">${escapeHtml(g.therapist)} <span class="muted">· ${g.items.length}</span></div>
-      ${g.items.map((n) => `<div class="nf-row"><span class="nf-when">${nfVisit(n)}</span><span class="nf-client">${escapeHtml(n.patientName)}</span>${n.note === 'missing' ? nfDue(n) : label[n.note]}</div>`).join('')}
+      ${g.items.map((n) => `<div class="nf-row"><span class="nf-when">${nfVisit(n)}</span><span class="nf-client">${escapeHtml(n.patientName)}${n.source === 'schedule' ? ' <span class="muted" title="The chart couldn\'t be opened, so this went by the schedule\'s Start Encounter / View in encounter link.">· by schedule</span>' : ''}</span>${n.note === 'missing' ? nfDue(n) : label[n.note]}</div>`).join('')}
     </div>`).join('') : '<div class="client-empty"><strong>No Seen visits</strong><span>Visits show here once a check finds them marked Seen.</span></div>';
 
   // Therapist emails

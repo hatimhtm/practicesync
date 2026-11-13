@@ -311,6 +311,7 @@ async function performNotesCheck({ dates, send = false, trigger = 'manual' }) {
     const s = store.load();
     const providers = (s.providers && s.providers.length) ? s.providers : DEMO_PROVIDERS;
     const list = notes.findNotes(visits, { providers, now: new Date() });
+    await checkNoteTimelines(context, page, list, step);
     const missing = list.filter((n) => n.note === 'missing');
     const unknown = list.filter((n) => n.note === 'unknown').length;
     step(`${list.length} visit${list.length === 1 ? '' : 's'} marked Seen · ${missing.length} without a note${unknown ? ` · ${unknown} couldn't be told` : ''}.`);
@@ -326,6 +327,45 @@ async function performNotesCheck({ dates, send = false, trigger = 'manual' }) {
     if (context) { try { await context.close(); } catch {} }
     sendToRenderer('notes-finished', {});
   }
+}
+
+/** Open each Seen client's Timeline → Encounters and look for the note of each
+ *  visit (appointment date + time). The schedule's "View in encounter" / "Start
+ *  Encounter" link only decides when the chart can't be read. Up to 3 tabs at once. */
+async function checkNoteTimelines(context, page, list, step) {
+  const byClient = new Map();
+  for (const n of list) {
+    const k = normalizeName(n.patientName);
+    if (!byClient.has(k)) byClient.set(k, []);
+    byClient.get(k).push(n);
+  }
+  const queue = [...byClient.values()];
+  const total = queue.length;
+  if (!total) return;
+  step(`Opening ${total} client${total === 1 ? '' : 's'}' Encounters to look for each note…`);
+  const tabs = [page];
+  for (let i = 1; i < Math.min(3, total); i++) {
+    const t = await context.newPage().catch(() => null);
+    if (!t) continue;
+    await t.goto(presets.PF.scheduleUrl, { waitUntil: 'domcontentloaded' }).catch(() => {});
+    await t.waitForSelector(presets.PF.nav.dateHeading, { timeout: 20000 }).catch(() => {});
+    tabs.push(t);
+  }
+  let done = 0;
+  await Promise.all(tabs.map(async (tab) => {
+    for (let group = queue.shift(); group; group = queue.shift()) {
+      const name = group[0].patientName;
+      const text = await chartReview.readEncounters(tab, name, group.find((n) => n.href)?.href || '', step).catch(() => null);
+      for (const n of group) {
+        if (text == null) { n.source = 'schedule'; continue; }
+        n.note = notes.noteInTimeline(text, n) ? 'done' : 'missing';
+        n.source = 'timeline';
+      }
+      done += 1;
+      const miss = group.filter((n) => n.note === 'missing');
+      step(`(${done}/${total}) ${name} — ${text == null ? `couldn't open the chart; went by the schedule${miss.length ? ` (${miss.length} without a note)` : ''}` : miss.length ? `no note for ${miss.map((n) => n.time || n.date).join(', ')}` : 'note there ✓'}`);
+    }
+  }));
 }
 
 /** One email per therapist with missing notes (all to the test address while

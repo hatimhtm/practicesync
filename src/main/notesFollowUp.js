@@ -10,6 +10,7 @@
  */
 
 const { matchProvider, isNonPatient } = require('./model');
+const { parseEncounters, therapistsIn } = require('./chartReview');
 
 const DUE_HOURS = 24;
 const DEFAULT_TEST_TO = 'nabil@highqualityhometherapy.com';
@@ -65,13 +66,34 @@ function findNotes(visits, { providers = [], now = new Date() } = {}) {
     out.push({
       date: v.date, time: v.time || '', patientName: v.patientName,
       therapist: provider ? provider.name : (v.doctorName || '').replace(/\.{2,}|…$/g, '').trim(),
-      pfProvider: v.doctorName || '', note,
+      pfProvider: v.doctorName || '', note, href: v.href || '',
       apptAt: apptAt ? apptAt.toISOString() : null,
       dueAt: dueAt ? dueAt.toISOString() : null,
       overdue: !!(dueAt && now >= dueAt),
     });
   }
   return out;
+}
+
+/**
+ * Is this visit's note on the client's Timeline → Encounters page? Each encounter
+ * row reads like "Office Visit · Jessica Trujillo · SOAP Note · CC: … (Appt time:
+ * 11/13/2026 10:30:00 AM) … 11/13/2026". A row with this appointment's date and
+ * time is the note; a row on that day with no appointment time counts when it
+ * names the visit's therapist.
+ */
+function noteInTimeline(text, { date, time, therapist } = {}) {
+  const at = apptDateTime(date, time);
+  if (!at) return false;
+  const sameDay = (d) => d && d.getFullYear() === at.getFullYear() && d.getMonth() === at.getMonth() && d.getDate() === at.getDate();
+  const APPT = /appt\s*time:\s*(\d{1,2}\/\d{1,2}\/\d{4})\s+(\d{1,2}:\d{2})(?::\d{2})?\s*([AP]M)/ig;
+  const hasTime = !!/(\d{1,2}):(\d{2})\s*[AP]\.?M/i.exec(String(time || ''));
+  for (const { date: rowDay, chunk } of parseEncounters(text)) {
+    const appts = [...chunk.matchAll(APPT)].map((m) => apptDateTime(m[1].replace(/^(\d)\//, '0$1/').replace(/\/(\d)\//, '/0$1/'), `${m[2]} ${m[3]}`));
+    if (appts.some((a) => a && (hasTime ? a.getTime() === at.getTime() : sameDay(a)))) return true;
+    if (!appts.length && sameDay(rowDay) && therapist && therapistsIn(chunk, [{ name: therapist }]).length) return true;
+  }
+  return false;
 }
 
 /** The therapist's email, from the list on the Notes page (names compared loosely). */
@@ -202,5 +224,5 @@ function lookbackDates(now, lookback = 7) {
 
 module.exports = {
   DUE_HOURS, DEFAULT_TEST_TO, isSeen, encounterState, apptDateTime, shortName, findNotes,
-  emailFor, planReminders, reminderEmail, parseHHMM, dailyDue, dayKey, lookbackDates,
+  noteInTimeline, emailFor, planReminders, reminderEmail, parseHHMM, dailyDue, dayKey, lookbackDates,
 };

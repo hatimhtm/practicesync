@@ -193,9 +193,10 @@ function parseEncounters(text) {
   let m;
   while ((m = re.exec(t))) {
     const chunk = t.slice(last, m.index);
-    last = re.lastIndex;
-    // Dates inside the CC text ("Appt time: 4/17/2025 …") are not row ends.
+    // Dates inside the CC text ("Appt time: 4/17/2025 …") are not row ends — and the
+    // row goes on, so its start (the therapist) stays in the chunk.
     if (/appt time:\s*$|arrival time:\s*$/i.test(chunk.slice(-20))) continue;
+    last = re.lastIndex;
     const d = parseLooseDate(m[1]);
     if (d) out.push({ date: d.date, chunk });
   }
@@ -603,6 +604,21 @@ async function findChartId(page, name, scheduleHref, onStep) {
   return '';
 }
 
+/** One client's Timeline → Encounters text (the notes follow-up), or null if the
+ *  chart can't be found or the page doesn't load. */
+async function readEncounters(page, name, scheduleHref, onStep = () => {}) {
+  const id = await findChartId(page, name, scheduleHref, onStep);
+  if (!id) return null;
+  const marks = ['TYPE/SOURCE', /no encounters/i];
+  await page.goto(PF_BASE + id + '/timeline/encounter', { waitUntil: 'domcontentloaded' }).catch(() => {});
+  let t = await settledText(page, marks);
+  if (t == null) {
+    await page.reload({ waitUntil: 'domcontentloaded' }).catch(() => {});
+    t = await settledText(page, marks, 20000);
+  }
+  return t;
+}
+
 const ALL = (...words) => new RegExp(words.map((w) => `(?=[\\s\\S]*${w})`).join(''), 'i');
 /** Read every page of one chart. A page that doesn't load gets one reload; one that
  *  still doesn't stays null (reported as unread, and retried at the end of the run). */
@@ -759,5 +775,5 @@ async function runChartReview({ pages: tabs, page, readSchedule, providers = [],
 
 module.exports = {
   ITEMS, parseLooseDate, parseDisciplines, parseDiagnoses, parsePinnedNote, parseProfile,
-  pageText, readChart, parseEncounters, therapistsIn, toggleState, reviewChart, mergeFollowUps, runChartReview, mondayOf, patientKey, weeksInRange, toDay,
+  pageText, readChart, readEncounters, parseEncounters, therapistsIn, toggleState, reviewChart, mergeFollowUps, runChartReview, mondayOf, patientKey, weeksInRange, toDay,
 };
