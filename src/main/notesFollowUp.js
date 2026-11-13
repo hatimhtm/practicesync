@@ -122,33 +122,103 @@ function emptySections(sections) {
   return SOAP.filter((n) => writtenText(sections[n]).length < 10);
 }
 
+/* -------- the clicks from the recorded walkthrough (read only, real clicks) -------- */
+
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+/** Click the element a page function marked with data-hope-click — a real mouse
+ *  click, like a person (Practice Fusion's links are app buttons, not addresses). */
+async function clickMarked(page) {
+  const el = await page.$('[data-hope-click]');
+  if (!el) return false;
+  await el.scrollIntoViewIfNeeded().catch(() => {});
+  await el.click({ timeout: 5000 }).catch(() => el.evaluate((e) => e.click()).catch(() => {}));
+  await el.evaluate((e) => e.removeAttribute('data-hope-click')).catch(() => {});
+  return true;
+}
+
+/** Step 1, on the schedule: click the client's name (on this visit's row when it
+ *  can be told apart), and wait for the chart to open. */
+async function openClientFromSchedule(page, visit, sel) {
+  const marked = await page.evaluate(({ sel, name, time }) => {
+    document.querySelectorAll('[data-hope-click]').forEach((e) => e.removeAttribute('data-hope-click'));
+    const norm = (x) => String(x || '').toLowerCase().replace(/[^a-z]/g, '');
+    const clock = (x) => String(x || '').replace(/\s+/g, '').replace(/^0/, '').toUpperCase();
+    const rows = [...document.querySelectorAll(sel.rowSelector)];
+    const named = rows.map((r) => r.querySelector(sel.patientSelector)).filter((a) => a && norm(a.textContent) === norm(name));
+    const timed = named.find((a) => { const t = a.closest(sel.rowSelector).querySelector(sel.timeSelector); return t && clock(t.textContent) === clock(time); });
+    const link = timed || named[0];
+    if (!link) return false;
+    link.setAttribute('data-hope-click', '1');
+    return true;
+  }, { sel, name: visit.patientName, time: visit.time }).catch(() => false);
+  if (!marked || !(await clickMarked(page))) return false;
+  return waitForTab(page, 'Timeline', 20000);
+}
+
+/** Wait for a visible chart tab ("Timeline", "Summary"…) to show. */
+function waitForTab(page, label, timeout) {
+  return page.waitForFunction((label) => [...document.querySelectorAll('body *')].some((e) => e.offsetParent
+    && [...e.childNodes].some((t) => t.nodeType === 3 && t.textContent.trim() === label)), label, { timeout })
+    .then(() => true).catch(() => false);
+}
+
+/** Step 2: click the chart's Timeline tab; returns the encounter list's text. */
+async function openTimeline(page) {
+  const marked = await page.evaluate(() => {
+    document.querySelectorAll('[data-hope-click]').forEach((e) => e.removeAttribute('data-hope-click'));
+    const tab = [...document.querySelectorAll('body *')].find((e) => e.offsetParent
+      && [...e.childNodes].some((t) => t.nodeType === 3 && t.textContent.trim() === 'Timeline'));
+    if (!tab) return false;
+    (tab.closest('a, button, [role="tab"], li') || tab).setAttribute('data-hope-click', '1');
+    return true;
+  }).catch(() => false);
+  if (!marked || !(await clickMarked(page))) return null;
+  return settledText(page, ['TYPE/SOURCE', /no encounters/i], 15000);
+}
+
 /**
- * On the client's Timeline → Encounters page, open this visit's encounter and read
- * its Note boxes. Read only: nothing is typed and Save/Sign are never pressed.
+ * Steps 3–4: on the Timeline, click this visit's "Office Visit" (the row with its
+ * appointment date and time), scroll down to the Note and read its boxes. Read
+ * only: nothing is typed and Save/Sign are never pressed.
  * Returns { sections: { Subjective, Objective, Assessment, Plan }, status } or null.
  */
 async function readVisitNote(page, visit) {
   const at = apptDateTime(visit.date, visit.time);
   if (!at) return null;
   const surname = String(visit.therapist || '').trim().split(/\s+/).pop().toLowerCase();
-  // If Practice Fusion opens the note in a new tab, read it there and close it.
-  const popup = page.waitForEvent('popup', { timeout: 1500 }).catch(() => null);
-  const opened = await page.evaluate(({ y, mo, d, h, mi, surname }) => {
+  const marked = await page.evaluate(({ y, mo, d, h, mi, surname }) => {
+    document.querySelectorAll('[data-hope-click]').forEach((e) => e.removeAttribute('data-hope-click'));
     const h12 = ((h + 11) % 12) + 1;
     const ap = h < 12 ? 'AM' : 'PM';
     const appt = new RegExp(`appt\\s*time:\\s*0?${mo}/0?${d}/${y}\\s+0?${h12}:${String(mi).padStart(2, '0')}(:\\d{2})?\\s*${ap}`, 'i');
     const day = new RegExp(`\\b0?${mo}/0?${d}/${y}\\b`);
-    const rows = [...document.querySelectorAll('tr, [role="row"], li')];
-    const smallest = (list) => list.sort((a, b) => (a.innerText || '').length - (b.innerText || '').length)[0];
-    let row = smallest(rows.filter((r) => appt.test(r.innerText || '')));
-    // An encounter without an appointment time: that day, that therapist.
-    if (!row && surname) row = smallest(rows.filter((r) => { const t = r.innerText || ''; return day.test(t) && !/appt\s*time/i.test(t) && t.toLowerCase().includes(surname); }));
-    if (!row) return false;
-    const link = [...row.querySelectorAll('a, [role="link"]')].find((a) => /visit|encounter|note/i.test(a.innerText || '')) || row.querySelector('a') || row;
-    link.click();
-    return true;
+    const own = (e) => [...e.childNodes].filter((t) => t.nodeType === 3).map((t) => t.textContent).join('').trim();
+    const visitLink = (box) => [...box.querySelectorAll('*')].find((x) => /^office visit$/i.test(own(x)))
+      || [...box.querySelectorAll('a, [role="link"]')].find((x) => /visit|encounter|note/i.test(x.textContent || ''));
+    // The deepest pieces of text that carry this appointment (or, with no
+    // appointment time, the day and the therapist), then up to their row: the
+    // first box around them that has an "Office Visit" to click.
+    const deepest = (test) => [...document.querySelectorAll('body *')]
+      .filter((e) => test(e.textContent || '') && ![...e.children].some((c) => test(c.textContent || '')));
+    const starts = deepest((t) => appt.test(t));
+    if (!starts.length && surname) starts.push(...deepest((t) => day.test(t) && !/appt\s*time/i.test(t)));
+    for (const start of starts) {
+      for (let box = start; box && box !== document.body; box = box.parentElement) {
+        const link = visitLink(box);
+        if (!link) continue;
+        const rowText = (box.textContent || '').toLowerCase();
+        if (!appt.test(box.textContent || '') && !(rowText.includes(surname) && day.test(box.textContent || ''))) break;
+        (link.closest('a, button, [role="link"]') || link).setAttribute('data-hope-click', '1');
+        return true;
+      }
+    }
+    return false;
   }, { y: at.getFullYear(), mo: at.getMonth() + 1, d: at.getDate(), h: at.getHours(), mi: at.getMinutes(), surname }).catch(() => false);
-  if (!opened) return null;
+  if (!marked) return null;
+  // If Practice Fusion opens the note in a new tab, read it there and close it.
+  const popup = page.waitForEvent('popup', { timeout: 1500 }).catch(() => null);
+  if (!(await clickMarked(page))) return null;
   const extra = await popup;
   if (extra) {
     try { await extra.waitForLoadState('domcontentloaded').catch(() => {}); return await readNoteOn(extra); } finally { await extra.close().catch(() => {}); }
@@ -156,10 +226,38 @@ async function readVisitNote(page, visit) {
   return readNoteOn(page);
 }
 
+/** Scroll down the encounter until the Note's four boxes are on the page (they're
+ *  far below the chief complaint, vitals and medications), then bring each one
+ *  into view so its text loads. */
+async function scrollToNote(page, timeoutMs = 25000) {
+  const end = Date.now() + timeoutMs;
+  while (Date.now() < end) {
+    const found = await page.evaluate((names) => {
+      const own = (e) => [...e.childNodes].filter((t) => t.nodeType === 3).map((t) => t.textContent).join('').trim();
+      const got = new Set([...document.querySelectorAll('body *')]
+        .filter((e) => names.includes(own(e)) && !e.closest('[contenteditable="true"]')).map(own));
+      if (got.size < names.length) {
+        const boxes = [document.scrollingElement, ...[...document.querySelectorAll('body *')].filter((e) => e.scrollHeight > e.clientHeight + 40 && /(auto|scroll)/.test(getComputedStyle(e).overflowY))];
+        for (const b of boxes) if (b) b.scrollTop += Math.max(500, b.clientHeight * 0.8);
+      }
+      return got.size;
+    }, SOAP).catch(() => 0);
+    if (found === SOAP.length) break;
+    await sleep(450);
+  }
+  for (const n of SOAP) {
+    await page.evaluate((n) => {
+      const own = (e) => [...e.childNodes].filter((t) => t.nodeType === 3).map((t) => t.textContent).join('').trim();
+      const h = [...document.querySelectorAll('body *')].find((e) => own(e) === n && !e.closest('[contenteditable="true"]'));
+      if (h) h.scrollIntoView({ block: 'start' });
+    }, n).catch(() => {});
+    await sleep(300);
+  }
+}
+
 /** Read the Note boxes of the encounter open on `page`. */
 async function readNoteOn(page) {
-  const ALL4 = new RegExp(SOAP.map((w) => `(?=[\\s\\S]*\\b${w}\\b)`).join(''), 'i');
-  if ((await settledText(page, [ALL4], 20000)) == null) return null;
+  await scrollToNote(page);
   const read = () => page.evaluate((names) => {
     const EDITOR = '[contenteditable="true"], iframe, textarea';
     const ownText = (e) => [...e.childNodes].filter((t) => t.nodeType === 3).map((t) => t.textContent).join('').trim();
@@ -337,5 +435,5 @@ function lookbackDates(now, lookback = 7) {
 
 module.exports = {
   DUE_HOURS, DEFAULT_TEST_TO, isSeen, encounterState, apptDateTime, shortName, findNotes,
-  noteInTimeline, SOAP, writtenText, emptySections, readVisitNote, emailFor, planReminders, reminderEmail, parseHHMM, dailyDue, dayKey, lookbackDates,
+  noteInTimeline, SOAP, writtenText, emptySections, openClientFromSchedule, openTimeline, readVisitNote, emailFor, planReminders, reminderEmail, parseHHMM, dailyDue, dayKey, lookbackDates,
 };

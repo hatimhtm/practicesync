@@ -20,10 +20,10 @@ const { parseRoster, appleIntelligenceAvailable, detectEngines, appleHelperPath 
 const { DEMO_MAIN_DOCTORS, DEMO_PROVIDERS, UNIT_CODES, OLD_SPEECH_CODES, parseCodes, formatCodes, makeProvider, makeMainDoctor, ROSTER_VERSION, mergeRoster, normalizeName, seedPrivateServices, clientFor } = require('./model');
 const liveEngine = require('./liveEngine');
 const { teach, runSiteDemo } = liveEngine;
-const { runFullSync, readPfSchedule, expandDates, PROBLEM, REMINDER } = require('./sync');
+const { runFullSync, readPfSchedule, expandDates, pfNavigateToDate, waitForDayRows, PROBLEM, REMINDER } = require('./sync');
 const chartReview = require('./chartReview');
 const presets = require('./presets');
-const { loginSimplePractice, loginPracticeFusion } = require('./login');
+const { loginSimplePractice, loginPracticeFusion, dismissPopups } = require('./login');
 const { startSheetServer } = require('./demoSheet');
 const recorder = require('./recorder');
 const { Scheduler } = require('./scheduler');
@@ -355,19 +355,37 @@ async function extraPfTabs(context, page, count, step) {
   return tabs;
 }
 
-/** For each Seen visit: open the client's Timeline → Encounters, find the visit's
- *  encounter (appointment date + time) and read its Note — Subjective, Objective,
- *  Assessment and Plan must all be filled in. The schedule's "View in encounter" /
- *  "Start Encounter" link only decides when the chart can't be opened. Read only.
- *  Up to 3 tabs at once. */
-async function checkNoteTimelines(context, page, list, step) {
-  const byClient = new Map();
-  for (const n of list) {
-    const k = normalizeName(n.patientName);
-    if (!byClient.has(k)) byClient.set(k, []);
-    byClient.get(k).push(n);
+/** Back to the Practice Fusion schedule, on `date`, with its rows loaded. */
+async function toScheduleDay(tab, date) {
+  // Already there (the first client of a day) — nothing to do but wait for rows.
+  const onSchedule = /\/schedule\//.test(tab.url()) && await tab.$(presets.PF.nav.dateHeading).catch(() => null);
+  if (!onSchedule) {
+    // The Schedule button on the left, like a person (no reload); else the address.
+    await tab.click(presets.PF.nav.schedule, { timeout: 4000 }).catch(() => {});
+    const there = await tab.waitForSelector(presets.PF.nav.dateHeading, { timeout: 8000 }).then(() => true).catch(() => false);
+    if (!there || !/agenda/.test(tab.url())) await tab.goto(presets.PF.scheduleUrl, { waitUntil: 'domcontentloaded' }).catch(() => {});
   }
-  const queue = [...byClient.values()];
+  await dismissPopups(tab).catch(() => {});
+  if (!(await pfNavigateToDate(tab, date))) return false;
+  await waitForDayRows(tab);
+  return true;
+}
+
+/** For each Seen visit, the steps of the recorded walkthrough: on the schedule,
+ *  click the client's name → Timeline → that visit's Office Visit → scroll down to
+ *  the Note, and check Subjective, Objective, Assessment and Plan are all filled in.
+ *  If the name can't be clicked, the chart is opened by its address instead; if
+ *  the chart can't be opened at all, the schedule's "View in encounter" / "Start
+ *  Encounter" link decides. Read only. Up to 3 signed-in tabs at once. */
+async function checkNoteTimelines(context, page, list, step) {
+  // One job per client per day: their visits that day are on one Timeline.
+  const jobs = new Map();
+  for (const n of list) {
+    const k = `${n.date}|${normalizeName(n.patientName)}`;
+    if (!jobs.has(k)) jobs.set(k, []);
+    jobs.get(k).push(n);
+  }
+  const queue = [...jobs.values()].sort((a, b) => String(a[0].apptAt).localeCompare(String(b[0].apptAt)));
   const total = queue.length;
   if (!total) return;
   step(`Opening ${total} client${total === 1 ? '' : 's'}' notes…`);
@@ -383,13 +401,19 @@ async function checkNoteTimelines(context, page, list, step) {
       if (tab !== page && PF_SIGNED_OUT.test(tab.url())) { queue.unshift(group); await tab.close().catch(() => {}); return; }
       const name = group[0].patientName;
       const href = group.find((n) => n.href)?.href || '';
+      // 1) Schedule → click the client's name → 2) Timeline.
       let text = null;
+      if (await toScheduleDay(tab, group[0].date) && await notes.openClientFromSchedule(tab, group[0], presets.PF.selectors)) {
+        text = await notes.openTimeline(tab);
+      }
+      if (text == null) text = await chartReview.readEncounters(tab, name, href, step).catch(() => null);
       for (const [i, n] of group.entries()) {
-        // Back to the Encounters list for each visit (opening a note leaves it).
-        if (i === 0 || text != null) text = await chartReview.readEncounters(tab, name, href, step).catch(() => null);
+        // The client's next visit: back to their Timeline.
+        if (i > 0 && text != null) text = (await notes.openTimeline(tab)) || (await chartReview.readEncounters(tab, name, href, step).catch(() => null));
         if (text == null) { n.source = 'schedule'; continue; }
         n.source = 'chart';
         if (!notes.noteInTimeline(text, n)) { n.note = 'missing'; continue; }
+        // 3) Office Visit → 4) scroll down to the Note and read it.
         const r = await notes.readVisitNote(tab, n).catch(() => null);
         const gaps = r ? notes.emptySections(r.sections) : null;
         n.signed = r ? r.status : '';
@@ -399,7 +423,7 @@ async function checkNoteTimelines(context, page, list, step) {
       }
       done += 1;
       sendToRenderer('notes-progress', { done, total, patientName: name, visits: group.map((n) => ({ time: n.time, date: n.date, therapist: n.therapist, note: n.note, emptySections: n.emptySections || [], source: n.source })) });
-      step(`(${done}/${total}) ${name} — ${group[0].source === 'schedule' ? 'couldn\'t open the chart; went by the schedule' : group.map(said).join(' · ')}`);
+      step(`(${done}/${total}) ${name} — ${group.every((n) => n.source === 'schedule') ? 'couldn\'t open the chart; went by the schedule' : group.map(said).join(' · ')}`);
     }
   }));
 }

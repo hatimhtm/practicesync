@@ -576,4 +576,4 @@ function reportProblems(result, onStep) {
   }
 }
 
-module.exports = { runFullSync, readPfSchedule, expandDates, pfNavigateToDate, PROBLEM, REMINDER, takeExistingFrom, unmatchedReason, looseSameClient, ledgerKey, findLooseExisting, spreadSessions, strayEntry, sortCancellations, newClientReminders, cancelledStillBooked };
+module.exports = { runFullSync, readPfSchedule, expandDates, pfNavigateToDate, waitForDayRows, PROBLEM, REMINDER, takeExistingFrom, unmatchedReason, looseSameClient, ledgerKey, findLooseExisting, spreadSessions, strayEntry, sortCancellations, newClientReminders, cancelledStillBooked };
