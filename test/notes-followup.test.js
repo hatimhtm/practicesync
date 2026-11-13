@@ -75,7 +75,8 @@ const providers = [
   console.log('# the email');
   const r = test.find((x) => x.therapist === 'Nardeen Abdelsayed');
   const mail = nf.reminderEmail({ therapist: r.therapist, items: r.items, intendedTo: r.intendedTo, test: true });
-  check('subject says test + overdue + count', /^\[TEST\] Overdue: 1 visit note needed/.test(mail.subject));
+  check('subject says test + overdue + count', /^\[TEST\] Overdue: 1 visit note to complete/.test(mail.subject));
+  check('says no note yet', mail.text.includes('No note yet'));
   check('greets by first name', mail.text.includes('Hi Nardeen,') && mail.html.includes('Hi Nardeen,'));
   check('client shown as first name + last initial only', mail.text.includes('Casey H.') && !mail.text.includes('Hart') && !mail.html.includes('Hart'));
   check('says the 24-hour rule and why', /within 24 hours/.test(mail.text) && /insurance/i.test(mail.text));
@@ -141,6 +142,37 @@ const providers = [
   check('"No encounters" page = no note', !nf.noteInTimeline('TYPE/SOURCE\nNo encounters', v('11/13/2026', '10:30 AM', 'Jessica Trujillo')));
   const rows = require(path.join(__dirname, '..', 'src', 'main', 'chartReview')).parseEncounters(t);
   check('encounter rows keep their therapist when the CC has an Appt time', rows.length === 3 && rows[0].chunk.includes('Jessica Trujillo') && rows[1].chunk.includes('Jessica Trujillo'));
+})();
+
+(function soap() {
+  console.log('# all four note boxes must be filled in');
+  const filled = {
+    Subjective: 'Chief Complaint: "The most sore I\'ve ever been," back, core and legs after the previous workout.',
+    Objective: 'Start Time: 8:30am Stop Time: 9:30 am Total Time: 60 mins.\n97112 (Neuromuscular reeducation) x2 for 15 min:',
+    Assessment: 'Diagnoses\n(R42) Dizziness and giddiness\n(R26.2) Difficulty in walking, not elsewhere classified\nAssessment & Plan\nPost-exercise soreness improving; tolerated progressive strengthening.',
+    Plan: 'Skilled PT Interventions. Neuromuscular re-education. Recommend continuation 2x/week.',
+  };
+  check('a complete note has no empty box', nf.emptySections(filled).length === 0);
+  check('Assessment with only the Diagnoses list is empty', nf.emptySections({ ...filled, Assessment: 'Diagnoses\n(R42) Dizziness and giddiness\n(R26.2) Difficulty in walking\n---' }).join() === 'Assessment');
+  check('labels with nothing after them are empty', nf.emptySections({ ...filled, Objective: 'Start Time:\nStop Time:\nTotal Time:' }).join() === 'Objective');
+  check('a blank Plan is empty', nf.emptySections({ ...filled, Plan: '  \n ' }).join() === 'Plan');
+  check('every empty box is named', nf.emptySections({ Subjective: '', Objective: '', Assessment: filled.Assessment, Plan: '' }).join() === 'Subjective,Objective,Plan');
+  check('a page where the boxes can\'t be found = can\'t tell (null), never "empty"', nf.emptySections({ Subjective: null, Objective: null, Assessment: 'x', Plan: null }) === null);
+  check('the same word inside a note isn\'t mistaken for a label', nf.writtenText('Subjective\nPt reports feeling better today.').includes('feeling better'));
+
+  const now = new Date(2026, 10, 13, 17, 30);
+  const list = [
+    { patientName: 'Avery Stone', therapist: 'Jessica Trujillo', note: 'incomplete', emptySections: ['Objective', 'Plan'], apptAt: new Date(2026, 10, 13, 10, 30).toISOString(), dueAt: new Date(2026, 10, 14, 10, 30).toISOString(), overdue: false },
+    { patientName: 'Blake Morgan', therapist: 'Jessica Trujillo', note: 'done', apptAt: new Date(2026, 10, 13, 8, 0).toISOString() },
+    { patientName: 'Casey Hart', therapist: 'Jessica Trujillo', note: 'unknown', apptAt: new Date(2026, 10, 13, 9, 0).toISOString() },
+  ];
+  const plan = nf.planReminders(list, { testMode: true });
+  check('a note with an empty box gets a reminder', plan.length === 1 && plan[0].items.length === 1 && plan[0].items[0].patientName === 'Avery Stone');
+  check('a complete note or one that couldn\'t be read never does', !plan[0].items.some((i) => i.note !== 'incomplete'));
+  const mail = nf.reminderEmail({ therapist: 'Jessica Trujillo', items: plan[0].items });
+  check('the email names the empty boxes', mail.text.includes('Not filled in: Objective, Plan') && mail.html.includes('Not filled in: Objective, Plan'));
+  check('the email says all four must be filled in', /Subjective, Objective, Assessment and Plan must all be filled in/.test(mail.text));
+  void now;
 })();
 
 console.log(`\n${pass} passed, ${fails.length} failed`);

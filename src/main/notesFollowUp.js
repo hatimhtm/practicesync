@@ -10,7 +10,7 @@
  */
 
 const { matchProvider, isNonPatient } = require('./model');
-const { parseEncounters, therapistsIn } = require('./chartReview');
+const { parseEncounters, therapistsIn, settledText } = require('./chartReview');
 
 const DUE_HOURS = 24;
 const DEFAULT_TEST_TO = 'nabil@highqualityhometherapy.com';
@@ -96,6 +96,93 @@ function noteInTimeline(text, { date, time, therapist } = {}) {
   return false;
 }
 
+/* ------------------------------ the note itself ------------------------------ */
+
+/** The four boxes of the encounter's Note — every one must be filled in. */
+const SOAP = ['Subjective', 'Objective', 'Assessment', 'Plan'];
+
+/** What the therapist actually wrote in one box: without the Diagnoses list Practice
+ *  Fusion inserts in Assessment by itself, dividers, and template labels with
+ *  nothing after them ("Chief Complaint:"). */
+function writtenText(text) {
+  return String(text || '').split(/\r?\n/).map((l) => l.replace(/ /g, ' ').trim())
+    .filter((l) => l
+      && !/^[-–—_*•.\s]+$/.test(l)
+      && !/^(diagnoses|subjective|objective|assessment|plan|assessment\s*&\s*plan)\s*:?$/i.test(l)
+      && !/^[•\-*]?\s*\(?[A-Z]\d{2}(\.[0-9A-Z]{1,4})?\)?\s/.test(l)
+      && !/^[^:]{1,40}:\s*$/.test(l))
+    .join(' ');
+}
+
+/** The boxes left empty, e.g. ['Objective', 'Plan']; [] = all filled. null when the
+ *  note couldn't be read (fewer than two of the boxes found on the page). */
+function emptySections(sections) {
+  const found = SOAP.filter((n) => sections && typeof sections[n] === 'string');
+  if (found.length < 2) return null;
+  return SOAP.filter((n) => writtenText(sections[n]).length < 10);
+}
+
+/**
+ * On the client's Timeline → Encounters page, open this visit's encounter and read
+ * its Note boxes. Read only: nothing is typed and Save/Sign are never pressed.
+ * Returns { sections: { Subjective, Objective, Assessment, Plan }, status } or null.
+ */
+async function readVisitNote(page, visit) {
+  const at = apptDateTime(visit.date, visit.time);
+  if (!at) return null;
+  const surname = String(visit.therapist || '').trim().split(/\s+/).pop().toLowerCase();
+  const opened = await page.evaluate(({ y, mo, d, h, mi, surname }) => {
+    const h12 = ((h + 11) % 12) + 1;
+    const ap = h < 12 ? 'AM' : 'PM';
+    const appt = new RegExp(`appt\\s*time:\\s*0?${mo}/0?${d}/${y}\\s+0?${h12}:${String(mi).padStart(2, '0')}(:\\d{2})?\\s*${ap}`, 'i');
+    const day = new RegExp(`\\b0?${mo}/0?${d}/${y}\\b`);
+    const rows = [...document.querySelectorAll('tr, [role="row"], li')];
+    const smallest = (list) => list.sort((a, b) => (a.innerText || '').length - (b.innerText || '').length)[0];
+    let row = smallest(rows.filter((r) => appt.test(r.innerText || '')));
+    // An encounter without an appointment time: that day, that therapist.
+    if (!row && surname) row = smallest(rows.filter((r) => { const t = r.innerText || ''; return day.test(t) && !/appt\s*time/i.test(t) && t.toLowerCase().includes(surname); }));
+    if (!row) return false;
+    const link = [...row.querySelectorAll('a, [role="link"]')].find((a) => /visit|encounter|note/i.test(a.innerText || '')) || row.querySelector('a') || row;
+    link.click();
+    return true;
+  }, { y: at.getFullYear(), mo: at.getMonth() + 1, d: at.getDate(), h: at.getHours(), mi: at.getMinutes(), surname }).catch(() => false);
+  if (!opened) return null;
+  const ALL4 = new RegExp(SOAP.map((w) => `(?=[\\s\\S]*\\b${w}\\b)`).join(''), 'i');
+  if ((await settledText(page, [ALL4], 20000)) == null) return null;
+  const read = () => page.evaluate((names) => {
+    const EDITOR = '[contenteditable="true"], iframe, textarea';
+    const ownText = (e) => [...e.childNodes].filter((t) => t.nodeType === 3).map((t) => t.textContent).join('').trim();
+    const textOf = (el) => {
+      if (el.tagName === 'IFRAME') { try { return el.contentDocument.body.innerText || ''; } catch { return ''; } }
+      return el.tagName === 'TEXTAREA' ? el.value : (el.innerText || '');
+    };
+    const all = [...document.querySelectorAll('body *')];
+    const out = {};
+    for (const n of names) {
+      out[n] = null;
+      // The box's heading — never the same word written inside a note.
+      for (const head of all.filter((e) => ownText(e) === n && !e.closest(EDITOR))) {
+        let box = head.parentElement;
+        while (box && box !== document.body && !box.querySelector(EDITOR)) box = box.parentElement;
+        if (!box || box === document.body) continue;
+        const ed = [...box.querySelectorAll(EDITOR)].find((e) => head.compareDocumentPosition(e) & Node.DOCUMENT_POSITION_FOLLOWING);
+        if (ed) { out[n] = textOf(ed); break; }
+      }
+    }
+    const st = /\bSTATUS\s*\n?\s*(Unsigned|Signed)\b/i.exec(document.body.innerText || '');
+    return { sections: out, status: st ? st[1] : '' };
+  }, SOAP).catch(() => null);
+  // The boxes fill in after the page appears: read until two reads agree.
+  let last = null;
+  for (let i = 0; i < 8; i++) {
+    await new Promise((r) => setTimeout(r, 700));
+    const cur = await read();
+    if (cur && last && JSON.stringify(cur) === JSON.stringify(last)) return cur;
+    last = cur;
+  }
+  return last;
+}
+
 /** The therapist's email, from the list on the Notes page (names compared loosely). */
 function emailFor(therapist, emails = {}) {
   const key = (s) => String(s || '').toLowerCase().replace(/[^a-z]/g, '');
@@ -112,7 +199,7 @@ function emailFor(therapist, emails = {}) {
 function planReminders(notes, { emails = {}, testMode = true, testTo = DEFAULT_TEST_TO } = {}) {
   const byTherapist = new Map();
   for (const n of notes) {
-    if (n.note !== 'missing') continue;
+    if (n.note !== 'missing' && n.note !== 'incomplete') continue;
     const list = byTherapist.get(n.therapist) || [];
     list.push(n);
     byTherapist.set(n.therapist, list);
@@ -135,7 +222,8 @@ function reminderEmail({ therapist, items, intendedTo = '', test = false }) {
   const first = String(therapist || '').split(/\s+/)[0] || 'there';
   const overdue = items.filter((i) => i.overdue).length;
   const n = items.length;
-  const subject = `${test ? '[TEST] ' : ''}${overdue ? 'Overdue: ' : ''}${n} visit note${n === 1 ? '' : 's'} needed in Practice Fusion`;
+  const subject = `${test ? '[TEST] ' : ''}${overdue ? 'Overdue: ' : ''}${n} visit note${n === 1 ? '' : 's'} to complete in Practice Fusion`;
+  const need = (i) => (i.note === 'incomplete' && i.emptySections && i.emptySections.length ? `Not filled in: ${i.emptySections.join(', ')}` : 'No note yet');
   const when = (i) => (i.dueAt ? (i.overdue ? `Overdue since ${fmtDay(i.dueAt)}, ${fmtClock(i.dueAt)}` : `Due by ${fmtDay(i.dueAt)}, ${fmtClock(i.dueAt)}`) : 'Due within 24 hours of the visit');
   const visitDay = (i) => (i.apptAt ? `${fmtDay(i.apptAt)}, ${fmtClock(i.apptAt)}` : i.date);
   const testLine = test ? `TEST — this reminder is for ${therapist} (${intendedTo || 'no email on file yet'}).` : '';
@@ -144,9 +232,9 @@ function reminderEmail({ therapist, items, intendedTo = '', test = false }) {
     test ? `${testLine}\n` : null,
     `Hi ${first},`,
     '',
-    `The following visit${n === 1 ? ' is' : 's are'} marked Seen in Practice Fusion but ${n === 1 ? 'has' : 'have'} no note yet:`,
+    `The following visit${n === 1 ? ' is' : 's are'} marked Seen in Practice Fusion, but the note is missing or not complete. Subjective, Objective, Assessment and Plan must all be filled in.`,
     '',
-    ...items.map((i) => `• ${visitDay(i)} — ${shortName(i.patientName)} — ${when(i)}`),
+    ...items.map((i) => `• ${visitDay(i)} — ${shortName(i.patientName)} — ${need(i)} — ${when(i)}`),
     '',
     'Please complete the note in Practice Fusion. Notes are due within 24 hours of the visit; insurance companies need them to pay for the session.',
     '',
@@ -155,36 +243,50 @@ function reminderEmail({ therapist, items, intendedTo = '', test = false }) {
     'High Quality Home Therapy',
   ].filter((l) => l !== null).join('\n');
 
+  // HQHT brand: the logo's gray wordmark (#626466) and its blue dots (#269db6, #88c5d8).
+  const C = { gray: '#626466', ink: '#3a3c3e', blue: '#269db6', blueDark: '#1b7d92', light: '#88c5d8', mist: '#f2f4f5', line: '#e3e6e8', late: '#b42318' };
+  const cell = `padding:12px 14px;border-bottom:1px solid ${C.line};vertical-align:top`;
   const rows = items.map((i) => `
-          <tr>
-            <td style="padding:10px 12px;border-bottom:1px solid #e6ebf1;white-space:nowrap">${escapeHtml(visitDay(i))}</td>
-            <td style="padding:10px 12px;border-bottom:1px solid #e6ebf1">${escapeHtml(shortName(i.patientName))}</td>
-            <td style="padding:10px 12px;border-bottom:1px solid #e6ebf1;white-space:nowrap;color:${i.overdue ? '#b42318;font-weight:600' : '#344054'}">${escapeHtml(when(i))}</td>
-          </tr>`).join('');
+              <tr>
+                <td style="${cell};white-space:nowrap;color:${C.ink}">${i.apptAt ? `${escapeHtml(fmtDay(i.apptAt))}<br><span style="color:${C.gray}">${escapeHtml(fmtClock(i.apptAt))}</span>` : escapeHtml(i.date)}</td>
+                <td style="${cell};color:${C.ink};font-weight:600">${escapeHtml(shortName(i.patientName))}</td>
+                <td style="${cell};color:${C.ink}">${escapeHtml(need(i))}</td>
+                <td style="${cell};white-space:nowrap;${i.overdue ? `color:${C.late};font-weight:700` : `color:${C.blueDark};font-weight:600`}">${i.dueAt ? `${i.overdue ? 'Overdue since' : 'Due by'}<br>${escapeHtml(fmtDay(i.dueAt))}, ${escapeHtml(fmtClock(i.dueAt))}` : 'Within 24 hours'}</td>
+              </tr>`).join('');
+  const th = `padding:10px 14px;border-bottom:1px solid ${C.line};font-size:11px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;color:${C.gray};text-align:left`;
+  const dot = (bg, border) => `<span style="display:inline-block;width:12px;height:12px;border-radius:50%;background:${bg};border:2px solid ${border};margin-right:3px"></span>`;
   const html = `<!doctype html>
-<html><body style="margin:0;padding:0;background:#f4f6f9">
-  <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:#f4f6f9;padding:24px 12px">
+<html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"></head>
+<body style="margin:0;padding:0;background:${C.mist}">
+  <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:${C.mist};padding:28px 12px">
     <tr><td align="center">
-      <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="max-width:560px;background:#ffffff;border-radius:10px;overflow:hidden;font-family:-apple-system,Segoe UI,Helvetica,Arial,sans-serif;font-size:15px;line-height:1.5;color:#1d2939">
-        ${test ? `<tr><td style="background:#fff4e5;color:#7a4b00;padding:10px 24px;font-size:13px">${escapeHtml(testLine)}</td></tr>` : ''}
-        <tr><td style="background:#0e5a8a;color:#ffffff;padding:18px 24px">
-          <div style="font-size:12px;letter-spacing:.08em;text-transform:uppercase;opacity:.85">High Quality Home Therapy</div>
-          <div style="font-size:19px;font-weight:600;margin-top:2px">Visit note reminder</div>
+      <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="max-width:600px;background:#ffffff;border:1px solid ${C.line};border-radius:12px;overflow:hidden;font-family:-apple-system,'Segoe UI',Helvetica,Arial,sans-serif;font-size:15px;line-height:1.55;color:${C.ink}">
+        <tr><td style="height:6px;background:${C.blue};font-size:0;line-height:0">&nbsp;</td></tr>
+        ${test ? `<tr><td style="background:#eef7fa;color:${C.blueDark};padding:10px 28px;font-size:13px;border-bottom:1px solid ${C.line}">${escapeHtml(testLine)}</td></tr>` : ''}
+        <tr><td style="padding:24px 28px 18px;border-bottom:1px solid ${C.line}">
+          <div style="font-size:34px;font-weight:700;letter-spacing:-1px;line-height:1;color:${C.gray}">hqht</div>
+          <div style="margin-top:6px;line-height:0">${dot(C.blue, C.blue)}${dot(C.light, C.light)}${dot('#ffffff', C.light)}</div>
+          <div style="margin-top:12px;font-size:12px;font-weight:600;letter-spacing:.12em;text-transform:uppercase;color:${C.gray}">High Quality Home Therapy</div>
         </td></tr>
-        <tr><td style="padding:22px 24px 6px">
+        <tr><td style="padding:26px 28px 8px">
+          <div style="font-size:21px;font-weight:700;color:${C.ink};margin:0 0 14px">Visit note reminder</div>
           <p style="margin:0 0 12px">Hi ${escapeHtml(first)},</p>
-          <p style="margin:0 0 16px">The following visit${n === 1 ? ' is' : 's are'} marked <b>Seen</b> in Practice Fusion but ${n === 1 ? 'has' : 'have'} no note yet:</p>
-          <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="border:1px solid #e6ebf1;border-radius:8px;border-collapse:separate;font-size:14px">
-            <tr style="background:#f8fafc;color:#475467;font-size:12px;text-transform:uppercase;letter-spacing:.04em">
-              <td style="padding:8px 12px;border-bottom:1px solid #e6ebf1">Visit</td>
-              <td style="padding:8px 12px;border-bottom:1px solid #e6ebf1">Client</td>
-              <td style="padding:8px 12px;border-bottom:1px solid #e6ebf1">Note</td>
+          <p style="margin:0 0 18px">The following visit${n === 1 ? ' is' : 's are'} marked <b>Seen</b> in Practice Fusion, but the note is missing or not complete. <b>Subjective, Objective, Assessment and Plan</b> must all be filled in.</p>
+          <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="border:1px solid ${C.line};border-radius:8px;border-collapse:separate;font-size:14px">
+            <tr style="background:${C.mist}">
+              <td style="${th}">Visit</td><td style="${th}">Client</td><td style="${th}">Needed</td><td style="${th}">Due</td>
             </tr>${rows}
           </table>
-          <p style="margin:18px 0 0">Please complete the note in Practice Fusion. Notes are due <b>within 24 hours of the visit</b>; insurance companies need them to pay for the session.</p>
-          <p style="margin:12px 0 0;color:#475467">If you have already finished it, thank you, and please disregard this reminder.</p>
+          <table role="presentation" cellpadding="0" cellspacing="0" style="margin:22px 0 4px"><tr><td style="background:${C.blue};border-radius:8px">
+            <a href="https://static.practicefusion.com/apps/ehr/index.html" style="display:inline-block;padding:11px 22px;font-size:14px;font-weight:700;color:#ffffff;text-decoration:none">Open Practice Fusion</a>
+          </td></tr></table>
+          <p style="margin:18px 0 0">Notes are due <b>within 24 hours of the visit</b>; insurance companies need them to pay for the session.</p>
+          <p style="margin:10px 0 0;color:${C.gray}">If you have already finished it, thank you, and please disregard this reminder.</p>
         </td></tr>
-        <tr><td style="padding:20px 24px 22px;color:#475467;font-size:13px">Thank you,<br><b style="color:#1d2939">High Quality Home Therapy</b></td></tr>
+        <tr><td style="padding:22px 28px 26px">
+          <p style="margin:0;color:${C.ink}">Thank you,<br><b>High Quality Home Therapy</b></p>
+        </td></tr>
+        <tr><td style="background:${C.mist};border-top:1px solid ${C.line};padding:14px 28px;font-size:12px;color:${C.gray}">This is an automatic reminder from High Quality Home Therapy.</td></tr>
       </table>
     </td></tr>
   </table>
@@ -224,5 +326,5 @@ function lookbackDates(now, lookback = 7) {
 
 module.exports = {
   DUE_HOURS, DEFAULT_TEST_TO, isSeen, encounterState, apptDateTime, shortName, findNotes,
-  noteInTimeline, emailFor, planReminders, reminderEmail, parseHHMM, dailyDue, dayKey, lookbackDates,
+  noteInTimeline, SOAP, writtenText, emptySections, readVisitNote, emailFor, planReminders, reminderEmail, parseHHMM, dailyDue, dayKey, lookbackDates,
 };

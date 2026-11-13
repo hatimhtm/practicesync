@@ -1291,6 +1291,11 @@ window.api.onChartFinished(() => { const c = $('#crLog .live-line.cur'); if (c) 
 const NF = { tab: 'missing', running: false };
 const nfDay = (iso) => new Date(iso).toLocaleDateString(undefined, { weekday: 'short', month: 'short', day: 'numeric' });
 const nfClock = (iso) => new Date(iso).toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' });
+// A visit needs its note when there's none, or one of the four boxes is empty.
+const nfNeedsNote = (n) => n.note === 'missing' || n.note === 'incomplete';
+function nfNeed(n) {
+  return n.note === 'incomplete' ? `<span class="nf-need">${escapeHtml((n.emptySections || []).join(', '))} not filled in</span>` : '<span class="nf-need">No note yet</span>';
+}
 function nfDue(n) {
   if (!n.dueAt) return '<span class="muted">due within 24 h</span>';
   const late = Date.now() >= new Date(n.dueAt).getTime();
@@ -1315,14 +1320,14 @@ function nfGroups(list) {
 function renderNotes() {
   const check = settings.notesCheck || null;
   const list = (check && check.notes) || [];
-  const missing = list.filter((n) => n.note === 'missing');
+  const missing = list.filter(nfNeedsNote);
   const unknown = list.filter((n) => n.note === 'unknown');
   const badge = $('#notesBadge');
   badge.textContent = missing.length; badge.classList.toggle('hidden', !missing.length);
   $('#nfMissingCount').textContent = missing.length ? `(${missing.length})` : '';
   if (!NF.running) {
     $('#nfIcon').textContent = check ? (missing.length ? '⚠️' : '✅') : '📝';
-    $('#nfTitle').textContent = check ? (missing.length ? `${missing.length} Seen visit${missing.length === 1 ? '' : 's'} without a note` : `All ${list.length} Seen visit${list.length === 1 ? ' has its' : 's have their'} note`) : 'No notes check yet';
+    $('#nfTitle').textContent = check ? (missing.length ? `${missing.length} Seen visit${missing.length === 1 ? '' : 's'} with a note missing or not filled in` : `All ${list.length} Seen visit${list.length === 1 ? ' has a complete' : 's have complete'} note${list.length === 1 ? '' : 's'}`) : 'No notes check yet';
     $('#nfSub').textContent = check ? `Checked ${fmtTime(check.at)} · ${check.start}${check.end && check.end !== check.start ? ` → ${check.end}` : ''}${check.trigger === 'daily' ? ' · daily check' : ''}${unknown.length ? ` · ${unknown.length} couldn't be told` : ''}` : 'Reads the Practice Fusion schedule for the days you pick. Takes a few seconds per day.';
   }
   $('#nfSendBtn').disabled = NF.running || !missing.length;
@@ -1344,17 +1349,17 @@ function renderNotes() {
   $('#nfMissingList').innerHTML = missingGroups.length ? missingGroups.map((g) => `
     <div class="cr-group">
       <div class="cr-group-head">${escapeHtml(g.therapist)} <span class="muted">· ${g.items.length} note${g.items.length === 1 ? '' : 's'}${nfEmailOf(g.therapist) ? ` · ${escapeHtml(nfEmailOf(g.therapist))}` : ' · <span class="nf-noemail">no email on file</span>'}</span></div>
-      ${g.items.map((n) => `<div class="nf-row"><span class="nf-when">${nfVisit(n)}</span><span class="nf-client">${escapeHtml(n.patientName)}${n.source === 'schedule' ? ' <span class="muted" title="The chart couldn\'t be opened, so this went by the schedule\'s Start Encounter / View in encounter link.">· by schedule</span>' : ''}</span>${nfDue(n)}</div>`).join('')}
+      ${g.items.map((n) => `<div class="nf-row"><span class="nf-when">${nfVisit(n)}</span><span class="nf-client">${escapeHtml(n.patientName)}${n.source === 'schedule' ? ' <span class="muted" title="The chart couldn\'t be opened, so this went by the schedule\'s Start Encounter / View in encounter link.">· by schedule</span>' : ''}${nfNeed(n)}</span>${nfDue(n)}</div>`).join('')}
     </div>`).join('')
-    : `<div class="client-empty"><strong>${check ? 'No missing notes' : 'No check yet'}</strong><span>${check ? 'Every visit marked Seen in these days has its note.' : 'Pick the days and press Check notes.'}</span></div>`;
+    : `<div class="client-empty"><strong>${check ? 'No missing notes' : 'No check yet'}</strong><span>${check ? 'Every visit marked Seen in these days has a complete note.' : 'Pick the days and press Check notes.'}</span></div>`;
 
   // All Seen visits
-  const label = { done: '<span class="nf-badge ok">Note there</span>', unknown: '<span class="nf-badge unk">Couldn\'t tell</span>' };
+  const label = { done: '<span class="nf-badge ok">Note complete</span>', unknown: '<span class="nf-badge unk">Couldn\'t read the note</span>' };
   const allGroups = nfGroups(list);
   $('#nfAllList').innerHTML = allGroups.length ? allGroups.map((g) => `
     <div class="cr-group">
       <div class="cr-group-head">${escapeHtml(g.therapist)} <span class="muted">· ${g.items.length}</span></div>
-      ${g.items.map((n) => `<div class="nf-row"><span class="nf-when">${nfVisit(n)}</span><span class="nf-client">${escapeHtml(n.patientName)}${n.source === 'schedule' ? ' <span class="muted" title="The chart couldn\'t be opened, so this went by the schedule\'s Start Encounter / View in encounter link.">· by schedule</span>' : ''}</span>${n.note === 'missing' ? nfDue(n) : label[n.note]}</div>`).join('')}
+      ${g.items.map((n) => `<div class="nf-row"><span class="nf-when">${nfVisit(n)}</span><span class="nf-client">${escapeHtml(n.patientName)}${n.source === 'schedule' ? ' <span class="muted" title="The chart couldn\'t be opened, so this went by the schedule\'s Start Encounter / View in encounter link.">· by schedule</span>' : ''}${nfNeedsNote(n) ? nfNeed(n) : ''}</span>${nfNeedsNote(n) ? nfDue(n) : label[n.note]}</div>`).join('')}
     </div>`).join('') : '<div class="client-empty"><strong>No Seen visits</strong><span>Visits show here once a check finds them marked Seen.</span></div>';
 
   // Therapist emails
@@ -1443,7 +1448,7 @@ $('#nfRunBtn').addEventListener('click', async () => {
   await refresh();
 });
 $('#nfSendBtn').addEventListener('click', async () => {
-  const missing = ((settings.notesCheck && settings.notesCheck.notes) || []).filter((n) => n.note === 'missing');
+  const missing = ((settings.notesCheck && settings.notesCheck.notes) || []).filter(nfNeedsNote);
   const therapists = new Set(missing.map((n) => n.therapist)).size;
   const test = settings.notesTestMode !== false;
   if (!confirm(test ? `Send ${therapists} test reminder${therapists === 1 ? '' : 's'} to ${settings.notesTestTo || 'nabil@highqualityhometherapy.com'}?` : `Email ${therapists} therapist${therapists === 1 ? '' : 's'} about ${missing.length} missing note${missing.length === 1 ? '' : 's'}?`)) return;

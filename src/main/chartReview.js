@@ -775,5 +775,5 @@ async function runChartReview({ pages: tabs, page, readSchedule, providers = [],
 
 module.exports = {
   ITEMS, parseLooseDate, parseDisciplines, parseDiagnoses, parsePinnedNote, parseProfile,
-  pageText, readChart, readEncounters, parseEncounters, therapistsIn, toggleState, reviewChart, mergeFollowUps, runChartReview, mondayOf, patientKey, weeksInRange, toDay,
+  pageText, settledText, readChart, readEncounters, parseEncounters, therapistsIn, toggleState, reviewChart, mergeFollowUps, runChartReview, mondayOf, patientKey, weeksInRange, toDay,
 };

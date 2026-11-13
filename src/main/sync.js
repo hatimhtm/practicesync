@@ -287,20 +287,24 @@ async function pfNavigateToDate(page, target, onStep) {
 
 /** Wait for a day's appointment rows to load (up to 15 s): until there are as many
  *  rows as the "35 Appointments" count above the schedule, or — with no count
- *  shown — until rows appear and stop changing. "0 Appointments" returns at once.
- *  (Stopping at the first steady count read a still-loading day as empty.) */
+ *  shown — until rows appear and stop changing. While a day loads Practice Fusion
+ *  shows "0 Appointments" and a spinner, so an empty day is only believed once it
+ *  has stayed empty, with no spinner, for about two seconds. (Stopping at the first
+ *  steady count read a still-loading day as empty.) */
 async function waitForDayRows(page) {
   let last = -1, steady = 0;
   const end = Date.now() + 15000;
   while (Date.now() < end) {
     await sleep(300);
-    const { n, expected } = await page.evaluate((sel) => {
+    const { n, expected, loading } = await page.evaluate((sel) => {
       const m = /(\d+)\s+Appointments?\b/i.exec(document.body ? document.body.innerText : '');
-      return { n: document.querySelectorAll(sel).length, expected: m ? Number(m[1]) : null };
-    }, presets.PF.selectors.rowSelector).catch(() => ({ n: 0, expected: null }));
-    steady = n === last ? steady + 1 : 0;
+      const spinner = [...document.querySelectorAll('[class*="spinner" i], [class*="loading" i], [class*="loader" i]')].some((e) => e.offsetParent);
+      return { n: document.querySelectorAll(sel).length, expected: m ? Number(m[1]) : null, loading: spinner };
+    }, presets.PF.selectors.rowSelector).catch(() => ({ n: 0, expected: null, loading: true }));
+    steady = n === last && !loading ? steady + 1 : 0;
     last = n;
-    if (expected != null && n >= expected && steady >= 1) return;
+    if (expected === 0 && n === 0 && steady >= 6) return;
+    if (expected > 0 && n >= expected && steady >= 1) return;
     if (expected == null && n > 0 && steady >= 2) return;
   }
 }

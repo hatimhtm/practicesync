@@ -312,9 +312,9 @@ async function performNotesCheck({ dates, send = false, trigger = 'manual' }) {
     const providers = (s.providers && s.providers.length) ? s.providers : DEMO_PROVIDERS;
     const list = notes.findNotes(visits, { providers, now: new Date() });
     await checkNoteTimelines(context, page, list, step);
-    const missing = list.filter((n) => n.note === 'missing');
+    const missing = list.filter((n) => n.note === 'missing' || n.note === 'incomplete');
     const unknown = list.filter((n) => n.note === 'unknown').length;
-    step(`${list.length} visit${list.length === 1 ? '' : 's'} marked Seen · ${missing.length} without a note${unknown ? ` · ${unknown} couldn't be told` : ''}.`);
+    step(`${list.length} visit${list.length === 1 ? '' : 's'} marked Seen · ${missing.length} with a note missing or not filled in${unknown ? ` · ${unknown} couldn't be read` : ''}.`);
     store.save({ notesCheck: { at: nowISO(), start: dates[0], end: dates[dates.length - 1], trigger, notes: list } });
     sendToRenderer('notes-result', {});
     let sent = null;
@@ -329,9 +329,11 @@ async function performNotesCheck({ dates, send = false, trigger = 'manual' }) {
   }
 }
 
-/** Open each Seen client's Timeline → Encounters and look for the note of each
- *  visit (appointment date + time). The schedule's "View in encounter" / "Start
- *  Encounter" link only decides when the chart can't be read. Up to 3 tabs at once. */
+/** For each Seen visit: open the client's Timeline → Encounters, find the visit's
+ *  encounter (appointment date + time) and read its Note — Subjective, Objective,
+ *  Assessment and Plan must all be filled in. The schedule's "View in encounter" /
+ *  "Start Encounter" link only decides when the chart can't be opened. Read only.
+ *  Up to 3 tabs at once. */
 async function checkNoteTimelines(context, page, list, step) {
   const byClient = new Map();
   for (const n of list) {
@@ -342,7 +344,7 @@ async function checkNoteTimelines(context, page, list, step) {
   const queue = [...byClient.values()];
   const total = queue.length;
   if (!total) return;
-  step(`Opening ${total} client${total === 1 ? '' : 's'}' Encounters to look for each note…`);
+  step(`Opening ${total} client${total === 1 ? '' : 's'}' notes…`);
   const tabs = [page];
   for (let i = 1; i < Math.min(3, total); i++) {
     const t = await context.newPage().catch(() => null);
@@ -352,18 +354,29 @@ async function checkNoteTimelines(context, page, list, step) {
     tabs.push(t);
   }
   let done = 0;
+  const said = (n) => (n.note === 'missing' ? `${n.time || n.date}: no note`
+    : n.note === 'incomplete' ? `${n.time || n.date}: ${n.emptySections.join(', ')} not filled in`
+    : n.note === 'unknown' ? `${n.time || n.date}: couldn't read the note` : `${n.time || n.date}: note complete ✓`);
   await Promise.all(tabs.map(async (tab) => {
     for (let group = queue.shift(); group; group = queue.shift()) {
       const name = group[0].patientName;
-      const text = await chartReview.readEncounters(tab, name, group.find((n) => n.href)?.href || '', step).catch(() => null);
-      for (const n of group) {
+      const href = group.find((n) => n.href)?.href || '';
+      let text = null;
+      for (const [i, n] of group.entries()) {
+        // Back to the Encounters list for each visit (opening a note leaves it).
+        if (i === 0 || text != null) text = await chartReview.readEncounters(tab, name, href, step).catch(() => null);
         if (text == null) { n.source = 'schedule'; continue; }
-        n.note = notes.noteInTimeline(text, n) ? 'done' : 'missing';
-        n.source = 'timeline';
+        n.source = 'chart';
+        if (!notes.noteInTimeline(text, n)) { n.note = 'missing'; continue; }
+        const r = await notes.readVisitNote(tab, n).catch(() => null);
+        const gaps = r ? notes.emptySections(r.sections) : null;
+        n.signed = r ? r.status : '';
+        if (gaps == null) n.note = 'unknown';
+        else if (gaps.length) { n.note = 'incomplete'; n.emptySections = gaps; }
+        else n.note = 'done';
       }
       done += 1;
-      const miss = group.filter((n) => n.note === 'missing');
-      step(`(${done}/${total}) ${name} — ${text == null ? `couldn't open the chart; went by the schedule${miss.length ? ` (${miss.length} without a note)` : ''}` : miss.length ? `no note for ${miss.map((n) => n.time || n.date).join(', ')}` : 'note there ✓'}`);
+      step(`(${done}/${total}) ${name} — ${group[0].source === 'schedule' ? 'couldn\'t open the chart; went by the schedule' : group.map(said).join(' · ')}`);
     }
   }));
 }

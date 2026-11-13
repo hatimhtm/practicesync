@@ -686,6 +686,7 @@ input[type="number"]::-webkit-outer-spin-button { -webkit-appearance: none; marg
 .nf-row:hover { background: var(--bg); }
 .nf-when { color: var(--muted); font-variant-numeric: tabular-nums; }
 .nf-client { font-weight: 600; overflow-wrap: anywhere; }
+.nf-need { display: block; font-weight: 500; font-size: 12.5px; color: var(--bad); }
 .nf-badge { font-size: 12px; font-weight: 600; padding: 2px 9px; border-radius: 99px; white-space: nowrap; }
 .nf-badge.due { background: rgba(251, 191, 36, 0.16); color: var(--warn); }
 .nf-badge.late { background: rgba(220, 38, 38, 0.12); color: var(--bad); white-space: normal; }
