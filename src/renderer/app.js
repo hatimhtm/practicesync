@@ -1373,6 +1373,14 @@ function renderNotes() {
       ${g.items.map((n) => `<div class="nf-row"><span class="nf-when">${nfVisit(n)}</span><span class="nf-client">${escapeHtml(n.patientName)}${n.source === 'schedule' ? ' <span class="muted" title="The chart couldn\'t be opened, so this went by the schedule\'s Start Encounter / View in encounter link.">· by schedule</span>' : ''}${nfNeedsNote(n) ? nfNeed(n) : ''}</span>${nfNeedsNote(n) ? nfDue(n) : label[n.note]}</div>`).join('')}
     </div>`).join('') : '<div class="client-empty"><strong>No Seen visits</strong><span>Visits show here once a check finds them marked Seen.</span></div>';
 
+  // Who gets the reminders
+  const testOn = settings.notesTestMode !== false;
+  const withMail = nfTherapistNames().filter((n) => nfEmailOf(n)).length;
+  $('#nfWhoTo').innerHTML = testOn
+    ? `<b>${escapeHtml(settings.notesTestTo || 'nabil@highqualityhometherapy.com')}</b> <span class="muted">— test mode: every reminder comes here; therapists get nothing yet.</span>`
+    : `<b>Each therapist</b>, at their email below <span class="muted">— ${withMail} have one; therapists without one are skipped.</span>`;
+  if (document.activeElement !== $('#nfCc')) $('#nfCc').value = settings.notesCc || '';
+
   // Therapist emails
   $('#nfTestMode').checked = settings.notesTestMode !== false;
   if (document.activeElement !== $('#nfTestTo')) $('#nfTestTo').value = settings.notesTestTo || 'nabil@highqualityhometherapy.com';
@@ -1404,7 +1412,7 @@ function renderNotes() {
   $('#nfLogList').innerHTML = log.length ? log.slice(0, 120).map((l) => `
     <div class="nf-row nf-log"><span class="nf-when">${fmtTime(l.at)}</span>
       <span class="nf-client">${escapeHtml(l.therapist)} <span class="muted">· ${l.count} note${l.count === 1 ? '' : 's'}${l.overdue ? `, ${l.overdue} overdue` : ''}${l.trigger === 'daily' ? ' · daily' : ''}</span></span>
-      ${l.ok ? `<span class="nf-badge ok">${l.test ? 'Test → ' : 'Sent → '}${escapeHtml(l.to)}</span>` : `<span class="nf-badge late">${escapeHtml(l.error || 'Not sent')}</span>`}</div>`).join('')
+      ${l.ok ? `<span class="nf-badge ok">${l.test ? 'Test → ' : 'Sent → '}${escapeHtml(l.to)}${l.cc ? ` · cc ${escapeHtml(l.cc)}` : ''}</span>` : `<span class="nf-badge late">${escapeHtml(l.error || 'Not sent')}</span>`}</div>`).join('')
     : '<div class="client-empty"><strong>No reminders sent yet</strong></div>';
 }
 $$('#nfTabs button').forEach((b) => b.addEventListener('click', () => { NF.tab = b.dataset.tab; renderNotes(); }));
@@ -1495,13 +1503,21 @@ function nfTally() {
   $('#nfTally').innerHTML = NFP.ok + NFP.need + NFP.unknown
     ? `<span class="ok">✓ ${NFP.ok} complete</span><span class="late">✗ ${NFP.need} need${NFP.need === 1 ? 's' : ''} the therapist</span>${NFP.unknown ? `<span class="unk">? ${NFP.unknown} couldn't be read</span>` : ''}` : '';
 }
+$('#nfCc').addEventListener('change', async () => {
+  const list = $('#nfCc').value.split(/[,;\s]+/).map((x) => x.trim()).filter(Boolean);
+  const bad = list.filter((x) => !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(x));
+  if (bad.length) { toast(`Not an email address: ${bad.join(', ')}`); return; }
+  settings = await window.api.saveSettings({ notesCc: list.join(', ') });
+  renderNotes();
+  toast(list.length ? `CC saved: ${list.join(', ')}` : 'No one is CC\'d now.');
+});
 $('#nfTestEmailBtn').addEventListener('click', async () => {
   const btn = $('#nfTestEmailBtn');
   const out = $('#nfTestEmailResult');
   btn.disabled = true; btn.textContent = 'Sending…'; out.textContent = ''; out.style.color = '';
   const r = await window.api.notesTestEmail();
   btn.disabled = false; btn.textContent = 'Send test reminder';
-  if (r && r.ok) { out.textContent = `✓ Sent to ${r.to} — check that inbox (and its spam folder).`; out.style.color = 'var(--good)'; }
+  if (r && r.ok) { out.textContent = `✓ Sent to ${r.to}${r.cc ? `, cc ${r.cc}` : ''} — check that inbox (and its spam folder).`; out.style.color = 'var(--good)'; }
   else {
     out.textContent = `✗ Not sent: ${(r && r.error) || 'unknown error'}${r && r.notConfigured ? ' — fill in the Email section on the Alerts page.' : ''}`;
     out.style.color = 'var(--bad)';

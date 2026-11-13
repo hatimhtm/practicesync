@@ -56,6 +56,17 @@ const check = (n, ok) => { console.log(`${ok ? '  ok  ' : '  FAIL'}  ${n}`); ok 
   check('no bare LFs left (mail servers reject them)', !message.replace(/\r\n/g, '').includes('\n'));
 })();
 
+(function testCc() {
+  console.log('# CC — header and a recipient each, never doubled with To');
+  const config = configFrom({ smtpHost: 'smtp.gmail.com', smtpPort: 465 }, { username: 'a@x.com', password: 'pw' }, 'nabil@x.com', 'boss@x.com; NABIL@x.com, office@x.com');
+  check('CC parsed, the To address dropped from it', JSON.stringify(config.cc) === JSON.stringify(['boss@x.com', 'office@x.com']));
+  const msg = compose({ from: 'a@x.com', to: config.recipients, cc: config.cc, subject: 'S', body: 'b' });
+  check('Cc header lists them', msg.includes('Cc: boss@x.com, office@x.com\r\n'));
+  const args = curlArguments({ ...config, host: 'smtp.gmail.com', port: 465 }, '/tmp/m');
+  check('each CC is a recipient for the server', args.filter((a) => a === '--mail-rcpt').length === 3 && args.includes('office@x.com'));
+  check('no CC → no Cc header', !compose({ from: 'a@x.com', to: ['b@x.com'], subject: 'S', body: 'b' }).includes('Cc:'));
+})();
+
 (function testPortPicksTlsMode() {
   console.log('# curlArguments — 465 is TLS from the start, 587 switches to TLS');
   const base = { host: 'smtp.gmail.com', username: 'a@x.com', password: 'pw', recipients: ['b@x.com'] };

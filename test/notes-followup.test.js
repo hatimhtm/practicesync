@@ -79,7 +79,7 @@ const providers = [
   check('says no note yet', mail.text.includes('No note yet'));
   check('greets by first name', mail.text.includes('Hi Nardeen,') && mail.html.includes('Hi Nardeen,'));
   check('client shown as first name + last initial only', mail.text.includes('Casey H.') && !mail.text.includes('Hart') && !mail.html.includes('Hart'));
-  check('says the 24-hour rule and why', /within 24 hours/.test(mail.text) && /insurance/i.test(mail.text));
+  check('says the 24-hour rule, and nothing about insurance', /within 24 hours/.test(mail.text) && !/insurance/i.test(mail.text + mail.html));
   check('test banner names who it was for', mail.text.includes('this reminder is for Nardeen Abdelsayed (no email on file yet)'));
   const real = nf.reminderEmail({ therapist: 'Jessica Trujillo', items: [avery], test: false });
   check('a real reminder has no test banner', !/TEST/.test(real.subject) && !/TEST/.test(real.text) && !/TEST/.test(real.html));

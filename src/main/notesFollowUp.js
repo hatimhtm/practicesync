@@ -441,7 +441,7 @@ function reminderEmail({ therapist, items, intendedTo = '', test = false }) {
     '',
     ...items.map((i) => `• ${visitDay(i)} — ${shortName(i.patientName)} — ${need(i)} — ${when(i)}`),
     '',
-    'Please complete the note in Practice Fusion. Notes are due within 24 hours of the visit; insurance companies need them to pay for the session.',
+    'Please complete the note in Practice Fusion. Notes are due within 24 hours of the visit.',
     '',
     'If you have already finished it, thank you, and please disregard this reminder.',
     '',
@@ -485,7 +485,7 @@ function reminderEmail({ therapist, items, intendedTo = '', test = false }) {
           <table role="presentation" cellpadding="0" cellspacing="0" style="margin:22px 0 4px"><tr><td style="background:${C.blue};border-radius:8px">
             <a href="https://static.practicefusion.com/apps/ehr/index.html" style="display:inline-block;padding:11px 22px;font-size:14px;font-weight:700;color:#ffffff;text-decoration:none">Open Practice Fusion</a>
           </td></tr></table>
-          <p style="margin:18px 0 0">Notes are due <b>within 24 hours of the visit</b>; insurance companies need them to pay for the session.</p>
+          <p style="margin:18px 0 0">Notes are due <b>within 24 hours of the visit</b>.</p>
           <p style="margin:10px 0 0;color:${C.gray}">If you have already finished it, thank you, and please disregard this reminder.</p>
         </td></tr>
         <tr><td style="padding:22px 28px 26px">

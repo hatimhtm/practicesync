@@ -42,8 +42,10 @@ function normalizePassword(raw) {
 /** Build a ready-to-send Config from settings + the smtp creds, or throw a
  *  SendError describing exactly what's missing (never guess). `to` replaces the
  *  alert recipients (the notes reminders go to each therapist). */
-function configFrom(settings, smtpCreds, to = null) {
+function configFrom(settings, smtpCreds, to = null, cc = '') {
   const recipients = parseRecipients(to == null ? settings.alertEmailRecipients : to);
+  // CC: everyone copied, minus anyone already in To.
+  const ccList = parseRecipients(cc).filter((c) => !recipients.some((r) => r.toLowerCase() === c.toLowerCase()));
   if (!recipients.length) throw new SendError('add at least one recipient', 'notConfigured');
   const username = String((smtpCreds && smtpCreds.username) || '').trim();
   if (!username.includes('@')) throw new SendError('add the sending email address', 'notConfigured');
@@ -55,6 +57,7 @@ function configFrom(settings, smtpCreds, to = null) {
     username,
     password,
     recipients,
+    cc: ccList,
   };
 }
 
@@ -67,12 +70,13 @@ function encodeSubject(subject) {
 /** RFC 5322 message. CRLF line endings are not optional. With `html`, the
  *  message carries both versions (multipart/alternative): mail apps show the
  *  designed one, and the plain text is there for the rest. */
-function compose({ from, fromName = 'Hope Billing Assistant', to, subject, body, html = '' }) {
+function compose({ from, fromName = 'Hope Billing Assistant', to, cc = [], subject, body, html = '' }) {
   const date = new Date().toUTCString().replace('GMT', '+0000');
   const crlf = (t) => String(t || '').replace(/\r?\n/g, '\r\n');
   const headers = [
     `From: ${fromName} <${from}>`,
     `To: ${to.join(', ')}`,
+    ...(cc.length ? [`Cc: ${cc.join(', ')}`] : []),
     `Subject: ${encodeSubject(subject)}`,
     `Date: ${date}`,
     'MIME-Version: 1.0',
@@ -92,7 +96,7 @@ function curlArguments(config, messageFile) {
   // (STARTTLS) — --ssl-reqd refuses to send unless that switch happens.
   const scheme = Number(config.port) === 587 || Number(config.port) === 25 ? 'smtp' : 'smtps';
   const args = ['--url', `${scheme}://${config.host}:${config.port}`, '--ssl-reqd', '--mail-from', config.username];
-  for (const r of config.recipients) args.push('--mail-rcpt', r);
+  for (const r of [...config.recipients, ...(config.cc || [])]) args.push('--mail-rcpt', r);
   args.push('--user', `${config.username}:${config.password}`, '--upload-file', messageFile, '--silent', '--show-error', '--max-time', '45');
   return args;
 }
@@ -112,7 +116,7 @@ function friendlyCurlError(code, detail) {
  *  SendError carrying a friendly message on any failure. */
 function send({ subject, body, html, fromName, config }) {
   return new Promise((resolve, reject) => {
-    const message = compose({ from: config.username, fromName, to: config.recipients, subject, body, html });
+    const message = compose({ from: config.username, fromName, to: config.recipients, cc: config.cc || [], subject, body, html });
     const tmp = path.join(os.tmpdir(), `hope-mail-${crypto.randomUUID()}.eml`);
     fs.writeFileSync(tmp, message, 'utf8');
     const cleanup = () => { try { fs.unlinkSync(tmp); } catch {} };

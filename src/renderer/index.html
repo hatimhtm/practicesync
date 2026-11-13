@@ -347,6 +347,16 @@
         <div class="card hidden" id="nfAllCard"><div id="nfAllList"></div></div>
 
         <div class="card hidden" id="nfEmailsCard">
+          <div class="nf-who">
+            <div class="card-k" style="margin:0 0 8px">Who gets the reminders</div>
+            <div class="nf-who-row"><span class="nf-who-k">To</span><span id="nfWhoTo"></span></div>
+            <div class="nf-who-row"><span class="nf-who-k">CC</span>
+              <div class="nf-who-cc">
+                <textarea id="nfCc" rows="2" placeholder="office@highqualityhometherapy.com, manager@highqualityhometherapy.com"></textarea>
+                <span class="muted nf-help">Copied on every reminder (also in test mode). Separate addresses with commas.</span>
+              </div>
+            </div>
+          </div>
           <div class="nf-test">
             <label class="nf-check"><input type="checkbox" id="nfTestMode" checked /> <span><b>Test mode</b>: send every reminder to</span></label>
             <input type="text" id="nfTestTo" placeholder="nabil@highqualityhometherapy.com" />

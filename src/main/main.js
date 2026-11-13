@@ -446,7 +446,8 @@ async function sendNoteReminders(list, trigger = 'manual') {
   const log = [];
   let sent = 0, skipped = 0;
   for (const r of plan) {
-    const entry = { at: nowISO(), trigger, therapist: r.therapist, to: r.to, intendedTo: r.intendedTo, count: r.items.length, overdue: r.items.filter((i) => i.overdue).length, test: testMode };
+    const cc = mailer.parseRecipients(s.notesCc).join(', ');
+    const entry = { at: nowISO(), trigger, therapist: r.therapist, to: r.to, cc, intendedTo: r.intendedTo, count: r.items.length, overdue: r.items.filter((i) => i.overdue).length, test: testMode };
     if (!r.to) {
       skipped += 1;
       log.push({ ...entry, ok: false, error: 'No email on file for this therapist.' });
@@ -454,12 +455,12 @@ async function sendNoteReminders(list, trigger = 'manual') {
       continue;
     }
     try {
-      const config = mailer.configFrom(s, store.getCreds().smtp, r.to);
+      const config = mailer.configFrom(s, store.getCreds().smtp, r.to, s.notesCc);
       const mail = notes.reminderEmail({ therapist: r.therapist, items: r.items, intendedTo: r.intendedTo, test: testMode });
       await mailer.send({ subject: mail.subject, body: mail.text, html: mail.html, fromName: 'High Quality Home Therapy', config });
       sent += 1;
       log.push({ ...entry, ok: true });
-      step(`  ✉︎ ${r.therapist}: reminder sent to ${r.to} (${r.items.length} note${r.items.length === 1 ? '' : 's'}).`);
+      step(`  ✉︎ ${r.therapist}: reminder sent to ${r.to}${cc ? ` (cc ${cc})` : ''} — ${r.items.length} note${r.items.length === 1 ? '' : 's'}.`);
     } catch (e) {
       const error = (e && e.message) || String(e);
       log.push({ ...entry, ok: false, error });
@@ -849,13 +850,13 @@ function registerIpc() {
     const s = store.load();
     const to = s.notesTestTo || notes.DEFAULT_TEST_TO;
     try {
-      const config = mailer.configFrom(s, store.getCreds().smtp, to);
+      const config = mailer.configFrom(s, store.getCreds().smtp, to, s.notesCc);
       const now = new Date();
       const at = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 10, 30);
       const mail = notes.reminderEmail({ therapist: 'Sample Therapist', intendedTo: 'sample@example.com', test: true,
         items: [{ patientName: 'Sample Client', note: 'incomplete', emptySections: ['Objective', 'Plan'], apptAt: at.toISOString(), dueAt: new Date(at.getTime() + 864e5).toISOString(), overdue: false }] });
       await mailer.send({ subject: mail.subject, body: mail.text, html: mail.html, fromName: 'High Quality Home Therapy', config });
-      return { ok: true, to };
+      return { ok: true, to, cc: config.cc.join(', ') };
     } catch (e) {
       return { ok: false, to, error: (e && e.message) || String(e), notConfigured: !!(e && e.kind === 'notConfigured') };
     }
