@@ -183,10 +183,12 @@ async function openTimeline(page) {
  * only: nothing is typed and Save/Sign are never pressed.
  * Returns { sections: { Subjective, Objective, Assessment, Plan }, status } or null.
  */
-async function readVisitNote(page, visit) {
+async function readVisitNote(page, visit, say = () => {}) {
   const at = apptDateTime(visit.date, visit.time);
   if (!at) return null;
   const surname = String(visit.therapist || '').trim().split(/\s+/).pop().toLowerCase();
+  // Mark what can open this visit's encounter, best first: its "Office Visit"
+  // link (1), the "SOAP Note" in the same row (2), the row itself (3).
   const marked = await page.evaluate(({ y, mo, d, h, mi, surname }) => {
     document.querySelectorAll('[data-hope-click]').forEach((e) => e.removeAttribute('data-hope-click'));
     const h12 = ((h + 11) % 12) + 1;
@@ -195,10 +197,7 @@ async function readVisitNote(page, visit) {
     const day = new RegExp(`\\b0?${mo}/0?${d}/${y}\\b`);
     const own = (e) => [...e.childNodes].filter((t) => t.nodeType === 3).map((t) => t.textContent).join('').trim();
     const visitLink = (box) => [...box.querySelectorAll('*')].find((x) => /^office visit$/i.test(own(x)))
-      || [...box.querySelectorAll('a, [role="link"]')].find((x) => /visit|encounter|note/i.test(x.textContent || ''));
-    // The deepest pieces of text that carry this appointment (or, with no
-    // appointment time, the day and the therapist), then up to their row: the
-    // first box around them that has an "Office Visit" to click.
+      || [...box.querySelectorAll('a, [role="link"]')].find((x) => /visit|encounter/i.test(x.textContent || ''));
     const deepest = (test) => [...document.querySelectorAll('body *')]
       .filter((e) => test(e.textContent || '') && ![...e.children].some((c) => test(c.textContent || '')));
     const starts = deepest((t) => appt.test(t));
@@ -207,29 +206,126 @@ async function readVisitNote(page, visit) {
       for (let box = start; box && box !== document.body; box = box.parentElement) {
         const link = visitLink(box);
         if (!link) continue;
-        const rowText = (box.textContent || '').toLowerCase();
-        if (!appt.test(box.textContent || '') && !(rowText.includes(surname) && day.test(box.textContent || ''))) break;
+        if (!appt.test(box.textContent || '') && !((box.textContent || '').toLowerCase().includes(surname) && day.test(box.textContent || ''))) break;
         (link.closest('a, button, [role="link"]') || link).setAttribute('data-hope-click', '1');
+        const soap = [...box.querySelectorAll('*')].find((x) => /^soap note$/i.test(own(x)));
+        if (soap) soap.setAttribute('data-hope-click', '2');
+        if (!box.hasAttribute('data-hope-click')) box.setAttribute('data-hope-click', '3');
         return true;
       }
     }
     return false;
   }, { y: at.getFullYear(), mo: at.getMonth() + 1, d: at.getDate(), h: at.getHours(), mi: at.getMinutes(), surname }).catch(() => false);
-  if (!marked) return null;
-  // If Practice Fusion opens the note in a new tab, read it there and close it.
-  const popup = page.waitForEvent('popup', { timeout: 1500 }).catch(() => null);
-  if (!(await clickMarked(page))) return null;
-  const extra = await popup;
-  if (extra) {
-    try { await extra.waitForLoadState('domcontentloaded').catch(() => {}); return await readNoteOn(extra); } finally { await extra.close().catch(() => {}); }
+  if (!marked) {
+    say(`  ${visit.time}: no Office Visit for this appointment on the Timeline.`);
+    await snapshot(page, `office-visit-not-found-${visit.time}`);
+    return null;
   }
-  return readNoteOn(page);
+  for (const which of ['1', '2', '3']) {
+    const el = await page.$(`[data-hope-click="${which}"]`);
+    if (!el) continue;
+    say(`  ${visit.time}: clicking ${which === '1' ? 'Office Visit' : which === '2' ? 'SOAP Note' : 'the visit row'}…`);
+    // If Practice Fusion opens the note in a new tab, read it there and close it.
+    const popup = page.waitForEvent('popup', { timeout: 1500 }).catch(() => null);
+    await el.scrollIntoViewIfNeeded().catch(() => {});
+    await el.click({ timeout: 5000 }).catch(() => el.evaluate((e) => e.click()).catch(() => {}));
+    const extra = await popup;
+    if (extra) {
+      try {
+        await extra.waitForLoadState('domcontentloaded').catch(() => {});
+        say(`  ${visit.time}: scrolling down to the note…`);
+        return await readNoteOn(extra);
+      } finally { await extra.close().catch(() => {}); }
+    }
+    if (await encounterOpened(page)) {
+      await page.evaluate(() => document.querySelectorAll('[data-hope-click]').forEach((e) => e.removeAttribute('data-hope-click'))).catch(() => {});
+      say(`  ${visit.time}: encounter open — scrolling down to the note…`);
+      const r = await readNoteOn(page);
+      if (!r || emptySections(r.sections) == null) { say(`  ${visit.time}: couldn't find the note's boxes.`); await snapshot(page, `note-not-found-${visit.time}`); }
+      return r;
+    }
+  }
+  say(`  ${visit.time}: the encounter didn't open.`);
+  await snapshot(page, `encounter-did-not-open-${visit.time}`);
+  return null;
+}
+
+/** Whether a visit's encounter is open: its toolbar (Minimize all, Sign) or its
+ *  Note boxes show — up to 8 seconds. */
+function encounterOpened(page) {
+  return page.waitForFunction(() => {
+    const own = (e) => [...e.childNodes].filter((t) => t.nodeType === 3).map((t) => t.textContent).join('').trim();
+    const words = new Set([...document.querySelectorAll('body *')].filter((e) => e.offsetParent || e.getClientRects().length).map(own));
+    return words.has('Minimize all') || words.has('Sign') || (words.has('Subjective') && words.has('Objective')) || words.has('Chief complaint');
+  }, null, { timeout: 8000 }).then(() => true).catch(() => false);
+}
+
+/* ------------------------- proof when a step fails ------------------------- */
+
+let debugDir = null;
+let snapshots = 0;
+/** Where failed steps are saved (a folder on the Desktop); cleared each run. */
+function setDebugDir(dir) {
+  debugDir = dir;
+  snapshots = 0;
+  try { require('fs').rmSync(dir, { recursive: true, force: true }); } catch {}
+}
+/** A screenshot of the page and a map of its layout — element names and the
+ *  page's own labels only, never the text in it (no client details) — so a
+ *  failed step can be fixed from what Practice Fusion really shows. */
+async function snapshot(page, label) {
+  if (!debugDir || snapshots >= 12) return;
+  snapshots += 1;
+  const fs = require('fs');
+  const path = require('path');
+  try {
+    fs.mkdirSync(debugDir, { recursive: true });
+    const base = path.join(debugDir, `${String(snapshots).padStart(2, '0')}-${label.replace(/[^a-z0-9-]+/gi, '_')}`);
+    await page.screenshot({ path: `${base}.png` }).catch(() => {});
+    const map = await page.evaluate(() => {
+      const LABEL = /^(office visit|soap note|timeline|summary|documents|profile|encounters?|type\/source|details|status|note|subjective|objective|assessment|plan|minimize|minimize all|sign|save|print|unsigned|signed|chief complaint|go to.*|view templates|import past encounter|subjective note|objective note|assessment note|plan note|care plan|new encounter|schedule|appointments|day|week|seen|pending arrival|start encounter|view in encounter)$/i;
+      const out = [];
+      const walk = (el, depth) => {
+        if (out.length > 5000 || depth > 60) return;
+        if (/^(SCRIPT|STYLE|SVG|PATH|NOSCRIPT|LINK|META)$/.test(el.tagName)) return;
+        const own = [...el.childNodes].filter((t) => t.nodeType === 3).map((t) => t.textContent).join('').trim();
+        const attrs = [];
+        if (el.id) attrs.push(`#${el.id}`);
+        const cls = (typeof el.className === 'string' ? el.className : '').trim().split(/\s+/).filter(Boolean).slice(0, 3);
+        if (cls.length) attrs.push(`.${cls.join('.')}`);
+        for (const a of ['data-element', 'role', 'contenteditable', 'href', 'type', 'name', 'aria-label']) {
+          const v = el.getAttribute(a);
+          if (v != null) attrs.push(`[${a}=${a === 'href' ? v.replace(/[0-9a-f-]{20,}/gi, '<id>').slice(0, 60) : v.slice(0, 40)}]`);
+        }
+        const r = el.getBoundingClientRect();
+        const text = own ? (LABEL.test(own) ? ` "${own}"` : /appt\s*time/i.test(own) ? ' "(Appt time …)"' : ` (${own.length} chars)`) : '';
+        out.push(`${'  '.repeat(depth)}${el.tagName.toLowerCase()}${attrs.join('')}${r.width ? '' : ' (hidden)'}${text}`);
+        if (el.tagName === 'IFRAME') { try { walk(el.contentDocument.body, depth + 1); } catch { out.push(`${'  '.repeat(depth + 1)}(frame not readable)`); } }
+        for (const c of el.children) walk(c, depth + 1);
+      };
+      walk(document.body, 0);
+      return `${location.hash.replace(/[0-9a-f-]{20,}/gi, '<id>')}\n\n${out.join('\n')}`;
+    }).catch((e) => `couldn't map the page: ${e && e.message}`);
+    fs.writeFileSync(`${base}.txt`, map, 'utf8');
+  } catch {}
 }
 
 /** Scroll down the encounter until the Note's four boxes are on the page (they're
  *  far below the chief complaint, vitals and medications), then bring each one
  *  into view so its text loads. */
 async function scrollToNote(page, timeoutMs = 25000) {
+  // Fastest: the encounter toolbar's "Go to…" menu jumps straight to the Note.
+  const jumped = await page.evaluate(() => {
+    for (const sel of document.querySelectorAll('select')) {
+      const opt = [...sel.options].find((o) => /^\s*(note|subjective)\s*$/i.test(o.text));
+      if (opt && [...sel.options].some((o) => /go to/i.test(o.text))) return { value: opt.value, index: [...document.querySelectorAll('select')].indexOf(sel) };
+    }
+    return null;
+  }).catch(() => null);
+  if (jumped) {
+    const sel = (await page.$$('select'))[jumped.index];
+    if (sel) { await sel.selectOption({ value: jumped.value }).catch(() => {}); await sleep(500); }
+  }
   const end = Date.now() + timeoutMs;
   while (Date.now() < end) {
     const found = await page.evaluate((names) => {
@@ -435,5 +531,5 @@ function lookbackDates(now, lookback = 7) {
 
 module.exports = {
   DUE_HOURS, DEFAULT_TEST_TO, isSeen, encounterState, apptDateTime, shortName, findNotes,
-  noteInTimeline, SOAP, writtenText, emptySections, openClientFromSchedule, openTimeline, readVisitNote, emailFor, planReminders, reminderEmail, parseHHMM, dailyDue, dayKey, lookbackDates,
+  noteInTimeline, SOAP, writtenText, emptySections, openClientFromSchedule, openTimeline, readVisitNote, setDebugDir, snapshot, emailFor, planReminders, reminderEmail, parseHHMM, dailyDue, dayKey, lookbackDates,
 };

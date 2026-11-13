@@ -352,7 +352,11 @@
             <input type="text" id="nfTestTo" placeholder="nabil@highqualityhometherapy.com" />
           </div>
           <p class="muted nf-help" id="nfTestNote"></p>
-          <p class="muted nf-help">Reminders are sent from the mailbox set up on the <a href="#" class="link" data-goto="alerts">Alerts</a> page <span class="pill pill-todo" id="nfMailPill">Not set up</span></p>
+          <p class="muted nf-help">Reminders are sent from the mailbox set up on the <a href="#" class="link" data-goto="alerts">Alerts</a> page (Email section: the sending address and its app password) <span class="pill pill-todo" id="nfMailPill">Not set up</span></p>
+          <div class="row" style="margin:10px 0 0;gap:10px;align-items:center">
+            <button class="btn" id="nfTestEmailBtn">Send test reminder</button>
+            <span class="nf-help" id="nfTestEmailResult"></span>
+          </div>
           <div class="client-toolbar" style="margin-top:12px">
             <input type="text" id="nfEmailSearch" placeholder="Search therapist" autocomplete="off" />
             <span class="muted nf-help" id="nfEmailCount"></span>

@@ -1462,7 +1462,11 @@ $('#nfSendBtn').addEventListener('click', async () => {
   const r = await window.api.notesSend();
   await refresh();
   if (!r || !r.ok) toast(r && r.error ? r.error : 'Couldn\'t send the reminders.');
-  else { toast(`${r.sent} reminder${r.sent === 1 ? '' : 's'} sent${r.failed ? ` · ${r.failed} not sent (see Sent)` : ''}.`); NF.tab = 'log'; renderNotes(); }
+  else {
+    const firstError = r.failed ? ((settings.notesEmailLog || []).find((l) => !l.ok) || {}).error : '';
+    toast(r.failed ? `${r.sent} sent · ${r.failed} not sent: ${firstError || 'see Sent'}` : `${r.sent} reminder${r.sent === 1 ? '' : 's'} sent.`);
+    NF.tab = 'log'; renderNotes();
+  }
 });
 // Live progress: what it's doing now, how far along, and each client's result.
 const NFP = { ok: 0, need: 0, unknown: 0 };
@@ -1485,6 +1489,18 @@ function nfTally() {
   $('#nfTally').innerHTML = NFP.ok + NFP.need + NFP.unknown
     ? `<span class="ok">✓ ${NFP.ok} complete</span><span class="late">✗ ${NFP.need} need${NFP.need === 1 ? 's' : ''} the therapist</span>${NFP.unknown ? `<span class="unk">? ${NFP.unknown} couldn't be read</span>` : ''}` : '';
 }
+$('#nfTestEmailBtn').addEventListener('click', async () => {
+  const btn = $('#nfTestEmailBtn');
+  const out = $('#nfTestEmailResult');
+  btn.disabled = true; btn.textContent = 'Sending…'; out.textContent = ''; out.style.color = '';
+  const r = await window.api.notesTestEmail();
+  btn.disabled = false; btn.textContent = 'Send test reminder';
+  if (r && r.ok) { out.textContent = `✓ Sent to ${r.to} — check that inbox (and its spam folder).`; out.style.color = 'var(--good)'; }
+  else {
+    out.textContent = `✗ Not sent: ${(r && r.error) || 'unknown error'}${r && r.notConfigured ? ' — fill in the Email section on the Alerts page.' : ''}`;
+    out.style.color = 'var(--bad)';
+  }
+});
 window.api.onNotesProgress((p) => {
   if (!p) return;
   $('#nfLiveCard').classList.remove('hidden');

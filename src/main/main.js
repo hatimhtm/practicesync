@@ -389,6 +389,8 @@ async function checkNoteTimelines(context, page, list, step) {
   const total = queue.length;
   if (!total) return;
   step(`Opening ${total} client${total === 1 ? '' : 's'}' notes…`);
+  // A step that fails leaves a screenshot + page map here, to fix it from.
+  notes.setDebugDir(path.join(app.getPath('desktop'), 'Hope Notes Check'));
   const tabs = [page, ...(await extraPfTabs(context, page, Math.min(3, total) - 1, step))];
   let done = 0;
   sendToRenderer('notes-progress', { done: 0, total });
@@ -403,18 +405,23 @@ async function checkNoteTimelines(context, page, list, step) {
       const href = group.find((n) => n.href)?.href || '';
       // 1) Schedule → click the client's name → 2) Timeline.
       let text = null;
-      if (await toScheduleDay(tab, group[0].date) && await notes.openClientFromSchedule(tab, group[0], presets.PF.selectors)) {
+      step(`${name}: opening the chart from the schedule…`);
+      if (!(await toScheduleDay(tab, group[0].date))) { step(`  couldn't open the schedule on ${group[0].date}.`); await notes.snapshot(tab, 'schedule-day'); }
+      else if (!(await notes.openClientFromSchedule(tab, group[0], presets.PF.selectors))) { step('  clicking the name didn\'t open the chart.'); await notes.snapshot(tab, 'client-name-click'); }
+      else {
+        step('  clicking Timeline…');
         text = await notes.openTimeline(tab);
+        if (text == null) { step('  the Timeline didn\'t open.'); await notes.snapshot(tab, 'timeline'); }
       }
-      if (text == null) text = await chartReview.readEncounters(tab, name, href, step).catch(() => null);
+      if (text == null) { step('  opening the chart by its address instead…'); text = await chartReview.readEncounters(tab, name, href, step).catch(() => null); }
       for (const [i, n] of group.entries()) {
         // The client's next visit: back to their Timeline.
         if (i > 0 && text != null) text = (await notes.openTimeline(tab)) || (await chartReview.readEncounters(tab, name, href, step).catch(() => null));
         if (text == null) { n.source = 'schedule'; continue; }
         n.source = 'chart';
-        if (!notes.noteInTimeline(text, n)) { n.note = 'missing'; continue; }
+        if (!notes.noteInTimeline(text, n)) { n.note = 'missing'; step(`  ${n.time}: no encounter on the Timeline — no note.`); continue; }
         // 3) Office Visit → 4) scroll down to the Note and read it.
-        const r = await notes.readVisitNote(tab, n).catch(() => null);
+        const r = await notes.readVisitNote(tab, n, step).catch(() => null);
         const gaps = r ? notes.emptySections(r.sections) : null;
         n.signed = r ? r.status : '';
         if (gaps == null) n.note = 'unknown';
@@ -832,6 +839,23 @@ function registerIpc() {
     const dates = expandDates(opts.start, opts.end || opts.start);
     if (!dates.length) return { ok: false, error: 'Pick a date (or a start–end range) first.' };
     return performNotesCheck({ dates, send: !!opts.send, trigger: 'manual' });
+  });
+  // A sample reminder (made-up client) to the test address: proves the mailbox
+  // works, and shows the exact reason when it doesn't.
+  ipcMain.handle('notes:testEmail', async () => {
+    const s = store.load();
+    const to = s.notesTestTo || notes.DEFAULT_TEST_TO;
+    try {
+      const config = mailer.configFrom(s, store.getCreds().smtp, to);
+      const now = new Date();
+      const at = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 10, 30);
+      const mail = notes.reminderEmail({ therapist: 'Sample Therapist', intendedTo: 'sample@example.com', test: true,
+        items: [{ patientName: 'Sample Client', note: 'incomplete', emptySections: ['Objective', 'Plan'], apptAt: at.toISOString(), dueAt: new Date(at.getTime() + 864e5).toISOString(), overdue: false }] });
+      await mailer.send({ subject: mail.subject, body: mail.text, html: mail.html, fromName: 'High Quality Home Therapy', config });
+      return { ok: true, to };
+    } catch (e) {
+      return { ok: false, to, error: (e && e.message) || String(e), notConfigured: !!(e && e.kind === 'notConfigured') };
+    }
   });
   ipcMain.handle('notes:send', async () => {
     const last = store.load().notesCheck;

@@ -44,6 +44,7 @@ contextBridge.exposeInMainWorld('api', {
   onChartFinished: (cb) => ipcRenderer.on('chart-finished', (_e, r) => cb(r)),
   notesRun: (opts) => ipcRenderer.invoke('notes:run', opts || {}),
   notesSend: () => ipcRenderer.invoke('notes:send'),
+  notesTestEmail: () => ipcRenderer.invoke('notes:testEmail'),
   onNotesStep: (cb) => ipcRenderer.on('notes-step', (_e, s) => cb(s)),
   onNotesResult: (cb) => ipcRenderer.on('notes-result', (_e, r) => cb(r)),
   onNotesProgress: (cb) => ipcRenderer.on('notes-progress', (_e, p) => cb(p)),
