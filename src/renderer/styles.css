@@ -705,3 +705,17 @@ input[type="number"]::-webkit-outer-spin-button { -webkit-appearance: none; marg
   .nf-row { grid-template-columns: 1fr auto; }
   .nf-when { grid-column: 1 / -1; }
 }
+.nf-prog-head { display: flex; justify-content: space-between; align-items: flex-end; gap: 12px; }
+.nf-phase { font-size: 15px; font-weight: 650; margin-top: 4px; }
+.nf-prog-count { font-size: 13px; color: var(--muted); font-variant-numeric: tabular-nums; white-space: nowrap; }
+.nf-bar { height: 6px; background: var(--bg-2); border-radius: 99px; overflow: hidden; margin: 12px 0 10px; }
+.nf-bar > div { height: 100%; width: 0; background: var(--accent); border-radius: 99px; transition: width 0.3s ease; }
+.nf-tally { display: flex; flex-wrap: wrap; gap: 6px 16px; font-size: 13px; font-weight: 600; margin-bottom: 8px; }
+.nf-tally .ok { color: var(--good); } .nf-tally .late { color: var(--bad); } .nf-tally .unk { color: var(--muted); }
+.nf-feed { max-height: 320px; overflow-y: auto; border-top: 1px solid var(--line); }
+.nf-feed-row { padding: 8px 2px; border-bottom: 1px solid var(--line); animation: rise 0.2s ease; }
+.nf-feed-name { font-weight: 650; font-size: 13.5px; }
+.nf-feed-visit { display: flex; justify-content: space-between; align-items: baseline; gap: 10px; font-size: 12.5px; margin-top: 3px; }
+.nf-steps { margin-top: 10px; font-size: 12.5px; }
+.nf-steps summary { cursor: pointer; color: var(--muted); font-weight: 600; }
+.nf-steps .live-log { margin-top: 8px; }

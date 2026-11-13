@@ -1459,10 +1459,52 @@ $('#nfSendBtn').addEventListener('click', async () => {
   if (!r || !r.ok) toast(r && r.error ? r.error : 'Couldn\'t send the reminders.');
   else { toast(`${r.sent} reminder${r.sent === 1 ? '' : 's'} sent${r.failed ? ` · ${r.failed} not sent (see Sent)` : ''}.`); NF.tab = 'log'; renderNotes(); }
 });
+// Live progress: what it's doing now, how far along, and each client's result.
+const NFP = { ok: 0, need: 0, unknown: 0 };
+function nfPhase(text) {
+  const t = String(text || '').trim();
+  if (/^\(\d+\/\d+\)/.test(t)) return 'Checking each client\'s note…';
+  if (/sign|log ?in|security|verification|code/i.test(t)) return 'Signing in to Practice Fusion…';
+  if (/^\d{2}\/\d{2}\/\d{4}:|schedule/i.test(t)) return 'Reading the Practice Fusion schedule…';
+  if (/✉︎|email|reminder/i.test(t)) return 'Emailing reminders…';
+  if (/^Opening \d+ client/.test(t)) return 'Opening each client\'s note…';
+  return t.replace(/^\s*[⚠︎✓]\s*/, '');
+}
+function nfResult(v) {
+  if (v.note === 'done') return '<span class="nf-badge ok">✓ Complete</span>';
+  if (v.note === 'missing') return '<span class="nf-badge late">✗ No note yet</span>';
+  if (v.note === 'incomplete') return `<span class="nf-badge late">✗ ${escapeHtml(v.emptySections.join(', '))} not filled in</span>`;
+  return '<span class="nf-badge unk">? Couldn\'t read the note</span>';
+}
+function nfTally() {
+  $('#nfTally').innerHTML = NFP.ok + NFP.need + NFP.unknown
+    ? `<span class="ok">✓ ${NFP.ok} complete</span><span class="late">✗ ${NFP.need} need${NFP.need === 1 ? 's' : ''} the therapist</span>${NFP.unknown ? `<span class="unk">? ${NFP.unknown} couldn't be read</span>` : ''}` : '';
+}
+window.api.onNotesProgress((p) => {
+  if (!p) return;
+  $('#nfLiveCard').classList.remove('hidden');
+  const pct = p.total ? Math.round((p.done / p.total) * 100) : 0;
+  $('#nfBar').style.width = `${pct}%`;
+  $('#nfProgCount').textContent = p.total ? `${p.done} of ${p.total} client${p.total === 1 ? '' : 's'}` : '';
+  if (!p.patientName) return;
+  for (const v of p.visits) NFP[v.note === 'done' ? 'ok' : v.note === 'unknown' ? 'unknown' : 'need'] += 1;
+  nfTally();
+  const row = document.createElement('div');
+  row.className = 'nf-feed-row';
+  row.innerHTML = `<div class="nf-feed-name">${escapeHtml(p.patientName)}</div>${p.visits.map((v) => `
+    <div class="nf-feed-visit"><span class="muted">${escapeHtml(v.time || v.date)} · ${escapeHtml(v.therapist || '')}${v.source === 'schedule' ? ' · by schedule' : ''}</span>${nfResult(v)}</div>`).join('')}`;
+  $('#nfFeed').prepend(row);
+});
 window.api.onNotesStep((s) => {
   if (!s) return;
   const log = $('#nfLog');
-  if (s.reset) { log.innerHTML = ''; $('#nfLiveCard').classList.remove('hidden'); }
+  if (s.reset) {
+    log.innerHTML = ''; $('#nfFeed').innerHTML = ''; $('#nfBar').style.width = '0%'; $('#nfProgCount').textContent = '';
+    NFP.ok = NFP.need = NFP.unknown = 0; nfTally();
+    $('#nfLiveCard').classList.remove('hidden');
+    $('#nfLiveCard').scrollIntoView({ behavior: 'smooth', block: 'start' });
+  }
+  $('#nfPhase').textContent = nfPhase(s.text);
   const prev = log.querySelector('.live-line.cur'); if (prev) prev.classList.remove('cur');
   const line = document.createElement('div');
   line.className = 'live-line cur';
@@ -1470,7 +1512,7 @@ window.api.onNotesStep((s) => {
   log.appendChild(line); log.scrollTop = log.scrollHeight;
 });
 window.api.onNotesResult(async () => { settings = await window.api.getSettings(); renderNotes(); });
-window.api.onNotesFinished(() => { const c = $('#nfLog .live-line.cur'); if (c) c.classList.remove('cur'); });
+window.api.onNotesFinished(() => { const c = $('#nfLog .live-line.cur'); if (c) c.classList.remove('cur'); $('#nfPhase').textContent = 'Finished.'; });
 
 /* -------------------------------- events -------------------------------- */
 function fmtClock(iso) {

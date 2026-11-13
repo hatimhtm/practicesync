@@ -329,6 +329,32 @@ async function performNotesCheck({ dates, send = false, trigger = 'manual' }) {
   }
 }
 
+/** Extra Practice Fusion tabs that share the signed-in session (several charts
+ *  at once). A tab only counts once it shows the signed-in schedule; one that
+ *  lands on the login page is closed, and no more are tried — the run goes on in
+ *  the signed-in tab instead of waiting on a login screen. */
+const PF_SIGNED_OUT = /#\/login|securitycheck/i;
+async function extraPfTabs(context, page, count, step) {
+  const tabs = [];
+  for (let i = 0; i < count; i++) {
+    // Opened FROM the signed-in tab (like a click), so the new tab carries its
+    // sign-in — a blank new tab lands on Practice Fusion's login page.
+    const popup = page.waitForEvent('popup', { timeout: 8000 }).catch(() => null);
+    await page.evaluate((u) => { window.open(u, '_blank'); }, presets.PF.scheduleUrl).catch(() => {});
+    const t = (await popup) || (await context.newPage().catch(() => null));
+    if (!t) break;
+    if (!/#\/PF\//.test(t.url())) await t.goto(presets.PF.scheduleUrl, { waitUntil: 'domcontentloaded' }).catch(() => {});
+    const ok = await t.waitForSelector(presets.PF.nav.dateHeading, { timeout: 15000 }).then(() => true).catch(() => false);
+    if (!ok || PF_SIGNED_OUT.test(t.url())) {
+      await t.close().catch(() => {});
+      step('  Extra tabs aren\'t signed in to Practice Fusion — continuing in one tab.');
+      break;
+    }
+    tabs.push(t);
+  }
+  return tabs;
+}
+
 /** For each Seen visit: open the client's Timeline → Encounters, find the visit's
  *  encounter (appointment date + time) and read its Note — Subjective, Objective,
  *  Assessment and Plan must all be filled in. The schedule's "View in encounter" /
@@ -345,20 +371,16 @@ async function checkNoteTimelines(context, page, list, step) {
   const total = queue.length;
   if (!total) return;
   step(`Opening ${total} client${total === 1 ? '' : 's'}' notes…`);
-  const tabs = [page];
-  for (let i = 1; i < Math.min(3, total); i++) {
-    const t = await context.newPage().catch(() => null);
-    if (!t) continue;
-    await t.goto(presets.PF.scheduleUrl, { waitUntil: 'domcontentloaded' }).catch(() => {});
-    await t.waitForSelector(presets.PF.nav.dateHeading, { timeout: 20000 }).catch(() => {});
-    tabs.push(t);
-  }
+  const tabs = [page, ...(await extraPfTabs(context, page, Math.min(3, total) - 1, step))];
   let done = 0;
+  sendToRenderer('notes-progress', { done: 0, total });
   const said = (n) => (n.note === 'missing' ? `${n.time || n.date}: no note`
     : n.note === 'incomplete' ? `${n.time || n.date}: ${n.emptySections.join(', ')} not filled in`
     : n.note === 'unknown' ? `${n.time || n.date}: couldn't read the note` : `${n.time || n.date}: note complete ✓`);
   await Promise.all(tabs.map(async (tab) => {
     for (let group = queue.shift(); group; group = queue.shift()) {
+      // A tab that got signed out hands its client back and closes.
+      if (tab !== page && PF_SIGNED_OUT.test(tab.url())) { queue.unshift(group); await tab.close().catch(() => {}); return; }
       const name = group[0].patientName;
       const href = group.find((n) => n.href)?.href || '';
       let text = null;
@@ -376,6 +398,7 @@ async function checkNoteTimelines(context, page, list, step) {
         else n.note = 'done';
       }
       done += 1;
+      sendToRenderer('notes-progress', { done, total, patientName: name, visits: group.map((n) => ({ time: n.time, date: n.date, therapist: n.therapist, note: n.note, emptySections: n.emptySections || [], source: n.source })) });
       step(`(${done}/${total}) ${name} — ${group[0].source === 'schedule' ? 'couldn\'t open the chart; went by the schedule' : group.map(said).join(' · ')}`);
     }
   }));
@@ -747,16 +770,9 @@ function registerIpc() {
       const page = context.pages()[0] || (await context.newPage());
       const pf = await loginPracticeFusion(page, creds.practiceFusion, { onStep: step });
       if (!pf.ok) return { ok: false, error: pf.error };
-      // Several charts at once: extra tabs share the signed-in session.
-      const tabs = [page];
-      for (let i = 1; i < CHART_TABS; i++) {
-        const t = await context.newPage().catch(() => null);
-        if (!t) continue;
-        // Let each tab finish starting Practice Fusion before it's given a chart.
-        await t.goto(presets.PF.scheduleUrl, { waitUntil: 'domcontentloaded' }).catch(() => {});
-        await t.waitForSelector(presets.PF.nav.dateHeading, { timeout: 20000 }).catch(() => {});
-        tabs.push(t);
-      }
+      // Several charts at once: extra tabs share the signed-in session (only
+      // tabs that are really signed in are used).
+      const tabs = [page, ...(await extraPfTabs(context, page, CHART_TABS - 1, step))];
       await page.bringToFront().catch(() => {});
       const providers = (s.providers && s.providers.length) ? s.providers : DEMO_PROVIDERS;
       const mainDoctors = (s.mainDoctors && s.mainDoctors.length) ? s.mainDoctors : DEMO_MAIN_DOCTORS;

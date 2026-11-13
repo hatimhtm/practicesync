@@ -323,8 +323,17 @@
         </div>
 
         <div class="card live-card hidden" id="nfLiveCard">
-          <div class="card-k">Live</div>
-          <div class="live-log" id="nfLog"></div>
+          <div class="nf-prog-head">
+            <div>
+              <div class="card-k" style="margin:0">Live</div>
+              <div class="nf-phase" id="nfPhase">Starting…</div>
+            </div>
+            <div class="nf-prog-count" id="nfProgCount"></div>
+          </div>
+          <div class="nf-bar"><div id="nfBar"></div></div>
+          <div class="nf-tally" id="nfTally"></div>
+          <div class="nf-feed" id="nfFeed"></div>
+          <details class="nf-steps"><summary>Every step</summary><div class="live-log" id="nfLog"></div></details>
         </div>
 
         <div class="seg seg-sm" id="nfTabs">

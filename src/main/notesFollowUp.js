@@ -131,6 +131,8 @@ async function readVisitNote(page, visit) {
   const at = apptDateTime(visit.date, visit.time);
   if (!at) return null;
   const surname = String(visit.therapist || '').trim().split(/\s+/).pop().toLowerCase();
+  // If Practice Fusion opens the note in a new tab, read it there and close it.
+  const popup = page.waitForEvent('popup', { timeout: 1500 }).catch(() => null);
   const opened = await page.evaluate(({ y, mo, d, h, mi, surname }) => {
     const h12 = ((h + 11) % 12) + 1;
     const ap = h < 12 ? 'AM' : 'PM';
@@ -147,6 +149,15 @@ async function readVisitNote(page, visit) {
     return true;
   }, { y: at.getFullYear(), mo: at.getMonth() + 1, d: at.getDate(), h: at.getHours(), mi: at.getMinutes(), surname }).catch(() => false);
   if (!opened) return null;
+  const extra = await popup;
+  if (extra) {
+    try { await extra.waitForLoadState('domcontentloaded').catch(() => {}); return await readNoteOn(extra); } finally { await extra.close().catch(() => {}); }
+  }
+  return readNoteOn(page);
+}
+
+/** Read the Note boxes of the encounter open on `page`. */
+async function readNoteOn(page) {
   const ALL4 = new RegExp(SOAP.map((w) => `(?=[\\s\\S]*\\b${w}\\b)`).join(''), 'i');
   if ((await settledText(page, [ALL4], 20000)) == null) return null;
   const read = () => page.evaluate((names) => {
@@ -174,8 +185,8 @@ async function readVisitNote(page, visit) {
   }, SOAP).catch(() => null);
   // The boxes fill in after the page appears: read until two reads agree.
   let last = null;
-  for (let i = 0; i < 8; i++) {
-    await new Promise((r) => setTimeout(r, 700));
+  for (let i = 0; i < 10; i++) {
+    await new Promise((r) => setTimeout(r, 450));
     const cur = await read();
     if (cur && last && JSON.stringify(cur) === JSON.stringify(last)) return cur;
     last = cur;
