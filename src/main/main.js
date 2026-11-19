@@ -1157,6 +1157,22 @@ app.whenReady().then(() => {
   if ((store.load().chartReviewVersion || 0) < 3) {
     try { store.save({ chartReview: null, chartFollowUps: [], chartReviewVersion: 3 }); } catch {}
   }
+  // A Mac with no staff list yet loads "Hope staff emails.txt" from the Desktop or
+  // Downloads by itself (staff emails never ship inside the app: its code is public).
+  try {
+    const cur = store.load();
+    if (!(cur.staff && cur.staff.length)) {
+      for (const dir of [app.getPath('desktop'), app.getPath('downloads')]) {
+        const file = path.join(dir, 'Hope staff emails.txt');
+        if (!fs.existsSync(file)) continue;
+        const { staff: incoming } = notes.parseStaffList(fs.readFileSync(file, 'utf8'));
+        if (!incoming.length) continue;
+        store.save({ staff: notes.mergeStaff([], incoming).staff });
+        setTimeout(() => notify(`Loaded ${incoming.length} staff emails for the notes reminders.`), 4000);
+        break;
+      }
+    }
+  } catch {}
   // Emails typed in earlier versions (one per therapist) become staff entries, once.
   try {
     const cur = store.load();

@@ -1414,17 +1414,36 @@ function renderNotes() {
   notIn.innerHTML = notOnList.length ? `<b>${notOnList.length} therapist${notOnList.length === 1 ? '' : 's'} from Doctors &amp; Codes ${notOnList.length === 1 ? 'isn\'t' : 'aren\'t'} on the staff list</b> (no reminders for ${notOnList.length === 1 ? 'them' : 'these'} until added): ${notOnList.map((n) => `<button class="nf-chip" data-add="${escapeHtml(n)}">+ ${escapeHtml(n)}</button>`).join(' ')}` : '';
   $$('#nfNotIn [data-add]').forEach((c) => c.addEventListener('click', () => { $('#nfAddPanel').classList.remove('hidden'); $('#nfAddName').value = c.dataset.add; $('#nfAddEmail').focus(); }));
   if (!$('#nfEmailList').contains(document.activeElement)) {
-    $('#nfEmailList').innerHTML = staff.filter((p) => !q || `${p.name} ${p.role} ${p.email}`.toLowerCase().includes(q)).map((p) => `
+    const rows = staff.filter((p) => !q || `${p.name} ${p.role} ${p.email}`.toLowerCase().includes(q));
+    $('#nfEmailList').innerHTML = rows.length ? `
+      <div class="nf-staff-row nf-staff-cols"><span>Staff</span><span class="r">Email</span><span>Auto-send</span><span></span></div>
+      ${rows.map((p) => `
       <div class="nf-staff-row${p.enabled === false ? ' off' : ''}">
         <div class="nf-staff-name"><b>${escapeHtml(p.name)}</b><span class="muted">${escapeHtml(p.role || '')}</span></div>
-        <input type="email" data-id="${escapeHtml(p.id)}" value="${escapeHtml(p.email || '')}" placeholder="email address" />
-        <label class="nf-switch" title="${p.enabled === false ? 'Off — no automatic reminders' : 'On — gets reminders automatically'}"><input type="checkbox" data-id="${escapeHtml(p.id)}" ${p.enabled === false ? '' : 'checked'} /><span></span></label>
-        <button class="nf-del" data-id="${escapeHtml(p.id)}" title="Remove from the list" aria-label="Remove ${escapeHtml(p.name)}">✕</button>
-      </div>`).join('') || `<div class="client-empty"><strong>${staff.length ? 'No one matches' : 'No staff yet'}</strong><span>${staff.length ? '' : 'Import the staff list or add people one by one.'}</span></div>`;
-    $$('#nfEmailList input[type="email"]').forEach((inp) => inp.addEventListener('change', async () => {
-      const v = inp.value.trim();
-      if (v && !nfEmailOk(v)) { toast('That email doesn\'t look right.'); return; }
-      await nfStaffSave((settings.staff || []).map((p) => (p.id === inp.dataset.id ? { ...p, email: v.toLowerCase() } : p)));
+        <button class="nf-staff-email${p.email ? '' : ' empty'}" data-id="${escapeHtml(p.id)}" title="Click to change">${escapeHtml(p.email || 'Add email')}</button>
+        <label class="nf-switch" title="${p.enabled === false ? 'Off — no automatic reminders' : 'On — gets reminders automatically'}"><input type="checkbox" data-id="${escapeHtml(p.id)}" ${p.enabled === false ? '' : 'checked'} aria-label="Send ${escapeHtml(p.name)} reminders automatically" /><span></span></label>
+        <button class="nf-del" data-id="${escapeHtml(p.id)}" title="Delete from the list" aria-label="Delete ${escapeHtml(p.name)}">✕</button>
+      </div>`).join('')}` : `<div class="client-empty"><strong>${staff.length ? 'No one matches' : 'No staff yet'}</strong><span>${staff.length ? '' : 'Add people with Add staff, or Import list.'}</span></div>`;
+    // The email shows as text; clicking it edits it in place (Enter saves, Esc cancels).
+    $$('#nfEmailList .nf-staff-email').forEach((btn) => btn.addEventListener('click', () => {
+      const p = (settings.staff || []).find((x) => x.id === btn.dataset.id);
+      if (!p) return;
+      const inp = document.createElement('input');
+      inp.type = 'email'; inp.className = 'nf-staff-email-edit'; inp.value = p.email || ''; inp.placeholder = 'email address';
+      btn.replaceWith(inp); inp.focus(); inp.select();
+      let done = false;
+      const finish = async (save) => {
+        if (done) return;
+        done = true;
+        const v = inp.value.trim().toLowerCase();
+        if (save && v !== (p.email || '')) {
+          if (v && !nfEmailOk(v)) { toast('That email doesn\'t look right.'); done = false; inp.focus(); return; }
+          await nfStaffSave((settings.staff || []).map((x) => (x.id === p.id ? { ...x, email: v } : x)));
+          toast(`${p.name}: email saved.`);
+        } else { inp.remove(); renderNotes(); }
+      };
+      inp.addEventListener('keydown', (e) => { if (e.key === 'Enter') finish(true); if (e.key === 'Escape') finish(false); });
+      inp.addEventListener('blur', () => finish(true));
     }));
     $$('#nfEmailList input[type="checkbox"]').forEach((c) => c.addEventListener('change', async () => {
       await nfStaffSave((settings.staff || []).map((p) => (p.id === c.dataset.id ? { ...p, enabled: c.checked } : p)));
