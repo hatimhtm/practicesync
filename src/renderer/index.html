@@ -373,8 +373,9 @@
               <div class="muted nf-help" id="nfEmailCount"></div>
             </div>
             <div class="row" style="margin:0;gap:8px;flex-wrap:wrap">
-              <button class="btn" id="nfImportBtn">Import list</button>
-              <button class="btn btn-primary" id="nfAddBtn">Add staff</button>
+              <button class="btn btn-primary" id="nfUploadBtn">Upload Excel sheet</button>
+              <button class="btn" id="nfImportBtn">Paste a list</button>
+              <button class="btn" id="nfAddBtn">Add staff</button>
             </div>
           </div>
           <p class="muted nf-help">The switch is for sending that person's reminders automatically. Off = they never get one (the daily check and the Email reminders button both skip them).</p>
@@ -391,7 +392,7 @@
           <div class="nf-panel hidden" id="nfImportPanel">
             <p class="muted nf-help" style="margin:0 0 8px">One person per line: <b>name, role, email</b> (tabs or commas). Someone already on the list is updated, and keeps their on/off switch.</p>
             <textarea id="nfImportText" rows="5" placeholder="Jane Doe&#9;PT&#9;jane@example.com"></textarea>
-            <div class="row" style="margin:8px 0 0;gap:8px"><button class="btn btn-primary" id="nfImportGo">Import</button><button class="btn" id="nfImportFile">Choose a file…</button><button class="btn" id="nfImportCancel">Cancel</button></div>
+            <div class="row" style="margin:8px 0 0;gap:8px"><button class="btn btn-primary" id="nfImportGo">Import</button><button class="btn" id="nfImportFile">Choose a file (Excel, CSV, text)…</button><button class="btn" id="nfImportCancel">Cancel</button></div>
           </div>
 
           <div class="client-toolbar" style="margin-top:12px">

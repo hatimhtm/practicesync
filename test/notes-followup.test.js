@@ -235,5 +235,21 @@ const providers = [
   check('older per-therapist emails still work when there is no staff entry', nf.emailFor('Old Way', { 'old way': 'old@x.com' }, people) === 'old@x.com');
 })();
 
+(function excelUpload() {
+  console.log('# staff list from an Excel sheet');
+  const fs = require('fs');
+  const x = require(path.join(__dirname, '..', 'src', 'main', 'xlsx'));
+  const rows = x.readFirstSheet(fs.readFileSync(path.join(__dirname, 'fixtures', 'staff-sample.xlsx')));
+  check('reads the first sheet only, header included', rows.length === 6 && rows[0][3] === 'WORK Email');
+  const { staff } = nf.parseStaffList(x.staffLinesFromRows(rows));
+  check('First + Last Name joined, role and email from their columns', staff[0].name === 'Jane Doe' && staff[0].role === 'PT' && staff[0].email === 'jane.doe@example.com');
+  check('"Lee - Park" stays one last name', staff.some((p) => p.name === 'Sam Lee-Park' && p.role === 'OT'));
+  check('a row with "N/A" for email is left out', staff.length === 4 && !staff.some((p) => p.name === 'Robin Shaw'));
+  check('a sheet with no header row still works', nf.parseStaffList(x.staffLinesFromRows([['Kim Lo', 'PT', 'kim@example.com']])).staff[0].name === 'Kim Lo');
+  let threw = false;
+  try { x.readFirstSheet(Buffer.from('not a spreadsheet')); } catch { threw = true; }
+  check('a file that isn\'t an .xlsx is refused', threw);
+})();
+
 console.log(`\n${pass} passed, ${fails.length} failed`);
 if (fails.length) process.exit(1);

@@ -1406,7 +1406,7 @@ function renderNotes() {
   const q = ($('#nfEmailSearch').value || '').toLowerCase();
   const staff = (settings.staff || []).slice().sort((x, y) => x.name.localeCompare(y.name));
   const nOn = staff.filter((p) => p.enabled !== false).length;
-  $('#nfEmailCount').textContent = staff.length ? `${staff.length} staff · ${nOn} switched on · ${staff.filter((p) => !nfEmailOk(p.email || '')).length} without an email` : 'No staff yet — use Import list or Add staff.';
+  $('#nfEmailCount').textContent = staff.length ? `${staff.length} staff · ${nOn} switched on · ${staff.filter((p) => !nfEmailOk(p.email || '')).length} without an email` : 'No staff yet — use Upload Excel sheet, Paste a list, or Add staff.';
   // Roster therapists who aren't on the list: their reminders have nowhere to go.
   const notOnList = nfTherapistNames().filter((n) => !nfMatch(n).found && !nfMatch(n).ambiguous);
   const notIn = $('#nfNotIn');
@@ -1487,10 +1487,12 @@ const nfImported = async (r) => {
   settings = await window.api.getSettings();
   await nfRefreshMatch();
   $('#nfImportText').value = ''; $('#nfImportPanel').classList.add('hidden');
-  toast(`${r.added} added, ${r.updated} updated${r.skipped ? `, ${r.skipped} line${r.skipped === 1 ? '' : 's'} skipped (no email)` : ''}.`);
+  toast(`Saved on this laptop: ${r.added} added, ${r.updated} updated${r.skipped ? `, ${r.skipped} skipped (no email)` : ''}.`);
 };
 $('#nfImportGo').addEventListener('click', async () => nfImported(await window.api.staffImport($('#nfImportText').value)));
 $('#nfImportFile').addEventListener('click', async () => nfImported(await window.api.staffImportFile()));
+// Upload: pick the Excel sheet (or CSV) — it's read and saved on this laptop at once.
+$('#nfUploadBtn').addEventListener('click', async () => nfImported(await window.api.staffImportFile()));
 const nfAll = async (on) => {
   const n = (settings.staff || []).length;
   if (!n || !confirm(`Switch ${on ? 'ON' : 'OFF'} automatic reminders for all ${n} staff?`)) return;

@@ -937,9 +937,15 @@ function registerIpc() {
   };
   ipcMain.handle('staff:import', (_e, { text }) => importStaff(text));
   ipcMain.handle('staff:importFile', async () => {
-    const r = await dialog.showOpenDialog(mainWindow, { title: 'Choose the staff emails file', defaultPath: app.getPath('desktop'), properties: ['openFile'], filters: [{ name: 'Text or CSV', extensions: ['txt', 'csv', 'tsv'] }] });
+    const r = await dialog.showOpenDialog(mainWindow, { title: 'Upload the staff list', defaultPath: app.getPath('downloads'), properties: ['openFile'], filters: [{ name: 'Excel, CSV or text', extensions: ['xlsx', 'csv', 'tsv', 'txt'] }] });
     if (r.canceled || !r.filePaths[0]) return { ok: false, canceled: true };
-    try { return importStaff(fs.readFileSync(r.filePaths[0], 'utf8')); } catch (e) { return { ok: false, error: `Couldn't read that file: ${(e && e.message) || e}` }; }
+    const file = r.filePaths[0];
+    try {
+      // An Excel sheet: read its first sheet; each row with an email is a person.
+      if (/\.xlsx$/i.test(file)) return importStaff(require('./xlsx').staffLinesFromRows(require('./xlsx').readFirstSheet(fs.readFileSync(file))));
+      if (/\.xls$/i.test(file)) return { ok: false, error: 'That\'s an old Excel file (.xls). In Excel, use File → Save As → Excel Workbook (.xlsx), then upload that.' };
+      return importStaff(fs.readFileSync(file, 'utf8'));
+    } catch (e) { return { ok: false, error: `Couldn't read that file: ${(e && e.message) || e}` }; }
   });
   ipcMain.handle('staff:match', (_e, names) => {
     const staff = store.load().staff || [];
