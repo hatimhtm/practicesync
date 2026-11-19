@@ -311,7 +311,7 @@ async function performNotesCheck({ dates, send = false, trigger = 'manual' }) {
     const s = store.load();
     const providers = (s.providers && s.providers.length) ? s.providers : DEMO_PROVIDERS;
     const list = notes.findNotes(visits, { providers, now: new Date() });
-    await checkNoteTimelines(context, page, list, step);
+    await checkNoteTimelines(context, page, list, step, providers);
     const missing = list.filter((n) => n.note === 'missing' || n.note === 'incomplete');
     const unknown = list.filter((n) => n.note === 'unknown').length;
     step(`${list.length} visit${list.length === 1 ? '' : 's'} marked Seen · ${missing.length} with a note missing or not filled in${unknown ? ` · ${unknown} couldn't be read` : ''}.`);
@@ -377,7 +377,7 @@ async function toScheduleDay(tab, date) {
  *  If the name can't be clicked, the chart is opened by its address instead; if
  *  the chart can't be opened at all, the schedule's "View in encounter" / "Start
  *  Encounter" link decides. Read only. Up to 3 signed-in tabs at once. */
-async function checkNoteTimelines(context, page, list, step) {
+async function checkNoteTimelines(context, page, list, step, providers = []) {
   // One job per client per day: their visits that day are on one Timeline.
   const jobs = new Map();
   for (const n of list) {
@@ -389,7 +389,7 @@ async function checkNoteTimelines(context, page, list, step) {
   const total = queue.length;
   if (!total) return;
   step(`Opening ${total} client${total === 1 ? '' : 's'}' notes…`);
-  // A step that fails leaves a screenshot + page map here, to fix it from.
+  // A step that fails — or a note that's flagged — leaves a screenshot + page map here.
   notes.setDebugDir(path.join(app.getPath('desktop'), 'Hope Notes Check'));
   const tabs = [page, ...(await extraPfTabs(context, page, Math.min(3, total) - 1, step))];
   let done = 0;
@@ -397,36 +397,71 @@ async function checkNoteTimelines(context, page, list, step) {
   const said = (n) => (n.note === 'missing' ? `${n.time || n.date}: no note`
     : n.note === 'incomplete' ? `${n.time || n.date}: ${n.emptySections.join(', ')} not filled in`
     : n.note === 'unknown' ? `${n.time || n.date}: couldn't read the note` : `${n.time || n.date}: note complete ✓`);
+  const flagged = (n) => n.note === 'missing' || n.note === 'incomplete';
+
+  // Steps 1–2: the client's Timeline (schedule → name → Timeline; the chart's address
+  // is the fallback). `fresh` reloads the schedule first, for a second look.
+  const openGroup = async (tab, group, fresh) => {
+    const name = group[0].patientName;
+    const href = group.find((n) => n.href)?.href || '';
+    if (fresh) await tab.goto(presets.PF.scheduleUrl, { waitUntil: 'domcontentloaded' }).catch(() => {});
+    let text = null;
+    step(`${name}: opening the chart from the schedule…`);
+    if (!(await toScheduleDay(tab, group[0].date))) { step(`  couldn't open the schedule on ${group[0].date}.`); await notes.snapshot(tab, 'schedule-day'); }
+    else if (!(await notes.openClientFromSchedule(tab, group[0], presets.PF.selectors))) { step('  clicking the name didn\'t open the chart.'); await notes.snapshot(tab, 'client-name-click'); }
+    else {
+      step('  clicking Timeline…');
+      text = await notes.openTimeline(tab);
+      if (text == null) { step('  the Timeline didn\'t open.'); await notes.snapshot(tab, 'timeline'); }
+    }
+    if (text == null) { step('  opening the chart by its address instead…'); text = await chartReview.readEncounters(tab, name, href, step).catch(() => null); }
+    return text;
+  };
+
+  // Steps 3–4: each visit's Office Visit → scroll down → the four Note boxes.
+  const judge = async (tab, group, visits, text, diag) => {
+    const name = group[0].patientName;
+    const href = group.find((n) => n.href)?.href || '';
+    for (const [i, n] of visits.entries()) {
+      // The client's next visit: back to their Timeline.
+      if (i > 0 && text != null) text = (await notes.openTimeline(tab)) || (await chartReview.readEncounters(tab, name, href, step).catch(() => null));
+      if (text == null) { n.source = 'schedule'; continue; }
+      n.source = 'chart';
+      n.emptySections = [];
+      const only = group.filter((x) => x.therapist === n.therapist).length === 1;
+      if (!notes.noteInTimeline(text, { ...n, onlyVisitToday: only }, providers)) {
+        n.note = 'missing';
+        step(`  ${n.time}: no encounter for ${n.therapist || 'this therapist'} on the Timeline — no note.`);
+        if (diag) await notes.snapshot(tab, `missing-${n.time}`, `No encounter matched: ${n.time}, therapist "${n.therapist}", visits that day for this client: ${group.map((x) => `${x.time}/${x.therapist}`).join('; ')}`);
+        continue;
+      }
+      const r = await notes.readVisitNote(tab, n, step).catch(() => null);
+      const gaps = r ? notes.emptySections(r.sections) : null;
+      n.signed = r ? r.status : '';
+      if (gaps == null) n.note = 'unknown';
+      else if (gaps.length) {
+        n.note = 'incomplete'; n.emptySections = gaps;
+        if (diag) await notes.snapshot(tab, `incomplete-${n.time}`, `Read ${n.time} (${n.therapist}): ${notes.SOAP.map((b) => `${b}=${r.sections[b] == null ? 'not found' : notes.writtenText(r.sections[b]).length + ' chars'}`).join(', ')}`);
+      } else n.note = 'done';
+    }
+    return text;
+  };
+
   await Promise.all(tabs.map(async (tab) => {
     for (let group = queue.shift(); group; group = queue.shift()) {
       // A tab that got signed out hands its client back and closes.
       if (tab !== page && PF_SIGNED_OUT.test(tab.url())) { queue.unshift(group); await tab.close().catch(() => {}); return; }
       const name = group[0].patientName;
-      const href = group.find((n) => n.href)?.href || '';
-      // 1) Schedule → click the client's name → 2) Timeline.
-      let text = null;
-      step(`${name}: opening the chart from the schedule…`);
-      if (!(await toScheduleDay(tab, group[0].date))) { step(`  couldn't open the schedule on ${group[0].date}.`); await notes.snapshot(tab, 'schedule-day'); }
-      else if (!(await notes.openClientFromSchedule(tab, group[0], presets.PF.selectors))) { step('  clicking the name didn\'t open the chart.'); await notes.snapshot(tab, 'client-name-click'); }
-      else {
-        step('  clicking Timeline…');
-        text = await notes.openTimeline(tab);
-        if (text == null) { step('  the Timeline didn\'t open.'); await notes.snapshot(tab, 'timeline'); }
-      }
-      if (text == null) { step('  opening the chart by its address instead…'); text = await chartReview.readEncounters(tab, name, href, step).catch(() => null); }
-      for (const [i, n] of group.entries()) {
-        // The client's next visit: back to their Timeline.
-        if (i > 0 && text != null) text = (await notes.openTimeline(tab)) || (await chartReview.readEncounters(tab, name, href, step).catch(() => null));
-        if (text == null) { n.source = 'schedule'; continue; }
-        n.source = 'chart';
-        if (!notes.noteInTimeline(text, n)) { n.note = 'missing'; step(`  ${n.time}: no encounter on the Timeline — no note.`); continue; }
-        // 3) Office Visit → 4) scroll down to the Note and read it.
-        const r = await notes.readVisitNote(tab, n, step).catch(() => null);
-        const gaps = r ? notes.emptySections(r.sections) : null;
-        n.signed = r ? r.status : '';
-        if (gaps == null) n.note = 'unknown';
-        else if (gaps.length) { n.note = 'incomplete'; n.emptySections = gaps; }
-        else n.note = 'done';
+      let text = await openGroup(tab, group, false);
+      await judge(tab, group, group, text, false);
+      // A flag means a reminder to a therapist: look again, from a fresh page load,
+      // and keep it only when the second look agrees. A different answer wins.
+      const doubt = group.filter(flagged);
+      if (doubt.length) {
+        step(`  ${doubt.map((n) => n.time || n.date).join(', ')}: looks ${doubt.some((n) => n.note === 'incomplete') ? 'incomplete' : 'missing'} — checking again to be sure…`);
+        const again = await openGroup(tab, group, true);
+        if (again == null) { for (const n of doubt) n.note = 'unknown'; step('  couldn\'t open the chart again to confirm — not flagged.'); }
+        else await judge(tab, group, doubt, again, true);
       }
       done += 1;
       sendToRenderer('notes-progress', { done, total, patientName: name, visits: group.map((n) => ({ time: n.time, date: n.date, therapist: n.therapist, note: n.note, emptySections: n.emptySections || [], source: n.source })) });

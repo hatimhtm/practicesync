@@ -175,5 +175,36 @@ const providers = [
   void now;
 })();
 
+(function sameTimeVisits() {
+  console.log('# visits at the same time with different therapists');
+  const roster = [{ name: 'Jessica Trujillo' }, { name: 'Nardeen Abdelsayed' }, { name: 'Eileen McGonegal' }];
+  const t = [
+    'TYPE/SOURCE', 'DETAILS', 'STATUS',
+    'Office Visit', 'Jessica Trujillo', 'SOAP Note', 'CC: * (Appt time: 11/13/2026 10:15:00 AM)', '11/13/2026',
+    'Office Visit', 'Eileen McGonegal CCC-SLP', 'SOAP Note', 'CC: * (Appt time: 11/13/2026 9:30:00 AM)', '11/13/2026',
+    'Office Visit', 'Eileen McGonegal CCC-SLP', 'SOAP Note', 'CC: * Gym session', '11/11/2026',
+    'Office Visit', 'Nardeen Abdelsayed DPT', 'SOAP Note', 'CC: * (Appt time: 11/09/2026 1:00:00 PM)', '11/09/2026',
+  ].join('\n');
+  const v = (date, time, therapist, extra = {}) => ({ date, time, therapist, ...extra });
+  check('Jessica\'s 10:15 note is Jessica\'s', nf.noteInTimeline(t, v('11/13/2026', '10:15 AM', 'Jessica Trujillo'), roster));
+  check('Nardeen has NO note at 10:15 — Jessica\'s encounter at that time isn\'t hers', !nf.noteInTimeline(t, v('11/13/2026', '10:15 AM', 'Nardeen Abdelsayed'), roster));
+  check('Eileen\'s 9:30 note', nf.noteInTimeline(t, v('11/13/2026', '09:30 AM', 'Eileen McGonegal'), roster));
+  check('an encounter with no appointment link: that day + that therapist', nf.noteInTimeline(t, v('11/11/2026', '09:30 AM', 'Eileen McGonegal'), roster));
+  check('Nardeen\'s note made at another time: hers when it\'s her only visit that day', nf.noteInTimeline(t, v('11/09/2026', '01:30 PM', 'Nardeen Abdelsayed', { onlyVisitToday: true }), roster));
+  check('…but not when she has two visits that day', !nf.noteInTimeline(t, v('11/09/2026', '01:30 PM', 'Nardeen Abdelsayed', { onlyVisitToday: false }), roster));
+  const unnamed = 'TYPE/SOURCE\nOffice Visit\nSOAP Note\nCC: * (Appt time: 11/13/2026 10:15:00 AM)\n11/13/2026';
+  check('an encounter that names no known therapist can\'t be told apart — counts', nf.noteInTimeline(unnamed, v('11/13/2026', '10:15 AM', 'Nardeen Abdelsayed'), roster));
+  const single = 'TYPE/SOURCE\nOffice Visit\nGianna Hernandez PT\nSOAP Note\nCC: * (Appt time: 11/13/2026 1:30:00 PM)\n11/13/2026';
+  check('a roster name that is only a first name still matches', nf.noteInTimeline(single, v('11/13/2026', '01:30 PM', 'Gianna'), [{ name: 'Gianna' }, { name: 'Jessica Trujillo' }]));
+})();
+
+(function unreadableIsNotEmpty() {
+  console.log('# a box that can\'t be read is never called empty');
+  const four = { Subjective: 'Pt reports improvement.', Objective: 'Gait trained 4x.', Assessment: 'Progressing.', Plan: 'Continue 2x/week.' };
+  check('all four written → complete', nf.emptySections(four).length === 0);
+  check('one box not found → can\'t tell (null), not complete and not empty', nf.emptySections({ ...four, Plan: null }) === null);
+  check('a short but real Plan counts as written', nf.emptySections({ ...four, Plan: 'POC 2x' }).length === 0);
+})();
+
 console.log(`\n${pass} passed, ${fails.length} failed`);
 if (fails.length) process.exit(1);

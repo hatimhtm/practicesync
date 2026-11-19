@@ -9,7 +9,7 @@
  * Read only: nothing in Practice Fusion is changed.
  */
 
-const { matchProvider, isNonPatient } = require('./model');
+const { matchProvider, isNonPatient, normalizeName } = require('./model');
 const { parseEncounters, therapistsIn, settledText } = require('./chartReview');
 
 const DUE_HOURS = 24;
@@ -82,18 +82,37 @@ function findNotes(visits, { providers = [], now = new Date() } = {}) {
  * time is the note; a row on that day with no appointment time counts when it
  * names the visit's therapist.
  */
-function noteInTimeline(text, { date, time, therapist } = {}) {
+function noteInTimeline(text, { date, time, therapist, onlyVisitToday = false } = {}, providers = []) {
   const at = apptDateTime(date, time);
   if (!at) return false;
   const sameDay = (d) => d && d.getFullYear() === at.getFullYear() && d.getMonth() === at.getMonth() && d.getDate() === at.getDate();
   const APPT = /appt\s*time:\s*(\d{1,2}\/\d{1,2}\/\d{4})\s+(\d{1,2}:\d{2})(?::\d{2})?\s*([AP]M)/ig;
   const hasTime = !!/(\d{1,2}):(\d{2})\s*[AP]\.?M/i.exec(String(time || ''));
-  for (const { date: rowDay, chunk } of parseEncounters(text)) {
-    const appts = [...chunk.matchAll(APPT)].map((m) => apptDateTime(m[1].replace(/^(\d)\//, '0$1/').replace(/\/(\d)\//, '/0$1/'), `${m[2]} ${m[3]}`));
-    if (appts.some((a) => a && (hasTime ? a.getTime() === at.getTime() : sameDay(a)))) return true;
-    if (!appts.length && sameDay(rowDay) && therapist && therapistsIn(chunk, [{ name: therapist }]).length) return true;
+  const rows = parseEncounters(text).map(({ date: rowDay, chunk }) => ({
+    rowDay, chunk,
+    appts: [...chunk.matchAll(APPT)].map((m) => apptDateTime(m[1].replace(/^(\d)\//, '0$1/').replace(/\/(\d)\//, '/0$1/'), `${m[2]} ${m[3]}`)),
+  }));
+  // Visits at the same time with different therapists (e.g. OT and PT at 10:15)
+  // each have their own encounter — the one that names THIS therapist is theirs.
+  const mine = (chunk) => !!therapist && chunkNames(chunk, therapist);
+  const someoneElse = (chunk) => (providers || []).some((p) => p.name !== therapist && chunkNames(chunk, p.name));
+  const atTime = rows.filter((r) => r.appts.some((a) => a && (hasTime ? a.getTime() === at.getTime() : sameDay(a))));
+  if (atTime.length) {
+    if (!therapist || atTime.some((r) => mine(r.chunk))) return true;
+    if (!atTime.some((r) => someoneElse(r.chunk))) return true; // names no one we know: can't tell them apart
   }
-  return false;
+  // An encounter made without the appointment's link has no "Appt time"; one made
+  // at another time is still this visit's when it's the therapist's only visit that day.
+  return rows.some((r) => sameDay(r.rowDay) && mine(r.chunk) && (!r.appts.some(Boolean) || onlyVisitToday));
+}
+
+/** Does this piece of Timeline text name the therapist ("Nardeen Abdelsayed DPT")?
+ *  A roster name that's just a first name matches as a whole word. */
+function chunkNames(chunk, name) {
+  const toks = normalizeName(name).split(' ').filter((t) => t.length > 1);
+  if (!toks.length) return false;
+  const norm = ` ${normalizeName(chunk)} `;
+  return toks.length === 1 ? norm.includes(` ${toks[0]} `) : norm.includes(` ${toks[0]} `) && norm.includes(` ${toks[toks.length - 1]} `);
 }
 
 /* ------------------------------ the note itself ------------------------------ */
@@ -117,9 +136,9 @@ function writtenText(text) {
 /** The boxes left empty, e.g. ['Objective', 'Plan']; [] = all filled. null when the
  *  note couldn't be read (fewer than two of the boxes found on the page). */
 function emptySections(sections) {
-  const found = SOAP.filter((n) => sections && typeof sections[n] === 'string');
-  if (found.length < 2) return null;
-  return SOAP.filter((n) => writtenText(sections[n]).length < 10);
+  // A box that couldn't be found or read is "can't tell" — never "empty".
+  if (!sections || SOAP.some((n) => typeof sections[n] !== 'string')) return null;
+  return SOAP.filter((n) => writtenText(sections[n]).length < 3);
 }
 
 /* -------- the clicks from the recorded walkthrough (read only, real clicks) -------- */
@@ -202,19 +221,26 @@ async function readVisitNote(page, visit, say = () => {}) {
       .filter((e) => test(e.textContent || '') && ![...e.children].some((c) => test(c.textContent || '')));
     const starts = deepest((t) => appt.test(t));
     if (!starts.length && surname) starts.push(...deepest((t) => day.test(t) && !/appt\s*time/i.test(t)));
+    // Every row with this appointment; the one naming this therapist wins (two
+    // therapists can have visits at the same time).
+    const cands = [];
     for (const start of starts) {
       for (let box = start; box && box !== document.body; box = box.parentElement) {
         const link = visitLink(box);
         if (!link) continue;
         if (!appt.test(box.textContent || '') && !((box.textContent || '').toLowerCase().includes(surname) && day.test(box.textContent || ''))) break;
-        (link.closest('a, button, [role="link"]') || link).setAttribute('data-hope-click', '1');
-        const soap = [...box.querySelectorAll('*')].find((x) => /^soap note$/i.test(own(x)));
-        if (soap) soap.setAttribute('data-hope-click', '2');
-        if (!box.hasAttribute('data-hope-click')) box.setAttribute('data-hope-click', '3');
-        return true;
+        if (!cands.some((c) => c.box === box)) cands.push({ box, link });
+        break;
       }
     }
-    return false;
+    const pick = cands.find((c) => surname && (c.box.textContent || '').toLowerCase().includes(surname)) || cands[0];
+    if (!pick) return false;
+    const { box, link } = pick;
+    (link.closest('a, button, [role="link"]') || link).setAttribute('data-hope-click', '1');
+    const soap = [...box.querySelectorAll('*')].find((x) => /^soap note$/i.test(own(x)));
+    if (soap) soap.setAttribute('data-hope-click', '2');
+    if (!box.hasAttribute('data-hope-click')) box.setAttribute('data-hope-click', '3');
+    return true;
   }, { y: at.getFullYear(), mo: at.getMonth() + 1, d: at.getDate(), h: at.getHours(), mi: at.getMinutes(), surname }).catch(() => false);
   if (!marked) {
     say(`  ${visit.time}: no Office Visit for this appointment on the Timeline.`);
@@ -273,8 +299,8 @@ function setDebugDir(dir) {
 /** A screenshot of the page and a map of its layout — element names and the
  *  page's own labels only, never the text in it (no client details) — so a
  *  failed step can be fixed from what Practice Fusion really shows. */
-async function snapshot(page, label) {
-  if (!debugDir || snapshots >= 12) return;
+async function snapshot(page, label, extra = '') {
+  if (!debugDir || snapshots >= 40) return;
   snapshots += 1;
   const fs = require('fs');
   const path = require('path');
@@ -306,7 +332,7 @@ async function snapshot(page, label) {
       walk(document.body, 0);
       return `${location.hash.replace(/[0-9a-f-]{20,}/gi, '<id>')}\n\n${out.join('\n')}`;
     }).catch((e) => `couldn't map the page: ${e && e.message}`);
-    fs.writeFileSync(`${base}.txt`, map, 'utf8');
+    fs.writeFileSync(`${base}.txt`, `${extra ? `${extra}\n\n` : ''}${map}`, 'utf8');
   } catch {}
 }
 
@@ -354,38 +380,74 @@ async function scrollToNote(page, timeoutMs = 25000) {
 /** Read the Note boxes of the encounter open on `page`. */
 async function readNoteOn(page) {
   await scrollToNote(page);
-  const read = () => page.evaluate((names) => {
-    const EDITOR = '[contenteditable="true"], iframe, textarea';
-    const ownText = (e) => [...e.childNodes].filter((t) => t.nodeType === 3).map((t) => t.textContent).join('').trim();
-    const textOf = (el) => {
-      if (el.tagName === 'IFRAME') { try { return el.contentDocument.body.innerText || ''; } catch { return ''; } }
-      return el.tagName === 'TEXTAREA' ? el.value : (el.innerText || '');
-    };
+  // Mark each box's editor: the first editor after the box's own heading (a visible
+  // heading — never an option of the "Go to…" menu, never a word inside a note) and
+  // before the next heading.
+  const mark = () => page.evaluate((names) => {
+    document.querySelectorAll('[data-hope-ed]').forEach((e) => e.removeAttribute('data-hope-ed'));
+    const own = (e) => [...e.childNodes].filter((t) => t.nodeType === 3).map((t) => t.textContent).join('').trim();
+    const shown = (e) => !!(e.offsetParent || e.getClientRects().length) && !e.closest('select, option, [contenteditable="true"], nav');
     const all = [...document.querySelectorAll('body *')];
-    const out = {};
+    const heads = {};
+    for (const n of [...names, 'Care plan']) heads[n] = all.filter((e) => own(e) === n && shown(e));
+    const editors = [...document.querySelectorAll('[contenteditable="true"], textarea, iframe')].filter((e) => {
+      if (e.tagName === 'IFRAME') { const r = e.getBoundingClientRect(); return r.width >= 400 && r.height >= 20 && !/doubleclick|googlesyndication|adservice/i.test(e.src || ''); }
+      return true;
+    });
+    const after = (a, b) => !!(a.compareDocumentPosition(b) & Node.DOCUMENT_POSITION_FOLLOWING);
+    const found = [];
     for (const n of names) {
-      out[n] = null;
-      // The box's heading — never the same word written inside a note.
-      for (const head of all.filter((e) => ownText(e) === n && !e.closest(EDITOR))) {
-        let box = head.parentElement;
-        while (box && box !== document.body && !box.querySelector(EDITOR)) box = box.parentElement;
-        if (!box || box === document.body) continue;
-        const ed = [...box.querySelectorAll(EDITOR)].find((e) => head.compareDocumentPosition(e) & Node.DOCUMENT_POSITION_FOLLOWING);
-        if (ed) { out[n] = textOf(ed); break; }
+      for (const head of heads[n]) {
+        const ed = editors.find((e) => after(head, e));
+        if (ed) { found.push({ n, head, ed }); break; }
       }
     }
+    const boundaries = [...found.map((f) => f.head), ...(heads['Care plan'] || [])];
+    for (const f of found) {
+      const nextHead = boundaries.filter((b) => after(f.head, b)).sort((a, b) => (after(a, b) ? -1 : 1))[0];
+      if (nextHead && after(nextHead, f.ed)) continue; // the editor belongs to a later box
+      f.ed.setAttribute('data-hope-ed', f.n);
+    }
     const st = /\bSTATUS\s*\n?\s*(Unsigned|Signed)\b/i.exec(document.body.innerText || '');
-    return { sections: out, status: st ? st[1] : '' };
-  }, SOAP).catch(() => null);
-  // The boxes fill in after the page appears: read until two reads agree.
-  let last = null;
-  for (let i = 0; i < 10; i++) {
-    await new Promise((r) => setTimeout(r, 450));
-    const cur = await read();
-    if (cur && last && JSON.stringify(cur) === JSON.stringify(last)) return cur;
-    last = cur;
+    return st ? st[1] : '';
+  }, SOAP).catch(() => '');
+  const readEditors = async () => {
+    const out = {};
+    for (const n of SOAP) {
+      out[n] = null;
+      const el = await page.$(`[data-hope-ed="${n}"]`).catch(() => null);
+      if (!el) continue;
+      const tag = await el.evaluate((e) => e.tagName).catch(() => '');
+      if (tag === 'IFRAME') {
+        // Through the browser's own frame access — works even where the page can't peek in.
+        const frame = await el.contentFrame().catch(() => null);
+        out[n] = frame ? await frame.evaluate(() => (document.body ? document.body.innerText : '')).catch(() => null) : null;
+      } else out[n] = await el.evaluate((e) => (e.tagName === 'TEXTAREA' ? e.value : e.innerText || '')).catch(() => null);
+    }
+    return out;
+  };
+  // Boxes fill in as they scroll into view: read, bring any box that looks empty into
+  // view, and read again. Text never un-fills, so the longest read of each box wins.
+  const best = {};
+  let status = '';
+  for (let pass = 0; pass < 6; pass++) {
+    status = (await mark()) || status;
+    const cur = await readEditors();
+    for (const n of SOAP) {
+      if (typeof cur[n] === 'string' && (typeof best[n] !== 'string' || writtenText(cur[n]).length > writtenText(best[n]).length)) best[n] = cur[n];
+    }
+    const lacking = SOAP.filter((n) => typeof best[n] !== 'string' || writtenText(best[n]).length < 3);
+    if (!lacking.length) break; // all four boxes have writing: done, no waiting
+    for (const n of lacking) {
+      await page.evaluate((n) => {
+        const own = (e) => [...e.childNodes].filter((t) => t.nodeType === 3).map((t) => t.textContent).join('').trim();
+        const h = [...document.querySelectorAll('body *')].find((e) => own(e) === n && (e.offsetParent || e.getClientRects().length) && !e.closest('select, option, [contenteditable="true"]'));
+        if (h) h.scrollIntoView({ block: 'center' });
+      }, n).catch(() => {});
+    }
+    await sleep(600);
   }
-  return last;
+  return { sections: SOAP.reduce((o, n) => ({ ...o, [n]: typeof best[n] === 'string' ? best[n] : null }), {}), status };
 }
 
 /** The therapist's email, from the list on the Notes page (names compared loosely). */
