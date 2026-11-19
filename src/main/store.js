@@ -47,6 +47,7 @@ const DEFAULTS = {
   notesTestMode: true,
   notesTestTo: 'nabil@highqualityhometherapy.com',
   therapistEmails: {},      // { 'Therapist name': 'email' }
+  chartIds: {},             // notes check: a client's Practice Fusion chart id (by a hashed name), learned once, so later runs open the chart directly
   staff: [],                // [{ id, name, role, email, enabled }] — who the reminders go to; enabled = send to them automatically
   notesCc: '',              // copied (CC) on every reminder — e.g. the office manager
   notesEmailLog: [],        // reminders sent (newest first)

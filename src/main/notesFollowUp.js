@@ -10,7 +10,7 @@
  */
 
 const { matchProvider, isNonPatient, normalizeName } = require('./model');
-const { parseEncounters, therapistsIn, settledText } = require('./chartReview');
+const { parseEncounters, therapistsIn, settledText, pageText } = require('./chartReview');
 
 const DUE_HOURS = 24;
 const DEFAULT_TEST_TO = 'nabil@highqualityhometherapy.com';
@@ -193,7 +193,44 @@ async function openTimeline(page) {
     return true;
   }).catch(() => false);
   if (!marked || !(await clickMarked(page))) return null;
-  return settledText(page, ['TYPE/SOURCE', /no encounters/i], 15000);
+  return quickText(page, ['TYPE/SOURCE', /no encounters/i], 15000);
+}
+
+/** Like the chart review's settledText, but looks every 120 ms and takes the page
+ *  as soon as two looks agree. */
+async function quickText(page, marks, timeoutMs = 12000) {
+  const end = Date.now() + timeoutMs;
+  let last = '', steady = 0;
+  while (Date.now() < end) {
+    await sleep(120);
+    const t = await pageText(page);
+    if (t == null) continue;
+    const ready = marks.some((m) => (m instanceof RegExp ? m.test(t) : t.includes(m)));
+    steady = t === last ? steady + 1 : 0;
+    last = t;
+    if (ready && steady >= 1) return t;
+  }
+  return last && marks.some((m) => (m instanceof RegExp ? m.test(last) : last.includes(m))) ? last : null;
+}
+
+const CHART_ID_RE = /\/charts\/patients\/([0-9a-f-]{20,})/i;
+const PF_CHARTS = 'https://static.practicefusion.com/apps/ehr/index.html#/PF/charts/patients/';
+/** The chart's id from its address (…/charts/patients/<id>/summary), or ''. */
+function chartIdFromUrl(url) { return (CHART_ID_RE.exec(String(url || '')) || [])[1] || ''; }
+
+/** Straight to a client's Timeline by the chart's id — one page load, no trip
+ *  through the schedule. Returns the Timeline's text only when the chart is the
+ *  right person's (their name is on the page); else null. */
+async function openTimelineById(page, id, patientName, { reload = false } = {}) {
+  await page.goto(`${PF_CHARTS}${id}/timeline/encounter`, { waitUntil: 'domcontentloaded' }).catch(() => {});
+  // A second look at a flagged note starts from a real page load, not a cached screen.
+  if (reload) await page.reload({ waitUntil: 'domcontentloaded' }).catch(() => {});
+  const text = await quickText(page, ['TYPE/SOURCE', /no encounters/i], 20000);
+  if (text == null) return null;
+  const toks = normalizeName(patientName).split(' ').filter((t) => t.length > 1);
+  const norm = ` ${normalizeName(text)} `;
+  if (toks.length && !(norm.includes(` ${toks[0]} `) && norm.includes(` ${toks[toks.length - 1]} `))) return null;
+  return text;
 }
 
 /**
@@ -252,10 +289,15 @@ async function readVisitNote(page, visit, say = () => {}) {
     if (!el) continue;
     say(`  ${visit.time}: clicking ${which === '1' ? 'Office Visit' : which === '2' ? 'SOAP Note' : 'the visit row'}…`);
     // If Practice Fusion opens the note in a new tab, read it there and close it.
-    const popup = page.waitForEvent('popup', { timeout: 1500 }).catch(() => null);
+    // Whichever happens first wins — no fixed wait for a tab that usually doesn't open.
+    const popup = page.waitForEvent('popup', { timeout: 8000 }).catch(() => null);
     await el.scrollIntoViewIfNeeded().catch(() => {});
     await el.click({ timeout: 5000 }).catch(() => el.evaluate((e) => e.click()).catch(() => {}));
-    const extra = await popup;
+    const outcome = await Promise.race([
+      popup.then((p) => (p ? { extra: p } : new Promise(() => {}))),
+      encounterOpened(page).then((ok) => (ok ? { same: true } : null)),
+    ]);
+    const extra = outcome && outcome.extra;
     if (extra) {
       try {
         await extra.waitForLoadState('domcontentloaded').catch(() => {});
@@ -263,7 +305,7 @@ async function readVisitNote(page, visit, say = () => {}) {
         return await readNoteOn(extra);
       } finally { await extra.close().catch(() => {}); }
     }
-    if (await encounterOpened(page)) {
+    if (outcome && outcome.same) {
       await page.evaluate(() => document.querySelectorAll('[data-hope-click]').forEach((e) => e.removeAttribute('data-hope-click'))).catch(() => {});
       say(`  ${visit.time}: encounter open — scrolling down to the note…`);
       const r = await readNoteOn(page);
@@ -350,7 +392,7 @@ async function scrollToNote(page, timeoutMs = 25000) {
   }).catch(() => null);
   if (jumped) {
     const sel = (await page.$$('select'))[jumped.index];
-    if (sel) { await sel.selectOption({ value: jumped.value }).catch(() => {}); await sleep(500); }
+    if (sel) { await sel.selectOption({ value: jumped.value }).catch(() => {}); await sleep(200); }
   }
   const end = Date.now() + timeoutMs;
   while (Date.now() < end) {
@@ -365,16 +407,10 @@ async function scrollToNote(page, timeoutMs = 25000) {
       return got.size;
     }, SOAP).catch(() => 0);
     if (found === SOAP.length) break;
-    await sleep(450);
+    await sleep(200);
   }
-  for (const n of SOAP) {
-    await page.evaluate((n) => {
-      const own = (e) => [...e.childNodes].filter((t) => t.nodeType === 3).map((t) => t.textContent).join('').trim();
-      const h = [...document.querySelectorAll('body *')].find((e) => own(e) === n && !e.closest('[contenteditable="true"]'));
-      if (h) h.scrollIntoView({ block: 'start' });
-    }, n).catch(() => {});
-    await sleep(300);
-  }
+  // A box that loads only when it's on screen is brought up by readNoteOn, only
+  // if it comes back empty — no stop at every box on every note.
 }
 
 /** Read the Note boxes of the encounter open on `page`. */
@@ -653,5 +689,5 @@ function lookbackDates(now, lookback = 7) {
 
 module.exports = {
   DUE_HOURS, DEFAULT_TEST_TO, isSeen, encounterState, apptDateTime, shortName, findNotes,
-  parseStaffList, mergeStaff, staffFor, noteInTimeline, SOAP, writtenText, emptySections, openClientFromSchedule, openTimeline, readVisitNote, setDebugDir, snapshot, emailFor, planReminders, reminderEmail, parseHHMM, dailyDue, dayKey, lookbackDates,
+  parseStaffList, mergeStaff, staffFor, noteInTimeline, chartIdFromUrl, openTimelineById, SOAP, writtenText, emptySections, openClientFromSchedule, openTimeline, readVisitNote, setDebugDir, snapshot, emailFor, planReminders, reminderEmail, parseHHMM, dailyDue, dayKey, lookbackDates,
 };

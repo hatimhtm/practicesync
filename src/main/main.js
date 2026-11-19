@@ -304,6 +304,13 @@ async function performNotesCheck({ dates, send = false, trigger = 'manual' }) {
     const r = await liveEngine.openAutomationContext({ headless: false });
     if (r.error) return { ok: false, error: r.error.error || r.error };
     context = r.context;
+    // Speed: the check only reads text — skip pictures, fonts, video and ads.
+    await context.route('**/*', (route) => {
+      const req = route.request();
+      const type = req.resourceType();
+      if (type === 'image' || type === 'media' || type === 'font' || /doubleclick|googlesyndication|adservice|adnxs|googletagservices/i.test(req.url())) return route.abort().catch(() => {});
+      return route.continue().catch(() => {});
+    }).catch(() => {});
     const page = context.pages()[0] || (await context.newPage());
     const pf = await loginPracticeFusion(page, creds.practiceFusion, { onStep: step });
     if (!pf.ok) return { ok: false, error: pf.error };
@@ -401,15 +408,32 @@ async function checkNoteTimelines(context, page, list, step, providers = []) {
 
   // Steps 1–2: the client's Timeline (schedule → name → Timeline; the chart's address
   // is the fallback). `fresh` reloads the schedule first, for a second look.
+  // A client's chart id, learned the first time we click through to them (by a hashed
+  // name — no names stored) — after that, their chart opens directly: one page load.
+  const idKey = (name) => require('crypto').createHash('sha1').update(chartReview.patientKey(name)).digest('hex').slice(0, 16);
+  const chartIds = { ...(store.load().chartIds || {}) };
+  const rememberId = (name, tab) => {
+    const id = notes.chartIdFromUrl(tab.url());
+    if (id && chartIds[idKey(name)] !== id) { chartIds[idKey(name)] = id; try { store.save({ chartIds }); } catch {} }
+  };
   const openGroup = async (tab, group, fresh) => {
     const name = group[0].patientName;
     const href = group.find((n) => n.href)?.href || '';
-    if (fresh) await tab.goto(presets.PF.scheduleUrl, { waitUntil: 'domcontentloaded' }).catch(() => {});
+    const known = chartIds[idKey(name)];
+    if (known) {
+      step(`${name}: opening the chart…`);
+      const direct = await notes.openTimelineById(tab, known, name, { reload: fresh });
+      if (direct != null) return direct;
+      delete chartIds[idKey(name)]; // not the right chart (or it moved) — find them again
+      step('  that chart didn\'t open as expected — finding them from the schedule…');
+    }
     let text = null;
+    if (fresh) await tab.goto(presets.PF.scheduleUrl, { waitUntil: 'domcontentloaded' }).catch(() => {});
     step(`${name}: opening the chart from the schedule…`);
     if (!(await toScheduleDay(tab, group[0].date))) { step(`  couldn't open the schedule on ${group[0].date}.`); await notes.snapshot(tab, 'schedule-day'); }
     else if (!(await notes.openClientFromSchedule(tab, group[0], presets.PF.selectors))) { step('  clicking the name didn\'t open the chart.'); await notes.snapshot(tab, 'client-name-click'); }
     else {
+      rememberId(name, tab);
       step('  clicking Timeline…');
       text = await notes.openTimeline(tab);
       if (text == null) { step('  the Timeline didn\'t open.'); await notes.snapshot(tab, 'timeline'); }
