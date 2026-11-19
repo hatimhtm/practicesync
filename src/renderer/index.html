@@ -339,7 +339,7 @@
         <div class="seg seg-sm" id="nfTabs">
           <button class="active" data-tab="missing">Missing notes <span id="nfMissingCount"></span></button>
           <button data-tab="all">All Seen visits</button>
-          <button data-tab="emails">Therapist emails</button>
+          <button data-tab="emails">Staff &amp; emails</button>
           <button data-tab="log">Sent</button>
         </div>
 
@@ -367,11 +367,39 @@
             <button class="btn" id="nfTestEmailBtn">Send test reminder</button>
             <span class="nf-help" id="nfTestEmailResult"></span>
           </div>
-          <div class="client-toolbar" style="margin-top:12px">
-            <input type="text" id="nfEmailSearch" placeholder="Search therapist" autocomplete="off" />
-            <span class="muted nf-help" id="nfEmailCount"></span>
+          <div class="nf-staff-head">
+            <div>
+              <div class="card-k" style="margin:0">Staff</div>
+              <div class="muted nf-help" id="nfEmailCount"></div>
+            </div>
+            <div class="row" style="margin:0;gap:8px;flex-wrap:wrap">
+              <button class="btn" id="nfImportBtn">Import list</button>
+              <button class="btn btn-primary" id="nfAddBtn">Add staff</button>
+            </div>
           </div>
-          <div id="nfEmailList" class="nf-emails"></div>
+          <p class="muted nf-help">The switch is for sending that person's reminders automatically. Off = they never get one (the daily check and the Email reminders button both skip them).</p>
+
+          <div class="nf-panel hidden" id="nfAddPanel">
+            <div class="nf-add-grid">
+              <label class="field"><span>Name</span><input type="text" id="nfAddName" placeholder="First and last name" autocomplete="off" /></label>
+              <label class="field"><span>Role <small class="muted">(optional)</small></span><input type="text" id="nfAddRole" placeholder="PT, OT, SLP…" autocomplete="off" /></label>
+              <label class="field"><span>Email</span><input type="email" id="nfAddEmail" placeholder="name@highqualityhometherapy.com" autocomplete="off" /></label>
+            </div>
+            <div class="row" style="margin:0;gap:8px"><button class="btn btn-primary" id="nfAddSave">Add</button><button class="btn" id="nfAddCancel">Cancel</button></div>
+          </div>
+
+          <div class="nf-panel hidden" id="nfImportPanel">
+            <p class="muted nf-help" style="margin:0 0 8px">One person per line: <b>name, role, email</b> (tabs or commas). Someone already on the list is updated, and keeps their on/off switch.</p>
+            <textarea id="nfImportText" rows="5" placeholder="Jane Doe&#9;PT&#9;jane@example.com"></textarea>
+            <div class="row" style="margin:8px 0 0;gap:8px"><button class="btn btn-primary" id="nfImportGo">Import</button><button class="btn" id="nfImportFile">Choose a file…</button><button class="btn" id="nfImportCancel">Cancel</button></div>
+          </div>
+
+          <div class="client-toolbar" style="margin-top:12px">
+            <input type="text" id="nfEmailSearch" placeholder="Search staff" autocomplete="off" />
+            <div class="row" style="margin:0;gap:6px"><button class="btn" id="nfAllOn">All on</button><button class="btn" id="nfAllOff">All off</button></div>
+          </div>
+          <div class="nf-notin hidden" id="nfNotIn"></div>
+          <div id="nfEmailList" class="nf-staff"></div>
         </div>
 
         <div class="card hidden" id="nfLogCard"><div id="nfLogList"></div></div>

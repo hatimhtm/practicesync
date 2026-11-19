@@ -83,6 +83,7 @@ async function refresh() {
   renderClients();
   renderChartReview();
   renderNotes();
+  nfRefreshMatch();
   if (!draftMains.length) draftMains = (settings.mainDoctors || []).map(normMain);
   if (!draftProviders.length && providers.length) {
     draftProviders = providers.map((p) => ({ name: p.name, discipline: p.discipline || '', mainDoctor: p.mainDoctor, codes: formatCodes(p.codes), privateService: p.privateService || '' }));
@@ -1313,16 +1314,28 @@ function nfDue(n) {
   return late ? `<span class="nf-badge late">Overdue since ${nfDay(n.dueAt)}, ${nfClock(n.dueAt)}</span>` : `<span class="nf-badge due">Due by ${nfDay(n.dueAt)}, ${nfClock(n.dueAt)}</span>`;
 }
 function nfVisit(n) { return n.apptAt ? `${nfDay(n.apptAt)} · ${nfClock(n.apptAt)}` : escapeHtml(n.date); }
+// Therapists (the roster and anyone in the last check) matched to the staff list by
+// the app itself, so the page and the emails always agree.
 function nfTherapistNames() {
   const names = new Set((settings.providers || []).map((p) => p.name).filter(Boolean));
-  Object.keys(settings.therapistEmails || {}).forEach((n) => names.add(n));
+  ((settings.notesCheck && settings.notesCheck.notes) || []).forEach((n) => { if (n.therapist) names.add(n.therapist); });
   return [...names].sort((a, b) => a.localeCompare(b));
 }
-function nfEmailOf(name) {
-  const key = (x) => String(x || '').toLowerCase().replace(/[^a-z]/g, '');
-  const hit = Object.entries(settings.therapistEmails || {}).find(([n]) => key(n) === key(name));
-  return hit ? hit[1] : '';
+const nfMatch = (name) => (NF.match && NF.match[name]) || { found: false, email: '', enabled: false };
+async function nfRefreshMatch() {
+  try { NF.match = await window.api.staffMatch(nfTherapistNames()); } catch { NF.match = {}; }
+  renderNotes();
 }
+function nfWho(name) {
+  const m = nfMatch(name);
+  if (m.ambiguous) return ' · <span class="nf-noemail">two staff share this name</span>';
+  if (!m.found) return ' · <span class="nf-noemail">not on the staff list</span>';
+  if (!m.enabled) return ' · <span class="muted">switched off</span>';
+  return m.email ? ` · ${escapeHtml(m.email)}` : ' · <span class="nf-noemail">no email on file</span>';
+}
+const nfStaffSave = async (staff) => { settings = await window.api.saveSettings({ staff }); await nfRefreshMatch(); };
+const nfNewId = () => 'st_' + Math.random().toString(36).slice(2, 10);
+const nfEmailOk = (v) => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(v);
 function nfGroups(list) {
   const groups = {};
   list.forEach((n) => { (groups[n.therapist || 'Unknown therapist'] = groups[n.therapist || 'Unknown therapist'] || []).push(n); });
@@ -1359,7 +1372,7 @@ function renderNotes() {
   const missingGroups = nfGroups(missing);
   $('#nfMissingList').innerHTML = missingGroups.length ? missingGroups.map((g) => `
     <div class="cr-group">
-      <div class="cr-group-head">${escapeHtml(g.therapist)} <span class="muted">· ${g.items.length} note${g.items.length === 1 ? '' : 's'}${nfEmailOf(g.therapist) ? ` · ${escapeHtml(nfEmailOf(g.therapist))}` : ' · <span class="nf-noemail">no email on file</span>'}</span></div>
+      <div class="cr-group-head">${escapeHtml(g.therapist)} <span class="muted">· ${g.items.length} note${g.items.length === 1 ? '' : 's'}${nfWho(g.therapist)}</span></div>
       ${g.items.map((n) => `<div class="nf-row"><span class="nf-when">${nfVisit(n)}</span><span class="nf-client">${escapeHtml(n.patientName)}${n.source === 'schedule' ? ' <span class="muted" title="The chart couldn\'t be opened, so this went by the schedule\'s Start Encounter / View in encounter link.">· by schedule</span>' : ''}${nfNeed(n)}</span>${nfDue(n)}</div>`).join('')}
     </div>`).join('')
     : `<div class="client-empty"><strong>${check ? 'No missing notes' : 'No check yet'}</strong><span>${check ? 'Every visit marked Seen in these days has a complete note.' : 'Pick the days and press Check notes.'}</span></div>`;
@@ -1375,10 +1388,11 @@ function renderNotes() {
 
   // Who gets the reminders
   const testOn = settings.notesTestMode !== false;
-  const withMail = nfTherapistNames().filter((n) => nfEmailOf(n)).length;
+  const staffAll = settings.staff || [];
+  const onCount = staffAll.filter((p) => p.enabled !== false && nfEmailOk(p.email || '')).length;
   $('#nfWhoTo').innerHTML = testOn
-    ? `<b>${escapeHtml(settings.notesTestTo || 'nabil@highqualityhometherapy.com')}</b> <span class="muted">— test mode: every reminder comes here; therapists get nothing yet.</span>`
-    : `<b>Each therapist</b>, at their email below <span class="muted">— ${withMail} have one; therapists without one are skipped.</span>`;
+    ? `<b>${escapeHtml(settings.notesTestTo || 'nabil@highqualityhometherapy.com')}</b> <span class="muted">— test mode: every reminder comes here; staff get nothing yet.</span>`
+    : `<b>Each therapist</b>, at their email on the staff list <span class="muted">— ${onCount} of ${staffAll.length} are switched on; anyone switched off or without an email is skipped.</span>`;
   if (document.activeElement !== $('#nfCc')) $('#nfCc').value = settings.notesCc || '';
 
   // Therapist emails
@@ -1386,24 +1400,40 @@ function renderNotes() {
   if (document.activeElement !== $('#nfTestTo')) $('#nfTestTo').value = settings.notesTestTo || 'nabil@highqualityhometherapy.com';
   $('#nfTestNote').textContent = settings.notesTestMode !== false
     ? 'While test mode is on, therapists get nothing: every reminder comes to this address, and each one says which therapist it was for.'
-    : 'Test mode is off: each therapist gets their own reminder at the email below. Therapists without an email are skipped and listed under Sent.';
+    : 'Test mode is off: each therapist whose switch is on gets their own reminder. Anyone switched off, or without an email, is skipped and listed under Sent.';
   window.api.credsStatus().then((st) => setCredPill($('#nfMailPill'), st && st.smtp, 'Email set up', 'Not set up')).catch(() => {});
+  // Staff
   const q = ($('#nfEmailSearch').value || '').toLowerCase();
-  const names = nfTherapistNames();
-  const withEmail = names.filter((n) => nfEmailOf(n)).length;
-  $('#nfEmailCount').textContent = `${withEmail} of ${names.length} have an email`;
+  const staff = (settings.staff || []).slice().sort((x, y) => x.name.localeCompare(y.name));
+  const nOn = staff.filter((p) => p.enabled !== false).length;
+  $('#nfEmailCount').textContent = staff.length ? `${staff.length} staff · ${nOn} switched on · ${staff.filter((p) => !nfEmailOk(p.email || '')).length} without an email` : 'No staff yet — use Import list or Add staff.';
+  // Roster therapists who aren't on the list: their reminders have nowhere to go.
+  const notOnList = nfTherapistNames().filter((n) => !nfMatch(n).found && !nfMatch(n).ambiguous);
+  const notIn = $('#nfNotIn');
+  notIn.classList.toggle('hidden', !notOnList.length || !NF.match);
+  notIn.innerHTML = notOnList.length ? `<b>${notOnList.length} therapist${notOnList.length === 1 ? '' : 's'} from Doctors &amp; Codes ${notOnList.length === 1 ? 'isn\'t' : 'aren\'t'} on the staff list</b> (no reminders for ${notOnList.length === 1 ? 'them' : 'these'} until added): ${notOnList.map((n) => `<button class="nf-chip" data-add="${escapeHtml(n)}">+ ${escapeHtml(n)}</button>`).join(' ')}` : '';
+  $$('#nfNotIn [data-add]').forEach((c) => c.addEventListener('click', () => { $('#nfAddPanel').classList.remove('hidden'); $('#nfAddName').value = c.dataset.add; $('#nfAddEmail').focus(); }));
   if (!$('#nfEmailList').contains(document.activeElement)) {
-    $('#nfEmailList').innerHTML = names.filter((n) => !q || n.toLowerCase().includes(q)).map((n) => `
-      <label class="nf-email"><span>${escapeHtml(n)}</span><input type="email" data-name="${escapeHtml(n)}" value="${escapeHtml(nfEmailOf(n))}" placeholder="name@highqualityhometherapy.com" /></label>`).join('')
-      || '<div class="client-empty"><strong>No therapists</strong><span>Add them on Doctors &amp; Codes.</span></div>';
-    $$('#nfEmailList input').forEach((inp) => inp.addEventListener('change', async () => {
-      const emails = { ...(settings.therapistEmails || {}) };
+    $('#nfEmailList').innerHTML = staff.filter((p) => !q || `${p.name} ${p.role} ${p.email}`.toLowerCase().includes(q)).map((p) => `
+      <div class="nf-staff-row${p.enabled === false ? ' off' : ''}">
+        <div class="nf-staff-name"><b>${escapeHtml(p.name)}</b><span class="muted">${escapeHtml(p.role || '')}</span></div>
+        <input type="email" data-id="${escapeHtml(p.id)}" value="${escapeHtml(p.email || '')}" placeholder="email address" />
+        <label class="nf-switch" title="${p.enabled === false ? 'Off — no automatic reminders' : 'On — gets reminders automatically'}"><input type="checkbox" data-id="${escapeHtml(p.id)}" ${p.enabled === false ? '' : 'checked'} /><span></span></label>
+        <button class="nf-del" data-id="${escapeHtml(p.id)}" title="Remove from the list" aria-label="Remove ${escapeHtml(p.name)}">✕</button>
+      </div>`).join('') || `<div class="client-empty"><strong>${staff.length ? 'No one matches' : 'No staff yet'}</strong><span>${staff.length ? '' : 'Import the staff list or add people one by one.'}</span></div>`;
+    $$('#nfEmailList input[type="email"]').forEach((inp) => inp.addEventListener('change', async () => {
       const v = inp.value.trim();
-      if (v && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(v)) { toast('That email doesn\'t look right.'); return; }
-      Object.keys(emails).forEach((k) => { if (k.toLowerCase().replace(/[^a-z]/g, '') === inp.dataset.name.toLowerCase().replace(/[^a-z]/g, '')) delete emails[k]; });
-      if (v) emails[inp.dataset.name] = v;
-      settings = await window.api.saveSettings({ therapistEmails: emails });
-      renderNotes();
+      if (v && !nfEmailOk(v)) { toast('That email doesn\'t look right.'); return; }
+      await nfStaffSave((settings.staff || []).map((p) => (p.id === inp.dataset.id ? { ...p, email: v.toLowerCase() } : p)));
+    }));
+    $$('#nfEmailList input[type="checkbox"]').forEach((c) => c.addEventListener('change', async () => {
+      await nfStaffSave((settings.staff || []).map((p) => (p.id === c.dataset.id ? { ...p, enabled: c.checked } : p)));
+    }));
+    $$('#nfEmailList .nf-del').forEach((d) => d.addEventListener('click', async () => {
+      const p = (settings.staff || []).find((x) => x.id === d.dataset.id);
+      if (!p || !confirm(`Remove ${p.name} from the staff list? They won't get any reminders.`)) return;
+      await nfStaffSave((settings.staff || []).filter((x) => x.id !== p.id));
+      toast(`${p.name} removed.`);
     }));
   }
 
@@ -1412,11 +1442,43 @@ function renderNotes() {
   $('#nfLogList').innerHTML = log.length ? log.slice(0, 120).map((l) => `
     <div class="nf-row nf-log"><span class="nf-when">${fmtTime(l.at)}</span>
       <span class="nf-client">${escapeHtml(l.therapist)} <span class="muted">· ${l.count} note${l.count === 1 ? '' : 's'}${l.overdue ? `, ${l.overdue} overdue` : ''}${l.trigger === 'daily' ? ' · daily' : ''}</span></span>
-      ${l.ok ? `<span class="nf-badge ok">${l.test ? 'Test → ' : 'Sent → '}${escapeHtml(l.to)}${l.cc ? ` · cc ${escapeHtml(l.cc)}` : ''}</span>` : `<span class="nf-badge late">${escapeHtml(l.error || 'Not sent')}</span>`}</div>`).join('')
+      ${l.skipped ? '<span class="nf-badge unk">Skipped — switched off</span>' : l.ok ? `<span class="nf-badge ok">${l.test ? 'Test → ' : 'Sent → '}${escapeHtml(l.to)}${l.cc ? ` · cc ${escapeHtml(l.cc)}` : ''}</span>` : `<span class="nf-badge late">${escapeHtml(l.error || 'Not sent')}</span>`}</div>`).join('')
     : '<div class="client-empty"><strong>No reminders sent yet</strong></div>';
 }
 $$('#nfTabs button').forEach((b) => b.addEventListener('click', () => { NF.tab = b.dataset.tab; renderNotes(); }));
 $('#nfEmailSearch').addEventListener('input', () => { $('#nfEmailList').innerHTML = ''; renderNotes(); });
+$('#nfAddBtn').addEventListener('click', () => { $('#nfImportPanel').classList.add('hidden'); $('#nfAddPanel').classList.toggle('hidden'); $('#nfAddName').focus(); });
+$('#nfAddCancel').addEventListener('click', () => $('#nfAddPanel').classList.add('hidden'));
+$('#nfAddSave').addEventListener('click', async () => {
+  const name = $('#nfAddName').value.trim(), role = $('#nfAddRole').value.trim(), email = $('#nfAddEmail').value.trim().toLowerCase();
+  if (!name) { toast('Enter a name.'); return; }
+  if (!nfEmailOk(email)) { toast('Enter a valid email address.'); return; }
+  const list = settings.staff || [];
+  if (list.some((p) => p.email.toLowerCase() === email)) { toast('That email is already on the list.'); return; }
+  await nfStaffSave([...list, { id: nfNewId(), name, role, email, enabled: true }]);
+  ['#nfAddName', '#nfAddRole', '#nfAddEmail'].forEach((id) => { $(id).value = ''; });
+  $('#nfAddPanel').classList.add('hidden');
+  toast(`${name} added — switched on.`);
+});
+$('#nfImportBtn').addEventListener('click', () => { $('#nfAddPanel').classList.add('hidden'); $('#nfImportPanel').classList.toggle('hidden'); $('#nfImportText').focus(); });
+$('#nfImportCancel').addEventListener('click', () => $('#nfImportPanel').classList.add('hidden'));
+const nfImported = async (r) => {
+  if (!r || r.canceled) return;
+  if (!r.ok) { toast(r.error || 'Couldn\'t import.'); return; }
+  settings = await window.api.getSettings();
+  await nfRefreshMatch();
+  $('#nfImportText').value = ''; $('#nfImportPanel').classList.add('hidden');
+  toast(`${r.added} added, ${r.updated} updated${r.skipped ? `, ${r.skipped} line${r.skipped === 1 ? '' : 's'} skipped (no email)` : ''}.`);
+};
+$('#nfImportGo').addEventListener('click', async () => nfImported(await window.api.staffImport($('#nfImportText').value)));
+$('#nfImportFile').addEventListener('click', async () => nfImported(await window.api.staffImportFile()));
+const nfAll = async (on) => {
+  const n = (settings.staff || []).length;
+  if (!n || !confirm(`Switch ${on ? 'ON' : 'OFF'} automatic reminders for all ${n} staff?`)) return;
+  await nfStaffSave((settings.staff || []).map((p) => ({ ...p, enabled: on })));
+};
+$('#nfAllOn').addEventListener('click', () => nfAll(true));
+$('#nfAllOff').addEventListener('click', () => nfAll(false));
 $$('#nfDailySeg button').forEach((b) => b.addEventListener('click', async () => {
   settings = await window.api.saveSettings({ notesDaily: b.dataset.val === 'on' });
   renderNotes();
@@ -1554,7 +1616,7 @@ window.api.onNotesStep((s) => {
   line.innerHTML = `<span class="t">${fmtClock(s.at)}</span><span>${escapeHtml(s.text || '')}</span>`;
   log.appendChild(line); log.scrollTop = log.scrollHeight;
 });
-window.api.onNotesResult(async () => { settings = await window.api.getSettings(); renderNotes(); });
+window.api.onNotesResult(async () => { settings = await window.api.getSettings(); await nfRefreshMatch(); });
 window.api.onNotesFinished(() => { const c = $('#nfLog .live-line.cur'); if (c) c.classList.remove('cur'); $('#nfPhase').textContent = 'Finished.'; });
 
 /* -------------------------------- events -------------------------------- */

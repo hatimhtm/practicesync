@@ -47,6 +47,7 @@ const DEFAULTS = {
   notesTestMode: true,
   notesTestTo: 'nabil@highqualityhometherapy.com',
   therapistEmails: {},      // { 'Therapist name': 'email' }
+  staff: [],                // [{ id, name, role, email, enabled }] — who the reminders go to; enabled = send to them automatically
   notesCc: '',              // copied (CC) on every reminder — e.g. the office manager
   notesEmailLog: [],        // reminders sent (newest first)
   notesLastDailyRun: '',    // YYYY-MM-DD the daily check last finished

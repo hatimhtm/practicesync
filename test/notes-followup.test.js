@@ -206,5 +206,34 @@ const providers = [
   check('a short but real Plan counts as written', nf.emptySections({ ...four, Plan: 'POC 2x' }).length === 0);
 })();
 
+(function staffList() {
+  console.log('# staff list: import, match, switch off');
+  const text = 'First Name\tLast\tEmail\nJane Doe\tPT\tJane.Doe@Example.com\nSam Lee, OT, sam@example.com\nNo Email Person\tSLP\nHeather Meehan - Nurse - hm@example.com\n';
+  const { staff: inc, skipped } = nf.parseStaffList(text);
+  check('reads tab, comma and dash lines', inc.length === 3 && inc[0].name === 'Jane Doe' && inc[0].role === 'PT' && inc[1].email === 'sam@example.com' && inc[2].role === 'Nurse');
+  check('emails are lower-cased; a line without an email is skipped', inc[0].email === 'jane.doe@example.com' && skipped === 1);
+  const m1 = nf.mergeStaff([], inc);
+  check('everyone is added, switched on', m1.added === 3 && m1.staff.every((p) => p.enabled === true && p.id));
+  const off = m1.staff.map((p) => (p.name === 'Jane Doe' ? { ...p, enabled: false } : p));
+  const m2 = nf.mergeStaff(off, [{ name: 'Jane Doe', role: 'PT', email: 'jane.new@example.com' }, { name: 'New Person', email: 'np@example.com' }]);
+  check('importing again updates, keeps the off switch, adds only the new', m2.updated === 1 && m2.added === 1 && m2.staff.find((p) => p.name === 'Jane Doe').enabled === false && m2.staff.find((p) => p.name === 'Jane Doe').email === 'jane.new@example.com');
+  check('a name written differently ("JR Meehan") finds the same person', nf.staffFor('JR Meehan', [{ name: 'JR Meehan', email: 'jr@x.com' }]).person.email === 'jr@x.com');
+  const two = [{ name: 'Heather Meehan', email: 'a@x.com' }, { name: 'Heather Vines-Dubose', email: 'b@x.com' }];
+  check('exact full names pick the right Heather', nf.staffFor('Heather Vines-Dubose', two).person.email === 'b@x.com');
+  check('just "Heather" is ambiguous — never a guess', nf.staffFor('Heather', two).ambiguous === true && nf.staffFor('Heather', two).person === null);
+  check('hyphen and parentheses differences still match', nf.staffFor('Nicole Lee-Williams', [{ name: 'Nicole Lee - Williams', email: 'n@x.com' }]).person.email === 'n@x.com' && nf.staffFor('Laurits (Mikel) Bensend', [{ name: 'Laurits Mikel Bensend', email: 'l@x.com' }]).person.email === 'l@x.com');
+
+  const miss = (therapist) => ({ patientName: 'Test Client', therapist, note: 'missing', apptAt: new Date(2026, 10, 13, 10, 0).toISOString(), dueAt: new Date(2026, 10, 14, 10, 0).toISOString() });
+  const people = [{ name: 'Jane Doe', email: 'jane@example.com', enabled: true }, { name: 'Sam Lee', email: 'sam@example.com', enabled: false }];
+  const plan = nf.planReminders([miss('Jane Doe'), miss('Sam Lee'), miss('Not Listed')], { staff: people, testMode: false });
+  const by = (n) => plan.find((r) => r.therapist === n);
+  check('switched on → their own email', by('Jane Doe').to === 'jane@example.com' && !by('Jane Doe').off);
+  check('switched off → nothing is sent', by('Sam Lee').off === true && by('Sam Lee').to === '');
+  check('not on the list → nowhere to send', by('Not Listed').to === '' && !by('Not Listed').off);
+  const test = nf.planReminders([miss('Jane Doe'), miss('Sam Lee')], { staff: people, testMode: true, testTo: 'nabil@x.com' });
+  check('test mode still skips anyone switched off', test.find((r) => r.therapist === 'Jane Doe').to === 'nabil@x.com' && test.find((r) => r.therapist === 'Sam Lee').to === '' && test.find((r) => r.therapist === 'Sam Lee').off);
+  check('older per-therapist emails still work when there is no staff entry', nf.emailFor('Old Way', { 'old way': 'old@x.com' }, people) === 'old@x.com');
+})();
+
 console.log(`\n${pass} passed, ${fails.length} failed`);
 if (fails.length) process.exit(1);

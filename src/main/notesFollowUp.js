@@ -450,8 +450,65 @@ async function readNoteOn(page) {
   return { sections: SOAP.reduce((o, n) => ({ ...o, [n]: typeof best[n] === 'string' ? best[n] : null }), {}), status };
 }
 
-/** The therapist's email, from the list on the Notes page (names compared loosely). */
-function emailFor(therapist, emails = {}) {
+/* --------------------------------- staff list --------------------------------- */
+
+const EMAIL_RE = /[A-Za-z0-9._%+'-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}/;
+
+/** Staff from pasted or file text — one person a line: a name, then (optionally) a
+ *  role, then the email, separated by tabs, commas, "|" or " - ". Lines without an
+ *  email are skipped. Returns { staff:[{ name, role, email }], skipped }. */
+function parseStaffList(text) {
+  const staff = [];
+  let skipped = 0;
+  for (const raw of String(text || '').split(/\r?\n/)) {
+    const line = raw.trim();
+    if (!line || /^(first name|name)\b.*\bemail\b/i.test(line)) continue;
+    const m = EMAIL_RE.exec(line);
+    if (!m) { skipped += 1; continue; }
+    const parts = line.replace(m[0], ' ').replace(/[<>"]/g, ' ').split(/[\t|;,]+|\s{2,}|\s[-–—]\s/).map((x) => x.trim()).filter(Boolean);
+    if (!parts[0]) { skipped += 1; continue; }
+    staff.push({ name: parts[0], role: parts[1] || '', email: m[0].toLowerCase() });
+  }
+  return { staff, skipped };
+}
+
+/** Add `incoming` people to `existing`: a person already there (same email, or same
+ *  name) is updated — their on/off switch is kept — and anyone new is added, on. */
+function mergeStaff(existing, incoming, newId = () => `st_${Math.random().toString(36).slice(2, 10)}`) {
+  const staff = (existing || []).map((p) => ({ ...p }));
+  let added = 0, updated = 0;
+  for (const inc of incoming || []) {
+    const email = String(inc.email || '').trim().toLowerCase();
+    const hit = staff.find((p) => (email && String(p.email || '').toLowerCase() === email) || normalizeName(p.name) === normalizeName(inc.name));
+    if (hit) {
+      if (email) hit.email = email;
+      if (inc.role) hit.role = inc.role;
+      updated += 1;
+    } else {
+      staff.push({ id: newId(), name: String(inc.name || '').trim(), role: inc.role || '', email, enabled: true });
+      added += 1;
+    }
+  }
+  staff.sort((a, b) => a.name.localeCompare(b.name));
+  return { staff, added, updated };
+}
+
+/** The staff member for a therapist (names compared loosely). Two people with the
+ *  same name is { ambiguous: true } — never a guess. */
+function staffFor(therapist, staff = []) {
+  const want = normalizeName(therapist);
+  if (!want) return { person: null, ambiguous: false };
+  const pick = (list) => (list.length === 1 ? { person: list[0], ambiguous: false } : list.length > 1 ? { person: null, ambiguous: true } : null);
+  const exact = pick((staff || []).filter((p) => normalizeName(p.name) === want));
+  if (exact) return exact;
+  const wt = want.split(' ');
+  return pick((staff || []).filter((p) => { const st = normalizeName(p.name).split(' '); return wt.every((t) => st.includes(t)) || st.every((t) => wt.includes(t)); })) || { person: null, ambiguous: false };
+}
+
+/** The therapist's email: from the staff list, else the older per-therapist list. */
+function emailFor(therapist, emails = {}, staff = []) {
+  const { person } = staffFor(therapist, staff);
+  if (person && /@/.test(person.email || '')) return String(person.email).trim();
   const key = (s) => String(s || '').toLowerCase().replace(/[^a-z]/g, '');
   const want = key(therapist);
   for (const [name, email] of Object.entries(emails || {})) if (key(name) === want && /@/.test(email || '')) return String(email).trim();
@@ -463,7 +520,7 @@ function emailFor(therapist, emails = {}) {
  * to `testTo` instead (each still says who it was for).
  * Returns [{ therapist, intendedTo, to, items }]; `to` is '' when there's nowhere to send.
  */
-function planReminders(notes, { emails = {}, testMode = true, testTo = DEFAULT_TEST_TO } = {}) {
+function planReminders(notes, { emails = {}, staff = [], testMode = true, testTo = DEFAULT_TEST_TO } = {}) {
   const byTherapist = new Map();
   for (const n of notes) {
     if (n.note !== 'missing' && n.note !== 'incomplete') continue;
@@ -474,9 +531,12 @@ function planReminders(notes, { emails = {}, testMode = true, testTo = DEFAULT_T
   return [...byTherapist.entries()]
     .sort((a, b) => a[0].localeCompare(b[0]))
     .map(([therapist, items]) => {
-      const intendedTo = emailFor(therapist, emails);
+      const intendedTo = emailFor(therapist, emails, staff);
+      const { person } = staffFor(therapist, staff);
+      // Switched off for this person: no reminder, in test mode or not.
+      const off = !!person && person.enabled === false;
       items.sort((a, b) => String(a.apptAt).localeCompare(String(b.apptAt)));
-      return { therapist, intendedTo, to: testMode ? testTo : intendedTo, items };
+      return { therapist, intendedTo, to: off ? '' : (testMode ? testTo : intendedTo), items, off };
     });
 }
 
@@ -593,5 +653,5 @@ function lookbackDates(now, lookback = 7) {
 
 module.exports = {
   DUE_HOURS, DEFAULT_TEST_TO, isSeen, encounterState, apptDateTime, shortName, findNotes,
-  noteInTimeline, SOAP, writtenText, emptySections, openClientFromSchedule, openTimeline, readVisitNote, setDebugDir, snapshot, emailFor, planReminders, reminderEmail, parseHHMM, dailyDue, dayKey, lookbackDates,
+  parseStaffList, mergeStaff, staffFor, noteInTimeline, SOAP, writtenText, emptySections, openClientFromSchedule, openTimeline, readVisitNote, setDebugDir, snapshot, emailFor, planReminders, reminderEmail, parseHHMM, dailyDue, dayKey, lookbackDates,
 };

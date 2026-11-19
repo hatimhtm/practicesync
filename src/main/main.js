@@ -475,7 +475,7 @@ async function checkNoteTimelines(context, page, list, step, providers = []) {
 async function sendNoteReminders(list, trigger = 'manual') {
   const s = store.load();
   const testMode = s.notesTestMode !== false;
-  const plan = notes.planReminders(list, { emails: s.therapistEmails || {}, testMode, testTo: s.notesTestTo || notes.DEFAULT_TEST_TO });
+  const plan = notes.planReminders(list, { emails: s.therapistEmails || {}, staff: s.staff || [], testMode, testTo: s.notesTestTo || notes.DEFAULT_TEST_TO });
   if (!plan.length) return { ok: true, sent: 0, skipped: 0 };
   const step = (text) => sendToRenderer('notes-step', { text, at: nowISO() });
   const log = [];
@@ -483,6 +483,13 @@ async function sendNoteReminders(list, trigger = 'manual') {
   for (const r of plan) {
     const cc = mailer.parseRecipients(s.notesCc).join(', ');
     const entry = { at: nowISO(), trigger, therapist: r.therapist, to: r.to, cc, intendedTo: r.intendedTo, count: r.items.length, overdue: r.items.filter((i) => i.overdue).length, test: testMode };
+    if (r.off) {
+      // Switched off on the staff list: not an error, just not sent.
+      skipped += 1;
+      log.push({ ...entry, ok: false, skipped: true, error: 'Switched off for this person.' });
+      step(`  ✉︎ ${r.therapist}: switched off — not sent.`);
+      continue;
+    }
     if (!r.to) {
       skipped += 1;
       log.push({ ...entry, ok: false, error: 'No email on file for this therapist.' });
@@ -896,6 +903,26 @@ function registerIpc() {
       return { ok: false, to, error: (e && e.message) || String(e), notConfigured: !!(e && e.kind === 'notConfigured') };
     }
   });
+  // The staff list: paste or pick a file to import; match therapists to people.
+  const importStaff = (text) => {
+    const { staff: incoming, skipped } = notes.parseStaffList(text);
+    if (!incoming.length) return { ok: false, error: 'No email addresses found. Use one person per line: name, role, email.' };
+    const merged = notes.mergeStaff(store.load().staff || [], incoming);
+    store.save({ staff: merged.staff });
+    return { ok: true, added: merged.added, updated: merged.updated, skipped, staff: merged.staff };
+  };
+  ipcMain.handle('staff:import', (_e, { text }) => importStaff(text));
+  ipcMain.handle('staff:importFile', async () => {
+    const r = await dialog.showOpenDialog(mainWindow, { title: 'Choose the staff emails file', defaultPath: app.getPath('desktop'), properties: ['openFile'], filters: [{ name: 'Text or CSV', extensions: ['txt', 'csv', 'tsv'] }] });
+    if (r.canceled || !r.filePaths[0]) return { ok: false, canceled: true };
+    try { return importStaff(fs.readFileSync(r.filePaths[0], 'utf8')); } catch (e) { return { ok: false, error: `Couldn't read that file: ${(e && e.message) || e}` }; }
+  });
+  ipcMain.handle('staff:match', (_e, names) => {
+    const staff = store.load().staff || [];
+    const out = {};
+    for (const n of names || []) { const m = notes.staffFor(n, staff); out[n] = { id: m.person ? m.person.id : '', email: m.person ? m.person.email : '', enabled: m.person ? m.person.enabled !== false : false, found: !!m.person, ambiguous: m.ambiguous }; }
+    return out;
+  });
   ipcMain.handle('notes:send', async () => {
     const last = store.load().notesCheck;
     if (!last || !last.notes) return { ok: false, error: 'Run a check first.' };
@@ -1106,6 +1133,14 @@ app.whenReady().then(() => {
   if ((store.load().chartReviewVersion || 0) < 3) {
     try { store.save({ chartReview: null, chartFollowUps: [], chartReviewVersion: 3 }); } catch {}
   }
+  // Emails typed in earlier versions (one per therapist) become staff entries, once.
+  try {
+    const cur = store.load();
+    if (!(cur.staff && cur.staff.length) && cur.therapistEmails && Object.keys(cur.therapistEmails).length) {
+      const merged = notes.mergeStaff([], Object.entries(cur.therapistEmails).map(([name, email]) => ({ name, email })));
+      store.save({ staff: merged.staff });
+    }
+  } catch {}
   scheduler.setMode(settings.schedule || 'off');
   applyLoginItem();
   startNotesTimer();
